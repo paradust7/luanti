@@ -44,7 +44,7 @@ extern "C" {
     void emloop_init_sound();
 
     EMSCRIPTEN_KEEPALIVE
-    void emloop_set_minetest_conf(const char *conf);
+    void emloop_set_conf(const char *conf);
 
     EM_BOOL irrlicht_want_pointerlock(void);
     void irrlicht_force_pointerlock(void);
@@ -338,7 +338,7 @@ void emloop_init_sound() {
     preinit_sound();
 }
 
-void emloop_set_minetest_conf(const char *contents) {
+void emloop_set_conf(const char *contents) {
     std::ofstream os("/minetest/minetest.conf", std::ofstream::trunc);
     if (!os.good())
         return;
