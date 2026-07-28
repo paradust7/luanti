@@ -405,7 +405,7 @@ bool getCurrentExecPath(char *buf, size_t len)
 
 bool getCurrentExecPath(char *buf, size_t len)
 {
-  const char *hardcoded_path = "/minetest/bin/minetest.exe";
+  const char *hardcoded_path = "/luanti/bin/luanti.exe";
   strncpy(buf, hardcoded_path, len);
   return true;
 }

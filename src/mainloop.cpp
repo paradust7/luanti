@@ -339,7 +339,7 @@ void emloop_init_sound() {
 }
 
 void emloop_set_conf(const char *contents) {
-    std::ofstream os("/minetest/minetest.conf", std::ofstream::trunc);
+    std::ofstream os("/luanti/minetest.conf", std::ofstream::trunc);
     if (!os.good())
         return;
     os << contents;
