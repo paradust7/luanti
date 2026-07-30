@@ -49,29 +49,12 @@ static int SDLDeviceInstances = 0;
 
 extern "C" {
 	EMSCRIPTEN_KEEPALIVE
-	EM_BOOL irrlicht_want_pointerlock(void);
-
-	EMSCRIPTEN_KEEPALIVE
 	void irrlicht_resize(int width, int height);
-
-	EMSCRIPTEN_KEEPALIVE
-	void irrlicht_force_pointerlock(void);
-
-	void emloop_reenter_blessed(void);
 }
 
-static bool want_pointerlock = false;
 static int canvas_width = 0;
 static int canvas_height = 0;
 static bool canvas_updated = false;
-
-EM_BOOL irrlicht_want_pointerlock(void) {
-	return want_pointerlock ? 1 : 0;
-}
-
-void irrlicht_force_pointerlock(void) {
-	want_pointerlock = true;
-}
 
 void irrlicht_resize(int width, int height) {
 	if (canvas_width != width || canvas_height != height) {
@@ -325,35 +308,6 @@ void CIrrDeviceSDL::resetReceiveTextInputEvents()
 	}
 }
 
-#ifdef __EMSCRIPTEN__
-Uint32 SDL_NOOP_EVENT;
-
-static int SDLCALL emloop_event_filter(void *userdata, SDL_Event * event) {
-	switch (event->type) {
-	case SDL_MOUSEBUTTONDOWN:
-	case SDL_MOUSEBUTTONUP:
-	case SDL_KEYDOWN:
-	case SDL_KEYUP:
-		// Ignore F11, so that it is handled by the browser.
-		if ((event->type == SDL_KEYDOWN || event->type == SDL_KEYUP) &&
-		    (event->key.keysym.sym == SDLK_F11 || event->key.keysym.scancode == SDLK_F11)) {
-			return 0;
-		}
-		// Push the event manually and re-enter the main loop so that it is processed immediately.
-		if (SDL_PeepEvents(event, 1, SDL_ADDEVENT, 0, 0) <= 0) {
-			return -1;
-		}
-		emloop_reenter_blessed();
-		// Unfortunately, can't return 0 here, or else preventDefault() won't be called in the js event handler.
-		// But returning 1, the event is going to be pushed again. Modify the event to make it a no-op.
-		event->type = SDL_NOOP_EVENT;
-		return 1;
-	}
-	// Handle all other events normally.
-	return 1;
-}
-#endif
-
 //! constructor
 CIrrDeviceSDL::CIrrDeviceSDL(const SIrrlichtCreationParameters &param) :
 		CIrrDeviceStub(param),
@@ -419,11 +373,6 @@ CIrrDeviceSDL::CIrrDeviceSDL(const SIrrlichtCreationParameters &param) :
 			os::Printer::log("Unable to initialize SDL", SDL_GetError(), ELL_ERROR);
 			Close = true;
 		}
-
-		// This is an SDL hook to filter events, but we need to abuse it to make
-		// SDL events (keyboard/mouse) trigger re-entry for immediate processing.
-		SDL_NOOP_EVENT = SDL_RegisterEvents(1);
-		SDL_SetEventFilter(emloop_event_filter, NULL);
 	}
 
 	// create keymap
@@ -462,7 +411,7 @@ CIrrDeviceSDL::CIrrDeviceSDL(const SIrrlichtCreationParameters &param) :
 	}
 
 	// create cursor control
-	CursorControl = new CCursorControl(this, &want_pointerlock);
+	CursorControl = new CCursorControl(this);
 
 	// create driver
 	createDriver();
@@ -657,10 +606,10 @@ bool CIrrDeviceSDL::createWindowWithContext()
 #ifdef _IRR_EMSCRIPTEN_PLATFORM_
 	if (Width != 0 || Height != 0) {
 		printf("SETTING CANVAS SIZE: WIDTH=%d, HEIGHT=%d\n", Width, Height);
-		emscripten_set_canvas_size(Width, Height);
+		emscripten_set_canvas_element_size("#canvas", Width, Height);
 	} else {
-		int w, h, fs;
-		emscripten_get_canvas_size(&w, &h, &fs);
+		int w, h;
+		emscripten_get_canvas_element_size("#canvas", &w, &h);
 		Width = w;
 		Height = h;
 	}
@@ -827,6 +776,7 @@ bool CIrrDeviceSDL::run()
 	// events when the canvas is resized externally (using the js api). It isn't clear why.
 	// This would match the behavior of other platforms. Until fixed, trigger the update manually.
 	if (canvas_updated && (Width != canvas_width || Height != canvas_height)) {
+                emscripten_set_canvas_element_size("#canvas", canvas_width, canvas_height);
 		SDL_SetWindowSize(Window, canvas_width, canvas_height);
 		canvas_updated = false;
 	}

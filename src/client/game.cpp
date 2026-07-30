@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
-#include "mainloop.h"
-
 #include "game.h"
 
 #include <cmath>
@@ -565,73 +563,45 @@ public:
 	Game();
 	~Game();
 
-	void startup(volatile std::sig_atomic_t *kill,
+	bool startup(volatile std::sig_atomic_t *kill,
 			InputHandler *input,
 			RenderingEngine *rendering_engine,
-			const GameStartData *game_params,
+			const GameStartData &game_params,
 			std::string &error_message,
 			bool *reconnect,
-			ChatBackend *chat_backend,
-                        std::function<void(bool,BaseException*)> resolve);
-        void startup_do_init(const GameStartData *start_data,
-                             std::function<void(bool,BaseException*)> resolve);
+			ChatBackend *chat_backend);
 
-
-	void run(std::function<void(BaseException*)> resolve);
-	void run_loop(std::function<void(BaseException*)> resolve);
-	void after_loop(std::function<void(BaseException*)> resolve);
+	void run();
 	void shutdown();
 
 protected:
 
 	// Basic initialisation
-	void init(const std::string &map_dir, const std::string &address,
-			u16 port, const SubgameSpec &gamespec,
-			std::function<void(bool,BaseException*)> resolve);
-
+	bool init(const std::string &map_dir, const std::string &address,
+			u16 port, const SubgameSpec &gamespec);
 	bool initSound();
-	void createServer(const std::string &map_dir,
-			const SubgameSpec &gamespec, u16 port,
-			std::function<void(bool,BaseException*)> resolve);
-	void createServer_loop(std::function<void(bool,BaseException*)> resolve);
-	std::unique_ptr<LambdaThread> createServer_start_thread;
-	bool createServer_success;
+	bool createServer(const std::string &map_dir,
+			const SubgameSpec &gamespec, u16 port);
 	void copyServerClientCache();
 
 	// Client creation
-	void createClient(const GameStartData *start_data, std::function<void(bool,BaseException*)> resolve);
-	void createClient_after_connect(std::function<void(bool,BaseException*)> resolve);
-	void createClient_after_get(std::function<void(bool,BaseException*)> resolve);
-
+	bool createClient(const GameStartData &start_data);
 	bool initGui();
 
 	// Client connection
-	Address connect_address;
-	Address fallback_address;
-	bool did_fallback = false;
-	bool local_server_mode = false;
-	void connectToServer(const GameStartData *start_data, std::function<void(bool,BaseException*)> resolve);
-	void connectToServer_after_dns(const GameStartData *start_data, std::function<void(bool,BaseException*)> resolve);
-	void connectToServer_loop(const GameStartData *start_data, std::function<void(bool,BaseException*)> resolve);
-
-        bool could_connect = false;
-        bool connect_aborted = false;
-	FpsControl fps_control;
-	f32 wait_time = 0;
-	FrameMarker *framemarker = nullptr;
-
-	void getServerContent(std::function<void(bool,BaseException*)> resolve);
-	void getServerContent_loop(std::function<void(bool,BaseException*)> resolve);
+	bool connectToServer(const GameStartData &start_data,
+			bool *connect_ok, bool *aborted);
+	bool getServerContent(bool *aborted);
 
 	// Main loop
 
 	void updateInteractTimers(f32 dtime);
 	bool checkConnection();
 	void processQueues();
-	void updateProfilers(const FpsControl &draw_times, f32 dtime);
+	void updateProfilers(const RunStats &stats, const FpsControl &draw_times, f32 dtime);
 	void updateDebugState();
-	void updateStats(const FpsControl &draw_times, f32 dtime);
-	void updateProfilerGraphs();
+	void updateStats(RunStats *stats, const FpsControl &draw_times, f32 dtime);
+	void updateProfilerGraphs(ProfilerGraph *graph);
 
 	// Input related
 	void processUserInput(f32 dtime);
@@ -697,7 +667,7 @@ protected:
 			const ItemStack &hand_item, const v3f &player_position, bool show_debug);
 	void handleDigging(const PointedThing &pointed, const v3s16 &nodepos,
 			const ItemStack &selected_item, const ItemStack &hand_item, f32 dtime);
-	void updateFrame(f32 dtime,
+	void updateFrame(ProfilerGraph *graph, RunStats *stats, f32 dtime,
 			const CameraOrientation &cam);
 	void updateClouds(float dtime);
 	void updateShadows();
@@ -820,14 +790,6 @@ private:
 
 	GameRunData runData;
 	Flags m_flags;
-	ProfilerGraph graph;
-        RunStats stats              = {};
-        CameraOrientation cam_view_target  = {};
-        CameraOrientation cam_view  = {};
-        FpsControl draw_times;
-	core::dimension2d<u32> initial_screen_size;
-	bool initial_window_maximized;
-
 
 	/* 'cache'
 	   This class does take ownership/responsibily for cleaning up etc of any of
@@ -943,16 +905,14 @@ Game::~Game()
 		m_rendering_engine->finalize();
 }
 
-void Game::startup(volatile std::sig_atomic_t *kill,
+bool Game::startup(volatile std::sig_atomic_t *kill,
 		InputHandler *input,
 		RenderingEngine *rendering_engine,
-		const GameStartData *start_data,
+		const GameStartData &start_data,
 		std::string &error_message,
 		bool *reconnect,
-		ChatBackend *chat_backend,
-		std::function<void(bool,BaseException*)> resolve)
+		ChatBackend *chat_backend)
 {
-	try { // CATCHALL
 
 	// "cache"
 	m_rendering_engine        = rendering_engine;
@@ -962,7 +922,7 @@ void Game::startup(volatile std::sig_atomic_t *kill,
 	reconnect_requested       = reconnect;
 	this->input               = input;
 	this->chat_backend        = chat_backend;
-	simple_singleplayer_mode  = start_data->isSinglePlayer();
+	simple_singleplayer_mode  = start_data.isSinglePlayer();
 
 	input->reloadKeybindings();
 
@@ -985,63 +945,31 @@ void Game::startup(volatile std::sig_atomic_t *kill,
 
 	g_client_translations->clear();
 
-	// CATCHALL
-        } catch (BaseException &exc) {
-		resolve(false, exc.copy());
-		return;
-	}
+	if (!init(start_data.world_spec.path, start_data.address,
+			start_data.socket_port, start_data.game_spec))
+		return false;
 
-        //
-        // Pulled forward from init so that the screen isn't empty
-	texture_src = createTextureSource();
-	showOverlayMessage(N_("Loading..."), 0, 0);
-        // Intentionally delay until after redraw
-        MainLoop::DelayNextFrameUntilRedraw();
-        MainLoop::NextFrame([this, start_data, resolve]() {
-            startup_do_init(start_data, resolve);
-        });
-}
+	if (!createClient(start_data))
+		return false;
 
-extern void do_cache_warmup();
+	m_rendering_engine->initialize(client, hud);
 
-void Game::startup_do_init(const GameStartData *start_data,
-                           std::function<void(bool,BaseException*)> resolve)
-{
-	// This could be done in main(), but is instead here so that it happens
-	// after the loading screen is visible (instead of a blank screen)
-	do_cache_warmup();
+	m_game_formspec.init(client, m_rendering_engine, input);
 
-	init(start_data->world_spec.path, start_data->address,
-			start_data->socket_port, start_data->game_spec,
-			[this, start_data, resolve](bool success, BaseException *exc) {
-		if (exc) {
-			resolve(false, exc);
-			return;
-		} else if (!success) {
-			resolve(false, nullptr);
-			return;
-		}
-
-		createClient(start_data, [this, resolve](bool success, BaseException *exc) {
-			if (exc) {
-				resolve(false, exc);
-				return;
-			}
-			if (!success) {
-				resolve(false, nullptr);
-			} else {
-				m_rendering_engine->initialize(client, hud);
-				m_game_formspec.init(client, m_rendering_engine, input);
-				resolve(true, nullptr);
-			}
-		});
-	});
+	return true;
 }
 
 
-void Game::run(std::function<void(BaseException*)> resolve)
+void Game::run()
 {
 	ZoneScoped;
+
+	ProfilerGraph graph;
+	RunStats stats = {};
+	CameraOrientation cam_view_target = {};
+	CameraOrientation cam_view = {};
+	FpsControl draw_times;
+	f32 dtime; // in seconds
 
 	// Clear the profiler
 	{
@@ -1056,47 +984,31 @@ void Game::run(std::function<void(BaseException*)> resolve)
 	m_touch_simulate_aux1 = g_settings->getBool("fast_move")
 			&& client->checkPrivilege("fast");
 
-	initial_screen_size = core::dimension2du(
+	const core::dimension2du initial_screen_size(
 			g_settings->getU16("screen_w"),
 			g_settings->getU16("screen_h")
 		);
-	initial_window_maximized = !g_settings->getBool("fullscreen") &&
+	const bool initial_window_maximized = !g_settings->getBool("fullscreen") &&
 			g_settings->getBool("window_maximized");
 
 #ifdef __ANDROID__
 	porting::setPlayingNowNotification(true);
 #endif
 
-	framemarker = new FrameMarker("Game::run()-frame");
+	auto framemarker = FrameMarker("Game::run()-frame").started();
 
-	run_loop([this, resolve](BaseException* exc) {
-		RenderingEngine::autosaveScreensizeAndCo(initial_screen_size, initial_window_maximized);
-		resolve(exc);
-	});
-}
-
-void Game::run_loop(std::function<void(BaseException*)> resolve) {
-	try { // CATCHALL
-
-	bool keep_going = (m_rendering_engine->run()
+	while (m_rendering_engine->run()
 			&& !(*kill || g_gamecallback->shutdown_requested
-			|| (server && server->isShutdownRequested())));
-	if (!keep_going) {
-		after_loop(resolve);
-		return;
-	}
+			|| (server && server->isShutdownRequested()))) {
 
-	// EXRANEOUS INDENT
-
-		framemarker->end();
+		framemarker.end();
 
 		// Calculate dtime =
 		//    m_rendering_engine->run() from this iteration
 		//  + Sleep time until the wanted FPS are reached
-		f32 dtime; // in seconds
 		draw_times.limit(device, &dtime);
 
-		framemarker->start();
+		framemarker.start();
 
 		g_fontengine->handleReload();
 
@@ -1115,23 +1027,19 @@ void Game::run_loop(std::function<void(BaseException*)> resolve) {
 
 		// Prepare render data for next iteration
 
-		updateStats(draw_times, dtime);
+		updateStats(&stats, draw_times, dtime);
 		updateInteractTimers(dtime);
 
-		if (!checkConnection()) {
-			after_loop(resolve);
-			return;
-		}
-		if (!m_game_formspec.handleCallbacks()) {
-			after_loop(resolve);
-			return;
-		}
+		if (!checkConnection())
+			break;
+		if (!m_game_formspec.handleCallbacks())
+			break;
 
 		processQueues();
 
 		m_game_ui->clearInfoText();
 
-		updateProfilers(draw_times, dtime);
+		updateProfilers(stats, draw_times, dtime);
 
 		// Update camera offset once before doing anything.
 		// In contrast to other updates the latency of this doesn't matter,
@@ -1159,36 +1067,23 @@ void Game::run_loop(std::function<void(BaseException*)> resolve) {
 		updateCamera(dtime);
 		updateSound(dtime);
 		processPlayerInteraction(dtime, m_game_ui->m_flags.show_hud);
-		updateFrame(dtime, cam_view);
-		updateProfilerGraphs();
+		updateFrame(&graph, &stats, dtime, cam_view);
+		updateProfilerGraphs(&graph);
 
 		if (m_does_lost_focus_pause_game && !device->isWindowFocused() && !isMenuActive()) {
 			m_game_formspec.showPauseMenu();
 		}
-
-	// CATCHALL
-        } catch (BaseException &exc) {
-		resolve(exc.copy());
-		return;
 	}
 
-	MainLoop::NextFrame([this, resolve]() { run_loop(resolve); });
-}
-
-
-
-void Game::after_loop(std::function<void(BaseException*)> resolve) {
-	framemarker->end();
-	delete framemarker;
-	framemarker = nullptr;
+	framemarker.end();
 
 #ifdef __ANDROID__
 	porting::setPlayingNowNotification(false);
 #endif
 
 	RenderingEngine::autosaveScreensizeAndCo(initial_screen_size, initial_window_maximized);
-	resolve(nullptr);
 }
+
 
 void Game::shutdown()
 {
@@ -1259,17 +1154,15 @@ void Game::shutdown()
  ****************************************************************************/
 /****************************************************************************/
 
-void Game::init(
+bool Game::init(
 		const std::string &map_dir,
 		const std::string &address,
 		u16 port,
-		const SubgameSpec &gamespec,
-		std::function<void(bool,BaseException*)> resolve)
+		const SubgameSpec &gamespec)
 {
-	// Pulled up one level
-	//texture_src = createTextureSource();
+	texture_src = createTextureSource();
 
-	//showOverlayMessage(N_("Loading..."), 0, 0);
+	showOverlayMessage(N_("Loading..."), 0, 0);
 
 	shader_src = createShaderSource();
 
@@ -1282,31 +1175,19 @@ void Game::init(
 	quicktune = new QuicktuneShortcutter();
 
 	if (!(texture_src && shader_src && itemdef_manager && nodedef_manager
-			&& eventmgr && quicktune)) {
-		resolve(false, nullptr);
-		return;
-	}
+			&& eventmgr && quicktune))
+		return false;
 
-	if (!initSound()) {
-		resolve(false, nullptr);
-		return;
-	}
+	if (!initSound())
+		return false;
 
 	// Create a server if not connecting to an existing one
 	if (address.empty()) {
-		createServer(map_dir, gamespec, port, [resolve](bool success, BaseException *exc) {
-			if (exc) {
-				resolve(false, exc);
-				return;
-			}
-			resolve(success, nullptr);
-			return;
-		});
-		return;
+		if (!createServer(map_dir, gamespec, port))
+			return false;
 	}
 
-	resolve(true, nullptr);
-	return;
+	return true;
 }
 
 bool Game::initSound()
@@ -1337,13 +1218,11 @@ bool Game::initSound()
 	return true;
 }
 
-void Game::createServer(const std::string &map_dir,
-		const SubgameSpec &gamespec, u16 port,
-		std::function<void(bool,BaseException*)> resolve)
+bool Game::createServer(const std::string &map_dir,
+		const SubgameSpec &gamespec, u16 port)
 {
 	showOverlayMessage(N_("Creating server..."), 0, 5);
 
-#ifndef __EMSCRIPTEN__
 	std::string bind_str;
 	if (simple_singleplayer_mode) {
 		// Make the simple singleplayer server only accept connections from localhost,
@@ -1352,11 +1231,9 @@ void Game::createServer(const std::string &map_dir,
 	} else {
 		bind_str = g_settings->get("bind_address");
 	}
-#endif
 
 	Address bind_addr(0, 0, 0, 0, port);
 
-#ifndef __EMSCRIPTEN__
 	if (g_settings->getBool("ipv6_server"))
 		bind_addr.setAddress(static_cast<IPv6AddressBytes*>(nullptr));
 	try {
@@ -1372,50 +1249,36 @@ void Game::createServer(const std::string &map_dir,
 		errorstream << *error_message << std::endl;
 		return false;
 	}
-#endif
+
 	server = new Server(map_dir, gamespec, simple_singleplayer_mode, bind_addr,
 			false, nullptr, error_message);
 
-	createServer_start_thread = runInThread([=] {
+	auto start_thread = runInThread([=] {
 		server->start();
 		copyServerClientCache();
 	}, "ServerStart");
 
 	input->clear();
+	bool success = true;
 
+	FpsControl fps_control;
 	fps_control.reset();
 
-	createServer_success = true;
-	createServer_loop(resolve);
-}
+	while (start_thread->isRunning()) {
+		if (!m_rendering_engine->run() || input->cancelPressed())
+			success = false;
+		f32 dtime;
+		fps_control.limit(device, &dtime);
 
-void Game::createServer_loop(std::function<void(bool,BaseException*)> resolve)
-{
-
-	if (!createServer_start_thread->isRunning()) {
-		try {
-			createServer_start_thread->rethrow();
-		} catch (BaseException &exc) {
-			createServer_start_thread.reset();
-			resolve(false, exc.copy());
-			return;
-		}
-		createServer_start_thread.reset();
-		resolve(createServer_success, nullptr);
-		return;
+		if (success)
+			showOverlayMessage(N_("Creating server..."), dtime, 5);
+		else
+			showOverlayMessage(N_("Shutting down..."), dtime, 0, &m_shutdown_progress);
 	}
-	if (!m_rendering_engine->run() || input->cancelPressed())
-		createServer_success = false;
 
-	f32 dtime;
-	fps_control.limit(device, &dtime);
+	start_thread->rethrow();
 
-	if (createServer_success)
-		showOverlayMessage(N_("Creating server..."), dtime, 5);
-	else
-		showOverlayMessage(N_("Shutting down..."), dtime, 0, &m_shutdown_progress);
-
-	MainLoop::NextFrame([this, resolve]() { createServer_loop(resolve); });
+	return success;
 }
 
 void Game::copyServerClientCache()
@@ -1438,68 +1301,35 @@ void Game::copyServerClientCache()
 		<< std::endl;
 }
 
-void Game::createClient(const GameStartData *start_data, std::function<void(bool,BaseException*)> resolve)
+bool Game::createClient(const GameStartData &start_data)
 {
-	try { // CATCHALL
-
 	showOverlayMessage(N_("Creating client..."), 0, 10);
 
 	draw_control = new MapDrawControl();
-	if (!draw_control) {
-		resolve(false, nullptr);
-		return;
-	}
+	if (!draw_control)
+		return false;
 
-	// CATCHALL
-        } catch (BaseException &exc) {
-		resolve(false, exc.copy());
-		return;
-	}
+	bool could_connect, connect_aborted;
+	if (!connectToServer(start_data, &could_connect, &connect_aborted))
+		return false;
 
-	connectToServer(start_data, [this, resolve](bool success, BaseException *exc) {
-		if (exc) {
-			resolve(false, exc);
-			return;
-		}
-		if (!success) {
-			resolve(false, nullptr);
-			return;
-		}
-		createClient_after_connect(resolve);
-	});
-}
-
-void Game::createClient_after_connect(std::function<void(bool,BaseException*)> resolve) {
 	if (!could_connect) {
 		if (error_message->empty() && !connect_aborted) {
 			// Should not happen if error messages are set properly
 			*error_message = gettext("Connection failed for unknown reason");
 			errorstream << *error_message << std::endl;
 		}
-		resolve(false, nullptr);
-		return;
+		return false;
 	}
 
-	getServerContent([this, resolve](bool success, BaseException *exc) {
-		if (exc) {
-			resolve(false, exc);
-			return;
+	if (!getServerContent(&connect_aborted)) {
+		if (error_message->empty() && !connect_aborted) {
+			// Should not happen if error messages are set properly
+			*error_message = gettext("Connection failed for unknown reason");
+			errorstream << *error_message << std::endl;
 		}
-		if (!success) {
-			if (error_message->empty() && !connect_aborted) {
-				// Should not happen if error messages are set properly
-				*error_message = gettext("Connection failed for unknown reason");
-				errorstream << *error_message << std::endl;
-			}
-			resolve(false, nullptr);
-			return;
-		}
-		createClient_after_get(resolve);
-	});
-}
-
-void Game::createClient_after_get(std::function<void(bool,BaseException*)> resolve) {
-	try { // CATCHALL
+		return false;
+	}
 
 	shader_src->addShaderConstantSetter(
 		std::make_unique<NodeShaderConstantSetter>());
@@ -1542,10 +1372,8 @@ void Game::createClient_after_get(std::function<void(bool,BaseException*)> resol
 		crack_animation_length = 5;
 	}
 
-	if (!initGui()) {
-		resolve(false, nullptr);
-		return;
-	}
+	if (!initGui())
+		return false;
 
 	/* Set window caption
 	 */
@@ -1571,13 +1399,7 @@ void Game::createClient_after_get(std::function<void(bool,BaseException*)> resol
 	if (mapper && client->modsLoaded())
 		client->getScript()->on_minimap_ready(mapper);
 
-	// CATCHALL
-        } catch (BaseException &exc) {
-		resolve(false, exc.copy());
-		return;
-	}
-
-	resolve(true, nullptr);
+	return true;
 }
 
 bool Game::shouldShowTouchControls()
@@ -1611,33 +1433,20 @@ bool Game::initGui()
 	return true;
 }
 
-void Game::connectToServer(const GameStartData *start_data, std::function<void(bool,BaseException*)> resolve)
+bool Game::connectToServer(const GameStartData &start_data,
+		bool *connect_ok, bool *connection_aborted)
 {
-	could_connect = false;	// Let's not be overly optimistic
-	connect_aborted = false;
+	*connect_ok = false;	// Let's not be overly optimistic
+	*connection_aborted = false;
+	const auto &address_name = start_data.address;
 
 	showOverlayMessage(N_("Resolving address..."), 0, 15);
 
-	connect_address.setAddress(0, 0, 0, 0);
-	connect_address.setPort(start_data->socket_port);
+	Address connect_address(0, 0, 0, 0, start_data.socket_port);
+	Address fallback_address;
 
-	connect_address.ResolveAsync(start_data->address.c_str(), &fallback_address,
-		[this, resolve, start_data](BaseException *exc) {
-		if (exc) {
-			try {
-				exc->reraise();
-			} catch (ResolveError &e) {
-				*error_message = fmtgettext("Couldn't resolve address: %s", e.what());
-
-				errorstream << *error_message << std::endl;
-				resolve(false, nullptr);
-				return;
-			} catch (BaseException &e) {
-				resolve(false, e.copy());
-		                return;
-			}
-			return;
-		}
+	try {
+		connect_address.Resolve(address_name.c_str(), &fallback_address);
 
 		if (connect_address.isAny()) {
 			// replace with localhost IP
@@ -1649,13 +1458,12 @@ void Game::connectToServer(const GameStartData *start_data, std::function<void(b
 				connect_address.setAddress(127, 0, 0, 1);
 			}
 		}
-		connectToServer_after_dns(start_data, resolve);
-	});
-}
+	} catch (ResolveError &e) {
+		*error_message = fmtgettext("Couldn't resolve address: %s", e.what());
 
-void Game::connectToServer_after_dns(const GameStartData *start_data, std::function<void(bool,BaseException*)> resolve)
-{
-	const auto &address_name = start_data->address;
+		errorstream << *error_message << std::endl;
+		return false;
+	}
 
 	// this shouldn't normally happen since Address::Resolve() checks for enable_ipv6
 	if (g_settings->getBool("enable_ipv6")) {
@@ -1663,8 +1471,7 @@ void Game::connectToServer_after_dns(const GameStartData *start_data, std::funct
 	} else if (connect_address.isIPv6()) {
 		*error_message = fmtgettext("Unable to connect to %s because IPv6 is disabled", connect_address.serializeString().c_str());
 		errorstream << *error_message << std::endl;
-		resolve(false, nullptr);
-		return;
+		return false;
 	} else if (fallback_address.isIPv6()) {
 		fallback_address = Address();
 	}
@@ -1681,18 +1488,17 @@ void Game::connectToServer_after_dns(const GameStartData *start_data, std::funct
 
 
 	try {
-		client = new Client(start_data->name.c_str(),
-				start_data->password,
+		client = new Client(start_data.name.c_str(),
+				start_data.password,
 				*draw_control, texture_src, shader_src,
 				itemdef_manager, nodedef_manager, sound_manager.get(), eventmgr,
 				m_rendering_engine,
 				m_item_visuals_manager.get(),
-				start_data->allow_login_or_register);
+				start_data.allow_login_or_register);
 	} catch (const BaseException &e) {
 		*error_message = fmtgettext("Error creating client: %s", e.what());
 		errorstream << *error_message << std::endl;
-                resolve(false, nullptr);
-                return;
+		return false;
 	}
 
 	client->migrateModStorage();
@@ -1702,69 +1508,51 @@ void Game::connectToServer_after_dns(const GameStartData *start_data, std::funct
 	/*
 		Wait for server to accept connection
 	*/
+
 	client->connect(connect_address, address_name);
 
 	try {
 		input->clear();
 
-		wait_time = 0; // in seconds
-		did_fallback = false;
+		FpsControl fps_control;
+		f32 dtime;
+		f32 wait_time = 0; // in seconds
+		bool did_fallback = false;
 
 		fps_control.reset();
-		framemarker = new FrameMarker("Game::connectToServer()-frame");
-		framemarker->start();
-	// CATCHALL
-        } catch (BaseException &exc) {
-		resolve(false, exc.copy());
-		return;
-	}
-	connectToServer_loop(start_data, resolve);
-}
 
-void Game::connectToServer_loop(const GameStartData *start_data, std::function<void(bool,BaseException*)> resolve) {
-	const auto &address_name = start_data->address;
-	try { // CATCHALL
-	// EXTRANEOUS INDENT
-			if (!m_rendering_engine->run()) {
-				framemarker->end();
-				resolve(true, nullptr);
-				return;
-			}
+		auto framemarker = FrameMarker("Game::connectToServer()-frame").started();
 
-			f32 dtime;
-			framemarker->end();
+		while (m_rendering_engine->run()) {
+
+			framemarker.end();
 			fps_control.limit(device, &dtime);
-			framemarker->start();
+			framemarker.start();
 
 			// Update client and server
 			step(dtime);
 
 			// End condition
 			if (client->getState() == LC_Init) {
-				could_connect = true;
-				resolve(true, nullptr);
-				return;
+				*connect_ok = true;
+				break;
 			}
 
 			// Break conditions
-			if (connect_aborted) {
-				resolve(true, nullptr);
-				return;
-			}
+			if (*connection_aborted)
+				break;
 
 			if (client->accessDenied()) {
 				*error_message = fmtgettext("Access denied. Reason: %s", client->accessDeniedReason().c_str());
 				*reconnect_requested = client->reconnectRequested();
 				errorstream << *error_message << std::endl;
-				resolve(true, nullptr);
-				return;
+				break;
 			}
 
 			if (input->cancelPressed()) {
-				connect_aborted = true;
+				*connection_aborted = true;
 				infostream << "Connect aborted [Escape]" << std::endl;
-				resolve(true, nullptr);
-				return;
+				break;
 			}
 
 			wait_time += dtime;
@@ -1778,58 +1566,35 @@ void Game::connectToServer_loop(const GameStartData *start_data, std::function<v
 			} else if (wait_time > GAME_CONNECTION_TIMEOUT) {
 				*error_message = gettext("Connection timed out.");
 				errorstream << *error_message << std::endl;
-				resolve(true, nullptr);
-				return;
+				break;
 			}
 
 			// Update status
 			showOverlayMessage(N_("Connecting to server..."), dtime, 20);
-	// CATCHALL
-        } catch (BaseException &exc) {
-		resolve(false, exc.copy());
-		return;
+		}
+		framemarker.end();
+	} catch (con::PeerNotFoundException &e) {
+		warningstream << "This should not happen. Please report a bug." << std::endl;
+		return false;
 	}
-	MainLoop::NextFrame([this, start_data, resolve]() { connectToServer_loop(start_data, resolve); });
+
+	return true;
 }
 
-void Game::getServerContent(std::function<void(bool,BaseException*)> resolve)
+bool Game::getServerContent(bool *aborted)
 {
-	try { // CATCHALL
 	input->clear();
+
+	FpsControl fps_control;
+	f32 dtime; // in seconds
 
 	fps_control.reset();
 
-	framemarker = new FrameMarker("Game::getServerContent()-frame");
-	framemarker->start();
-	// CATCHALL
-        } catch (BaseException &exc) {
-		resolve(false, exc.copy());
-		return;
-	}
-
-	getServerContent_loop(resolve);
-}
-
-void Game::getServerContent_loop(std::function<void(bool,BaseException*)> resolve) {
-	auto loop_cleanup = [&]() {
-		framemarker->end();
-		delete framemarker;
-		framemarker = nullptr;
-	};
-	try { // CATCHALL
-	// EXTRANOUS INDENT
-		if (!m_rendering_engine->run()) {
-			loop_cleanup();
-			connect_aborted = true;
-			infostream << "Connect aborted [device]" << std::endl;
-			resolve(false, nullptr);
-			return;
-		}
-
-		f32 dtime; // in seconds
-		framemarker->end();
+	auto framemarker = FrameMarker("Game::getServerContent()-frame").started();
+	while (m_rendering_engine->run()) {
+		framemarker.end();
 		fps_control.limit(device, &dtime);
-		framemarker->start();
+		framemarker.start();
 
 		// Update client and server
 		step(dtime);
@@ -1837,32 +1602,23 @@ void Game::getServerContent_loop(std::function<void(bool,BaseException*)> resolv
 		// End condition
 		if (client->mediaReceived() && client->itemdefReceived() &&
 				client->nodedefReceived()) {
-			loop_cleanup();
-                        resolve(true, nullptr);
-                        return;
+			return true;
 		}
 
 		// Error conditions
-		if (!checkConnection()) {
-			loop_cleanup();
-                        resolve(false, nullptr);
-                        return;
-		}
+		if (!checkConnection())
+			return false;
 
 		if (client->getState() < LC_Init) {
 			*error_message = gettext("Client disconnected");
 			errorstream << *error_message << std::endl;
-			loop_cleanup();
-                        resolve(false, nullptr);
-                        return;
+			return false;
 		}
 
 		if (input->cancelPressed()) {
-			connect_aborted = true;
+			*aborted = true;
 			infostream << "Connect aborted [Escape]" << std::endl;
-			loop_cleanup();
-                        resolve(false, nullptr);
-                        return;
+			return false;
 		}
 
 		// Display status
@@ -1903,14 +1659,12 @@ void Game::getServerContent_loop(std::function<void(bool,BaseException*)> resolv
 			m_rendering_engine->draw_load_screen(utf8_to_wide(message.str()), guienv,
 				texture_src, dtime, progress);
 		}
-	// CATCHALL
-        } catch (BaseException &exc) {
-		loop_cleanup();
-		resolve(false, exc.copy());
-		return;
 	}
+	framemarker.end();
 
-	MainLoop::NextFrame([this, resolve]() { getServerContent_loop(resolve); });
+	*aborted = true;
+	infostream << "Connect aborted [device]" << std::endl;
+	return false;
 }
 
 
@@ -1980,7 +1734,7 @@ void Game::updateDebugState()
 	draw_control->allow_noclip = m_cache_enable_noclip && client->checkPrivilege("noclip");
 }
 
-void Game::updateProfilers(const FpsControl &draw_times,
+void Game::updateProfilers(const RunStats &stats, const FpsControl &draw_times,
 		f32 dtime)
 {
 	float profiler_print_interval =
@@ -2019,7 +1773,7 @@ void Game::updateProfilers(const FpsControl &draw_times,
 	g_profiler->avg("Irr: HW buffers active", stats2.HWBuffersActive);
 }
 
-void Game::updateStats(const FpsControl &draw_times,
+void Game::updateStats(RunStats *stats, const FpsControl &draw_times,
 		f32 dtime)
 {
 
@@ -2028,7 +1782,7 @@ void Game::updateStats(const FpsControl &draw_times,
 
 	/* Time average and jitter calculation
 	 */
-	jp = &stats.dtime_jitter;
+	jp = &stats->dtime_jitter;
 	jp->avg = jp->avg * 0.96 + dtime * 0.04;
 
 	jitter = dtime - jp->avg;
@@ -2047,7 +1801,7 @@ void Game::updateStats(const FpsControl &draw_times,
 
 	/* Busytime average and jitter calculation
 	 */
-	jp = &stats.busy_time_jitter;
+	jp = &stats->busy_time_jitter;
 	jp->avg = jp->avg + draw_times.getBusyMs() * 0.02;
 
 	jitter = draw_times.getBusyMs() - jp->avg;
@@ -2705,6 +2459,7 @@ void Game::updateCameraOrientation(CameraOrientation *cam, float dtime)
 		cam->camera_yaw   += g_touchcontrols->getYawChange()   * sens_scale;
 		cam->camera_pitch += g_touchcontrols->getPitchChange() * sens_scale;
 	} else {
+		v2s32 center(driver->getScreenSize().Width / 2, driver->getScreenSize().Height / 2);
 		v2s32 dist = input->getMouseMovement();
 
 		if (m_invert_mouse || camera->getCameraMode() == CAMERA_MODE_THIRD_FRONT) {
@@ -2714,7 +2469,6 @@ void Game::updateCameraOrientation(CameraOrientation *cam, float dtime)
 		f32 sens_scale = getSensitivityScaleFactor();
 		cam->camera_yaw   -= dist.X * m_cache_mouse_sensitivity * sens_scale;
 		cam->camera_pitch += dist.Y * m_cache_mouse_sensitivity * sens_scale;
-
 	}
 
 	if (m_cache_enable_joysticks) {
@@ -4086,7 +3840,7 @@ void Game::handleDigging(const PointedThing &pointed, const v3s16 &nodepos,
 	camera->setDigging(0);  // Dig animation
 }
 
-void Game::updateFrame(f32 dtime,
+void Game::updateFrame(ProfilerGraph *graph, RunStats *stats, f32 dtime,
 		const CameraOrientation &cam)
 {
 	ZoneScoped;
@@ -4234,7 +3988,7 @@ void Game::updateFrame(f32 dtime,
 		updateShadows();
 	}
 
-	m_game_ui->update(stats, client, draw_control, cam, runData.pointed_old,
+	m_game_ui->update(*stats, client, draw_control, cam, runData.pointed_old,
 			gui_chat_console.get(), dtime);
 
 	m_game_formspec.update();
@@ -4243,7 +3997,7 @@ void Game::updateFrame(f32 dtime,
 		==================== Drawing begins ====================
 	*/
 	if (device->isWindowVisible())
-		drawScene(&graph, &stats);
+		drawScene(graph, stats);
 	/*
 		==================== End scene ====================
 	*/
@@ -4285,11 +4039,11 @@ void Game::updateClouds(float dtime)
 }
 
 /* Log times and stuff for visualization */
-inline void Game::updateProfilerGraphs()
+inline void Game::updateProfilerGraphs(ProfilerGraph *graph)
 {
 	Profiler::GraphValues values;
 	g_profiler->graphPop(values);
-	graph.put(values);
+	graph->put(values);
 }
 
 /****************************************************************************
@@ -4458,77 +4212,43 @@ void Game::readSettings()
  ****************************************************************************/
 /****************************************************************************/
 
-void the_game_finish(Game *game, std::function<void()> resolve);
-void the_game_handle_exception(Game *game, std::string *error_message, std::function<void()> resolve, BaseException *exc);
-
 void the_game(volatile std::sig_atomic_t *kill,
 		InputHandler *input,
 		RenderingEngine *rendering_engine,
-		const GameStartData *start_data,
+		const GameStartData &start_data,
 		std::string &error_message,
-		ChatBackend *chat_backend,
-		bool *reconnect_requested, // Used for local game
-		std::function<void()> resolve)
+		ChatBackend &chat_backend,
+		bool *reconnect_requested) // Used for local game
 {
-	std::cout << "ENTERED the_game" << std::endl;
-	Game *game = new Game();
+	Game game;
 
-	game->startup(
-		kill, input, rendering_engine, start_data,
-		error_message, reconnect_requested, chat_backend,
-		[game, &error_message, resolve](bool startup_ok, BaseException* exc) {
-			if (exc) {
-				std::cout << "GOT EXCEPTION FROM STARTUP: " << exc->what() << std::endl;
-				the_game_handle_exception(game, &error_message, resolve, exc);
-				return;
-			}
-			if (startup_ok) {
-				game->run([game, &error_message, resolve](BaseException* exc) {
-					if (exc) {
-						std::cout << "GOT EXCEPTION FROM GAME RUN: " << exc->what() << std::endl;
-						the_game_handle_exception(game, &error_message, resolve, exc);
-						return;
-					}
-					the_game_finish(game, resolve);
-				});
-				return;
-			} else {
-				the_game_finish(game, resolve);
-				return;
-			}
-		});
-}
-
-void the_game_handle_exception(Game *game, std::string *error_message, std::function<void()> resolve, BaseException *exc) {
 	try {
-		exc->reraise();
+
+		if (game.startup(kill, input, rendering_engine, start_data,
+				error_message, reconnect_requested, &chat_backend)) {
+			game.run();
+		}
+
 	} catch (SerializationError &e) {
 		const std::string ver_err = fmtgettext("The server is probably running a different version of %s.", PROJECT_NAME_C);
-		*error_message = strgettext("A serialization error occurred:") +"\n"
-			+ e.what() + "\n\n" + ver_err;
-		errorstream << *error_message << std::endl;
+		error_message = strgettext("A serialization error occurred:") +"\n"
+				+ e.what() + "\n\n" + ver_err;
+		errorstream << error_message << std::endl;
 	} catch (ServerError &e) {
-		*error_message = e.what();
-		errorstream << "ServerError: " << *error_message << std::endl;
+		error_message = e.what();
+		errorstream << "ServerError: " << error_message << std::endl;
 	} catch (ModError &e) {
 		// DO NOT TRANSLATE the `ModError`, it's used by `ui.lua`
-		*error_message = std::string("ModError: ") + e.what() +
-			strgettext("\nCheck debug.txt for details.");
-		errorstream << *error_message << std::endl;
+		error_message = std::string("ModError: ") + e.what() +
+				strgettext("\nCheck debug.txt for details.");
+		errorstream << error_message << std::endl;
 	} catch (con::PeerNotFoundException &e) {
-		*error_message = gettext("Connection error (timed out?)");
-		errorstream << *error_message << std::endl;
+		error_message = gettext("Connection error (timed out?)");
+		errorstream << error_message << std::endl;
 	} catch (ShaderException &e) {
-		*error_message = e.what();
-		errorstream << *error_message << std::endl;
+		error_message = e.what();
+		errorstream << error_message << std::endl;
 	}
 
-	the_game_finish(game, resolve);
-	return;
-}
-
-void the_game_finish(Game *game, std::function<void()> resolve) {
-	game->shutdown();
-	delete game;
-	resolve();
+	game.shutdown();
 }

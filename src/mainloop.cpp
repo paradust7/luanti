@@ -23,53 +23,32 @@
 
 extern "C" {
     EMSCRIPTEN_KEEPALIVE
+    void emloop_set_pointerlock(int want);
+
+    EMSCRIPTEN_KEEPALIVE
     void emloop_install_pack(const char *name, void *data, size_t size);
-
-    EMSCRIPTEN_KEEPALIVE
-    void emloop_reenter(void);
-
-    EMSCRIPTEN_KEEPALIVE
-    void emloop_reenter_blessed(void);
 
     EMSCRIPTEN_KEEPALIVE
     void emloop_invoke_main(int argc, char* argv[]);
 
     EMSCRIPTEN_KEEPALIVE
-    void emloop_pause();
-
-    EMSCRIPTEN_KEEPALIVE
-    void emloop_unpause();
-
-    EMSCRIPTEN_KEEPALIVE
-    void emloop_init_sound();
-
-    EMSCRIPTEN_KEEPALIVE
     void emloop_set_conf(const char *conf);
-
-    EM_BOOL irrlicht_want_pointerlock(void);
-    void irrlicht_force_pointerlock(void);
 }
 
 namespace emloop_private {
-    std::function<void()> next_callback;
-    bool blessed = false;
-    bool paused = false;
-    bool invokedMain = false;
-    bool busy = false; // executing main
-    bool dead = false; // Main exited, or got uncaught exception
-    int warnCount = 0;
     pthread_t mainThreadId;
-
-    pthread_t helperThread;
-    std::mutex helperMutex;
-    std::condition_variable helperCond;
-    AsyncPayload helperTask;
+    int main_argc;
+    char **main_argv;
+    // For signaling that args are ready
+    pthread_mutex_t main_mutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_cond_t main_cond = PTHREAD_COND_INITIALIZER;
 };
 
 using namespace emloop_private;
 
-
+static std::atomic<bool> wantPointerLock{false};
 static bool havePointerLock = false;
+
 EM_BOOL report_pointerlockchange(int eventType, const EmscriptenPointerlockChangeEvent *pointerlockChangeEvent, void *userData) {
     bool isActive = pointerlockChangeEvent->isActive ? true : false;
     if (havePointerLock != isActive) {
@@ -84,46 +63,44 @@ EM_BOOL report_pointerlockerror(int eventType, const void *reserved, void *userD
     return 0;
 }
 
-void* helper_thread_main(void*) {
-    std::unique_lock<std::mutex> ul(helperMutex);
-    for (;;) {
-        while (!helperTask) {
-            helperCond.wait(ul);
-        }
-        AsyncPayload task = std::move(helperTask);
-        helperTask = nullptr;
-        MainLoop::NextFrame(task());
+// This is called from main's worker thread.
+void emloop_set_pointerlock(int want) {
+    wantPointerLock.store(want);
+    if (!want) {
+        emscripten_exit_pointerlock();
     }
+}
+
+static EM_BOOL on_key(
+    int event_type,
+    const EmscriptenKeyboardEvent* event,
+    void* user_data) {
+
+    bool want = wantPointerLock.load();
+    if (havePointerLock && !want) {
+        emscripten_exit_pointerlock();
+    } else if (!havePointerLock && want) {
+        emscripten_request_pointerlock("#canvas", false);
+    }
+    return EM_FALSE;
+}
+
+static EM_BOOL on_mouse(
+    int event_type,
+    const EmscriptenMouseEvent* event,
+    void* user_data) {
+
+    bool want = wantPointerLock.load();
+    if (havePointerLock && !want) {
+        emscripten_exit_pointerlock();
+    } else if (!havePointerLock && want) {
+        emscripten_request_pointerlock("#canvas", false);
+    }
+    return EM_FALSE;
 }
 
 void emloop_init() {
     mainThreadId = pthread_self();
-    // Launch async helper thread, used instead of the main thread during blocking network tasks.
-    int rc = pthread_create(&helperThread, NULL, helper_thread_main, NULL);
-    if (rc != 0) {
-        std::cerr << "MainLoop: Failed to launch helper thread" << std::endl;
-        abort();
-    }
-}
-
-void MainLoop::RunAsyncThenResume(AsyncPayload payload) {
-    {
-        std::lock_guard<std::mutex> lock(helperMutex);
-        assert(!helperTask);
-        helperTask = payload;
-    }
-    helperCond.notify_all();
-}
-
-void MainLoop::NextFrame(std::function<void()> resolve) {
-    assert(!next_callback);
-    next_callback = resolve;
-}
-
-void MainLoop::DelayNextFrameUntilRedraw() {
-    EM_ASM({
-        emloop_request_animation_frame();
-    });
 }
 
 static std::string pathjoin(std::string a, std::string b) {
@@ -258,85 +235,7 @@ void emloop_install_pack(const char *name, void *data, size_t size) {
     //debug_list_directory("/", 0);
 }
 
-void emloop_reenter_blessed(void) {
-    // If we're already pointerlocked, there's no need to expedite main re-entry,
-    // and it may be better for performance to not do so. (prevents WebGL stalls)
-    if (havePointerLock) {
-        return;
-    }
-    blessed = true;
-    emloop_reenter();
-    blessed = false;
-}
-
-void emloop_reenter(void) {
-    if (dead || !invokedMain || paused) {
-        return;
-    }
-    if (busy) {
-        if (warnCount < MAX_WARNINGS) {
-            std::cout << "[WARNING] MainLoop attempted reentry" << std::endl;
-            warnCount++;
-        }
-        return;
-    }
-    if (!pthread_equal(pthread_self(), mainThreadId)) {
-        if (warnCount < MAX_WARNINGS) {
-            std::cout << "[WARNING] MainLoop reentry attempted off main thread" << std::endl;
-            warnCount++;
-        }
-        return;
-    }
-    busy = true;
-    try {
-        if (next_callback) {
-            std::function<void()> callback = std::move(next_callback);
-            next_callback = nullptr;
-            callback();
-
-            // Adjust pointer lock
-            bool wantPointerLock = irrlicht_want_pointerlock();
-            if (blessed && !havePointerLock && wantPointerLock) {
-                emscripten_request_pointerlock("#canvas", EM_FALSE);
-            } else if (havePointerLock && !wantPointerLock) {
-                emscripten_exit_pointerlock();
-            }
-        }
-    } catch (const std::exception &exc) {
-        std::cout << "Unhandled exception: " << exc.what() << std::endl;
-        busy = false;
-        dead = true;
-        throw;
-    } catch (...) {
-        std::cout << "Unhandled exception (non-standard)" << std::endl;
-        busy = false;
-        dead = true;
-        throw;
-    }
-    busy = false;
-}
-
-void main_resolve(int rv) {
-    std::cout << "main() exited with return value " << rv << std::endl;
-}
-
-void main2(int argc, char *argv[], std::function<void(int)> resolve);
-
-void emloop_pause() {
-    paused = true;
-}
-
-void emloop_unpause() {
-    paused = false;
-}
-
-extern "C" {
-    extern void preinit_sound(void);
-}
-
-void emloop_init_sound() {
-    preinit_sound();
-}
+int main2(int argc, char *argv[]);
 
 void emloop_set_conf(const char *contents) {
     std::ofstream os("/luanti/minetest.conf", std::ofstream::trunc);
@@ -347,39 +246,40 @@ void emloop_set_conf(const char *contents) {
     os.close();
 }
 
+// This is called in the browser thread. main is called in a worker
 void emloop_invoke_main(int argc, char* argv[]) {
-    // Caller must guarantee that argv remains valid forever.
-    if (invokedMain) {
-        std::cout << "ERROR: emloop_invoke_main called more than once" << std::endl;
-        return;
-    }
-    invokedMain = true;
-    MainLoop::NextFrame([argc, argv]() {
-        main2(argc, argv, main_resolve);
-    });
-    blessed = true;
-    emloop_reenter();
-    blessed = false;
-}
-
-int main(int argc, char *argv[])
-{
-    std::cout << "ENTERED main()" << std::endl;
-    emloop_init();
-
     emscripten_set_pointerlockchange_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, 0, 1, report_pointerlockchange);
     emscripten_set_pointerlockchange_callback("#canvas", 0, 1, report_pointerlockchange);
     emscripten_set_pointerlockerror_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, 0, 1, report_pointerlockerror);
     emscripten_set_pointerlockerror_callback("#canvas", 0, 1, report_pointerlockerror);
 
-    // The first next_frame() is special. It will be called directly from a user-generated click,
-    // which allows sound to be initialized. (and maybe full screen mode)
-    std::cout << "Main thread waiting for play signal (click on canvas to activate)" << std::endl;
-    EM_ASM({
-        emloop_ready();
-    });
-    emscripten_set_main_loop(emloop_reenter, 0, 1);
-    std::cout << "THIS SHOULD BE UNREACHABLE" << std::endl;
-    return 0;
+    emscripten_set_keydown_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, true, on_key);
+    emscripten_set_mousedown_callback(EMSCRIPTEN_EVENT_TARGET_WINDOW, nullptr, true, on_mouse);
+
+    pthread_mutex_lock(&main_mutex);
+    main_argc = argc;
+    main_argv = argv;
+    pthread_cond_signal(&main_cond);
+    pthread_mutex_unlock(&main_mutex);
 }
 
+int main(int argc, char *argv[])
+{
+    std::cout << "ENTERED main()" << std::endl;
+
+    MAIN_THREAD_EM_ASM({
+        emloop_ready();
+    });
+
+    pthread_mutex_lock(&main_mutex);
+    while (main_argc == 0) {
+        pthread_cond_wait(&main_cond, &main_mutex);
+    }
+    pthread_mutex_unlock(&main_mutex);
+
+    std::cout << "Main received args:" << std::endl;
+    for (int i = 0; i < main_argc; i++) {
+        std::cout << "    " << main_argv[i] << std::endl;
+    }
+    return main2(main_argc, main_argv);
+}

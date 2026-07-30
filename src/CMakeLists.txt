@@ -15,11 +15,11 @@ if(SIZEOF_SIZE_T LESS 4)
 endif()
 
 # Add custom SemiDebug build mode
-set(CMAKE_CXX_FLAGS_SEMIDEBUG "-O1 -g -Wall" CACHE STRING
+set(CMAKE_CXX_FLAGS_SEMIDEBUG "-O1 -g2 -Wall" CACHE STRING
 	"Flags used by the C++ compiler during semidebug builds."
 	FORCE
 )
-set(CMAKE_C_FLAGS_SEMIDEBUG "-O1 -g -Wall -pedantic" CACHE STRING
+set(CMAKE_C_FLAGS_SEMIDEBUG "-O1 -g2 -Wall -pedantic" CACHE STRING
 	"Flags used by the C compiler during semidebug builds."
 	FORCE
 )
@@ -974,9 +974,9 @@ else()
 	else()
 		set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} ${MATH_FLAGS}")
 	endif()
-	set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELEASE} -g")
-	set(CMAKE_CXX_FLAGS_SEMIDEBUG "-g -O1 ${WARNING_FLAGS} ${OTHER_FLAGS}")
-	set(CMAKE_CXX_FLAGS_DEBUG "-g -O0 ${WARNING_FLAGS} ${OTHER_FLAGS}")
+	set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELEASE} -g2")
+	set(CMAKE_CXX_FLAGS_SEMIDEBUG "-g2 -O1 ${WARNING_FLAGS} ${OTHER_FLAGS}")
+	set(CMAKE_CXX_FLAGS_DEBUG "-g2 -O0 ${WARNING_FLAGS} ${OTHER_FLAGS}")
 
 	if(UNIX)
 		# enable assertions for libstdc++ or libc++

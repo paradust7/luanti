@@ -185,17 +185,42 @@ private:
  * by the mutex in g_logger.
 */
 
-extern thread_local LogStream dstream;
-extern thread_local LogStream rawstream;  // Writes directly to all LL_NONE log outputs with no prefix.
-extern thread_local LogStream errorstream;
-extern thread_local LogStream warningstream;
-extern thread_local LogStream actionstream;
-extern thread_local LogStream infostream;
-extern thread_local LogStream verbosestream;
-extern thread_local LogStream tracestream;
+LogStream &log_dstream();
+// Writes directly to all LL_NONE log outputs with no prefix.
+LogStream &log_rawstream();
+LogStream &log_errorstream();
+LogStream &log_warningstream();
+LogStream &log_actionstream();
+LogStream &log_infostream();
+LogStream &log_verbosestream();
+LogStream &log_tracestream();
 // TODO: Search/replace these with verbose/tracestream
-extern thread_local LogStream derr_con;
-extern thread_local LogStream dout_con;
+LogStream &log_derr_con();
+LogStream &log_dout_con();
+
+
+/*
+ * TEMPORARY FIX FOR EMSCRIPTION
+ *
+ * The streams are accessed through out-of-line accessor functions (hidden
+ * behind macros so call sites keep the traditional names) instead of being
+ * exposed as thread_local globals directly. Direct access to a
+ * dynamically-initialized thread_local emits a call to its TLS init wrapper
+ * at the point of use; clang emits that call without a ["funclet"] operand
+ * bundle, which miscompiles any `catch` handler that logs when building with
+ * -fwasm-exceptions (the handler is replaced with `unreachable`). Keeping the
+ * TLS access inside log.cpp sidesteps that entirely.
+ */
+#define dstream       (log_dstream())
+#define rawstream     (log_rawstream())
+#define errorstream   (log_errorstream())
+#define warningstream (log_warningstream())
+#define actionstream  (log_actionstream())
+#define infostream    (log_infostream())
+#define verbosestream (log_verbosestream())
+#define tracestream   (log_tracestream())
+#define derr_con      (log_derr_con())
+#define dout_con      (log_dout_con())
 
 #define TRACESTREAM(x) do {	\
 	if (tracestream) { 	\

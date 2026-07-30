@@ -118,6 +118,7 @@ static bool game_configure_subgame(GameParams *game_params, const Settings &cmd_
 static bool get_game_from_cmdline(GameParams *game_params, const Settings &cmd_args);
 static bool determine_subgame(GameParams *game_params);
 
+static Thread *spawn_dedicated_server(const GameParams &game_params, const Settings &cmd_args);
 static bool run_dedicated_server(const GameParams &game_params, const Settings &cmd_args);
 static bool migrate_map_database(const GameParams &game_params, const Settings &cmd_args);
 static bool recompress_map_database(const GameParams &game_params, const Settings &cmd_args);
@@ -128,8 +129,6 @@ static bool recompress_map_database(const GameParams &game_params, const Setting
 static FileLogOutput file_log_output;
 
 static OptionList allowed_options;
-
-ClientLauncher *client_launcher;
 
 std::unordered_map<std::string, MediaInfo> warmup_media;
 void do_cache_warmup() {
@@ -144,7 +143,9 @@ void do_cache_warmup() {
 	}
 }
 
-void main2(int argc, char *argv[], std::function<void(int)> resolve) {
+int main2(int argc, char *argv[])
+{
+	int retval;
 	debug_set_exception_handler();
 
 	g_logger.registerThread("Main");
@@ -152,7 +153,7 @@ void main2(int argc, char *argv[], std::function<void(int)> resolve) {
 
 	porting::osSpecificInit();
 
-	Settings &cmd_args = *(new Settings()); // LEAK
+	Settings cmd_args;
 	get_env_opts(cmd_args);
 	bool cmd_args_ok = get_cmdline_opts(argc, argv, &cmd_args);
 	if (!cmd_args_ok
@@ -160,7 +161,7 @@ void main2(int argc, char *argv[], std::function<void(int)> resolve) {
 			|| cmd_args.exists("nonopt1")) {
 		porting::attachOrCreateConsole();
 		print_help(allowed_options);
-		resolve(cmd_args_ok ? 0 : 1); return;
+		return cmd_args_ok ? 0 : 1;
 	}
 	if (cmd_args.getFlag("console"))
 		porting::attachOrCreateConsole();
@@ -168,12 +169,14 @@ void main2(int argc, char *argv[], std::function<void(int)> resolve) {
 	if (cmd_args.getFlag("version")) {
 		porting::attachOrCreateConsole();
 		print_version(std::cout);
-		resolve(0); return;
+		return 0;
 	}
 
-	if (!setup_log_params(cmd_args)) {
-		resolve(1); return;
-	}
+	// Debug handler
+	BEGIN_DEBUG_EXCEPTION_HANDLER
+
+	if (!setup_log_params(cmd_args))
+		return 1;
 
 	if (cmd_args.getFlag("debugger")) {
 		if (!use_debugger(argc, argv))
@@ -198,13 +201,13 @@ void main2(int argc, char *argv[], std::function<void(int)> resolve) {
 
 	if (!create_userdata_path()) {
 		errorstream << "Cannot create user data directory" << std::endl;
-		resolve(1); return;
+		return 1;
 	}
 
 	// List gameids if requested
 	if (cmd_args.exists("gameid") && cmd_args.get("gameid") == "list") {
 		list_game_ids();
-		resolve(0); return;
+		return 0;
 	}
 
 	// List worlds, world names, and world paths if requested
@@ -218,14 +221,13 @@ void main2(int argc, char *argv[], std::function<void(int)> resolve) {
 		} else {
 			errorstream << "Invalid --worldlist value: "
 				<< cmd_args.get("worldlist") << std::endl;
-			resolve(1); return;
+			return 1;
 		}
-		resolve(0); return;
+		return 0;
 	}
 
-	if (!init_common(cmd_args, argc, argv)) {
-		resolve(1); return;
-	}
+	if (!init_common(cmd_args, argc, argv))
+		return 1;
 
 	if (g_settings->getBool("enable_console"))
 		porting::attachOrCreateConsole();
@@ -234,18 +236,15 @@ void main2(int argc, char *argv[], std::function<void(int)> resolve) {
 	if (cmd_args.getFlag("run-unittests")) {
 		porting::attachOrCreateConsole();
 #if BUILD_UNITTESTS
-		if (cmd_args.exists("test-module")) {
-			resolve(run_tests(cmd_args.get("test-module")));
-            return;
-		} else {
-			resolve(run_tests());
-            return;
-        }
+		if (cmd_args.exists("test-module"))
+			return run_tests(cmd_args.get("test-module")) ? 0 : 1;
+		else
+			return run_tests() ? 0 : 1;
 #else
 		errorstream << "Unittest support is not enabled in this binary. "
 			<< "If you want to enable it, compile project with BUILD_UNITTESTS=1 flag."
 			<< std::endl;
-		resolve(1); return;
+		return 1;
 #endif
 	}
 
@@ -261,12 +260,11 @@ void main2(int argc, char *argv[], std::function<void(int)> resolve) {
 		errorstream << "Benchmark support is not enabled in this binary. "
 			<< "If you want to enable it, compile project with BUILD_BENCHMARKS=1 flag."
 			<< std::endl;
-		resolve(1); return;
+		return 1;
 #endif
 	}
 
-	// LEAK
-	GameStartData &game_params = *(new GameStartData());
+	GameStartData game_params;
 #if !CHECK_CLIENT_BUILD()
 	porting::attachOrCreateConsole();
 	game_params.is_dedicated_server = true;
@@ -277,20 +275,10 @@ void main2(int argc, char *argv[], std::function<void(int)> resolve) {
 	game_params.is_dedicated_server = isServer;
 #endif
 
-	if (!game_configure(&game_params, cmd_args)) {
-		resolve(1); return;
-	}
+	if (!game_configure(&game_params, cmd_args))
+		return 1;
 
 	sanity_check(!game_params.world_path.empty());
-
-	if (game_params.is_dedicated_server) {
-		resolve(run_dedicated_server(game_params, cmd_args) ? 0 : 1);
-		return;
-	}
-
-	if (cmd_args.getFlag("withserver")) {
-		run_dedicated_server(game_params, cmd_args);
-	}
 
 	if (cmd_args.getFlag("warm")) {
 		// Create a dummy server to initialize but then delete.
@@ -301,24 +289,38 @@ void main2(int argc, char *argv[], std::function<void(int)> resolve) {
 		delete server;
         }
 
+	if (game_params.is_dedicated_server)
+		return run_dedicated_server(game_params, cmd_args) ? 0 : 1;
+
+	Thread *background_server = nullptr;
+	if (cmd_args.getFlag("withserver")) {
+		background_server = spawn_dedicated_server(game_params, cmd_args);
+	}
+
 #if CHECK_CLIENT_BUILD()
-	std::cout << "Creating ClientLauncher" << std::endl;
-	client_launcher = new ClientLauncher(game_params, cmd_args);
-	std::cout << "Calling ClientLauncher::run" << std::endl;
-        client_launcher->run([resolve](bool result) {
-		// Update configuration file
-		if (!g_settings_path.empty())
-			g_settings->updateConfigFile(g_settings_path.c_str());
-
-		print_modified_quicktune_values();
-
-		//END_DEBUG_EXCEPTION_HANDLER
-		resolve(result ? 0 : 1);
-	});
+	retval = ClientLauncher().run(game_params, cmd_args) ? 0 : 1;
 #else
-	resolve(0);
+	retval = 0;
 #endif
+
+	if (background_server) {
+		volatile auto &kill = *porting::signal_handler_killstatus();
+		kill = true;
+		background_server->stop();
+		background_server->wait();
+	}
+
+	// Update configuration file
+	if (!g_settings_path.empty())
+		g_settings->updateConfigFile(g_settings_path.c_str());
+
+	print_modified_quicktune_values();
+
+	END_DEBUG_EXCEPTION_HANDLER
+
+	return retval;
 }
+
 
 /*****************************************************************************
  * Startup / Init
@@ -1137,26 +1139,34 @@ static bool determine_subgame(GameParams *game_params)
 /*****************************************************************************
  * Dedicated server
  *****************************************************************************/
-static bool run_dedicated_server_run(Server *server);
 
-class StepThread : public Thread
+class BackgroundThread : public Thread
 {
 public:
 
-        StepThread(Server *server):
-                Thread("Step"),
-                m_server(server)
+        BackgroundThread(const GameParams &game_params, const Settings &cmd_args) :
+                Thread("BackgroundServer"),
+                m_game_params(game_params),
+		m_cmd_args(cmd_args)
         {}
 
         virtual void *run() {
-		run_dedicated_server_run(m_server);
+		run_dedicated_server(m_game_params, m_cmd_args);
 		return nullptr;
 	}
 
 private:
-        Server *m_server;
+        const GameParams &m_game_params;
+	const Settings &m_cmd_args;
 };
 
+static Thread *spawn_dedicated_server(const GameParams &game_params, const Settings &cmd_args)
+{
+	// Launch in separate thread and return right away
+	auto thread = new BackgroundThread(game_params, cmd_args);
+	thread->start();
+	return thread;
+}
 
 static bool run_dedicated_server(const GameParams &game_params, const Settings &cmd_args)
 {
@@ -1258,39 +1268,25 @@ static bool run_dedicated_server(const GameParams &game_params, const Settings &
 			<< "compiled without ncurses. Ignoring." << std::endl;
 	} {
 #endif
-		Server *server = new Server(game_params.world_path, game_params.game_spec, false,
-			bind_addr, true);
-		if (cmd_args.getFlag("withserver")) {
-			// Launch in separate thread and return right away
-			auto stepThread = new StepThread(server);
-			stepThread->start();
-			return true;
-		}
-		return run_dedicated_server_run(server);
-	}
-	return true;
-}
-
-static bool run_dedicated_server_run(Server *server) {
-	// Indented to minimize diff
 		try {
 			// Create server
-			server->start();
+			Server server(game_params.world_path, game_params.game_spec, false,
+				bind_addr, true);
+			server.start();
 
 			// Run server
 			volatile auto &kill = *porting::signal_handler_killstatus();
-			dedicated_server_loop(*server, kill);
+			dedicated_server_loop(server, kill);
 
 		} catch (const ModError &e) {
 			errorstream << "ModError: " << e.what() << std::endl;
-			delete server;
 			return false;
 		} catch (const ServerError &e) {
 			errorstream << "ServerError: " << e.what() << std::endl;
-			delete server;
 			return false;
 		}
-	delete server;
+	}
+
 	return true;
 }
 

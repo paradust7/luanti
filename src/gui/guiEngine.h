@@ -13,8 +13,6 @@
 #include "client/sound.h"
 #include "util/enriched_string.h"
 #include "translation.h"
-#include "client/renderingengine.h"
-#include "clientdynamicinfo.h"
 
 #include <csignal>
 
@@ -43,7 +41,6 @@ class GUIEngine;
 class RenderingEngine;
 class MainMenuScripting;
 struct MainMenuData;
-class FrameMarker;
 
 /******************************************************************************/
 /* declarations                                                               */
@@ -128,8 +125,7 @@ public:
 			RenderingEngine *rendering_engine,
 			IMenuManager *menumgr,
 			MainMenuData *data,
-			volatile std::sig_atomic_t &kill,
-			std::function<void()> resolve);
+			volatile std::sig_atomic_t &kill);
 
 	/** default destructor */
 	virtual ~GUIEngine();
@@ -171,20 +167,7 @@ private:
 	bool loadMainMenuScript();
 
 	/** run main menu loop */
-	void run(std::function<void()> resolve);
-	void run_loop(std::function<void()> resolve);
-	video::IVideoDriver *driver;
-	unsigned int text_height;
-	core::dimension2d<u32> initial_screen_size;
-	bool initial_window_maximized;
-	ClientDynamicInfo last_window_info;
-	u64 t_last_frame;
-	FpsControl fps_control;
-	f32 dtime;
-	FrameMarker *framemarker;
-
-        video::SColor sky_color;
-        MenuMusicFetcher soundfetcher;
+	void run();
 
 	/** update size of topleftext element */
 	void updateTopLeftTextSize();

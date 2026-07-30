@@ -21,6 +21,11 @@
 #include <memory>
 #include <unordered_map>
 
+extern "C" {
+        EMSCRIPTEN_KEEPALIVE
+        void emloop_set_pointerlock(int want);
+}
+
 class CIrrDeviceSDL : public CIrrDeviceStub
 {
 public:
@@ -118,8 +123,8 @@ public:
 	class CCursorControl : public gui::ICursorControl
 	{
 	public:
-		CCursorControl(CIrrDeviceSDL *dev, bool* want_pointerlock) :
-				Device(dev), IsVisible(true), WantPointerLock(want_pointerlock)
+		CCursorControl(CIrrDeviceSDL *dev) :
+				Device(dev), IsVisible(true)
 		{
 			initCursors();
 		}
@@ -131,7 +136,7 @@ public:
 #ifdef _IRR_EMSCRIPTEN_PLATFORM_
 			// The main loop takes care of reconciling the browser state
 			// and the desired state below.
-			*WantPointerLock = !visible;
+			emloop_set_pointerlock(visible ? 0 : 1);
 #else
 			if (visible)
 				SDL_ShowCursor(SDL_ENABLE);
@@ -271,7 +276,6 @@ public:
 		CIrrDeviceSDL *Device;
 		core::position2d<s32> CursorPos;
 		bool IsVisible;
-		bool *WantPointerLock; // external flag consumed by javascript
 
 		struct CursorDeleter
 		{

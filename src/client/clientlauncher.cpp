@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
-#include <functional>
-#include "mainloop.h"
 #include "gui/mainmenumanager.h"
 #include "clouds.h"
 #include "gui/touchcontrols.h"
@@ -79,21 +77,8 @@ ClientLauncher::~ClientLauncher()
 #endif
 }
 
-extern "C" {
-	void preinit_sound(void);
-}
 
-void preinit_sound(void) {
-#if USE_SOUND
-	g_sound_manager_singleton = createSoundManagerSingleton();
-#endif
-}
-
-#ifdef __EMSCRIPTEN__
-std::unique_ptr<IWritableShaderSource> g_clouds_ssrc;
-#endif
-
-void ClientLauncher::run(std::function<void(bool)> resolve)
+bool ClientLauncher::run(GameStartData &start_data, const Settings &cmd_args)
 {
 	/* This function is called when a client must be started.
 	 * Covered cases:
@@ -104,13 +89,16 @@ void ClientLauncher::run(std::function<void(bool)> resolve)
 
 	init_args(start_data, cmd_args);
 
-	if (!init_engine()) {
-		resolve(false); return;
-	}
+#if USE_SOUND
+	g_sound_manager_singleton = createSoundManagerSingleton();
+#endif
+
+	if (!init_engine())
+		return false;
 
 	if (!m_rendering_engine->get_video_driver()) {
 		errorstream << "Could not initialize video driver." << std::endl;
-		resolve(false); return;
+		return false;
 	}
 
 	m_rendering_engine->setupTopLevelWindow();
@@ -133,10 +121,10 @@ void ClientLauncher::run(std::function<void(bool)> resolve)
 	// Create the menu clouds
 	// This is only global so it can be used by RenderingEngine::draw_load_screen().
 	assert(!g_menucloudsmgr && !g_menuclouds);
-	g_clouds_ssrc.reset(createShaderSource());
-	g_clouds_ssrc->addShaderUniformSetterFactory(std::make_unique<FogShaderUniformSetterFactory>());
+	std::unique_ptr<IWritableShaderSource> ssrc(createShaderSource());
+	ssrc->addShaderUniformSetterFactory(std::make_unique<FogShaderUniformSetterFactory>());
 	g_menucloudsmgr = m_rendering_engine->get_scene_manager()->createNewSceneManager();
-	g_menuclouds = new Clouds(g_menucloudsmgr, g_clouds_ssrc.get(), -1, rand());
+	g_menuclouds = new Clouds(g_menucloudsmgr, ssrc.get(), -1, rand());
 	g_menuclouds->setHeight(100.0f);
 	g_menuclouds->update(v3f(0, 0, 0), video::SColor(255, 240, 240, 255));
 	scene::ICameraSceneNode* camera;
@@ -147,33 +135,23 @@ void ClientLauncher::run(std::function<void(bool)> resolve)
 		GUI stuff
 	*/
 
-	chat_backend = new ChatBackend();
+	ChatBackend chat_backend;
 
 	// If an error occurs, this is set to something by menu().
 	// It is then displayed before the menu shows on the next call to menu()
-	error_message = "";
-	reconnect_requested = false;
+	std::string error_message;
+	bool reconnect_requested = false;
 
-	first_loop = true;
+	bool first_loop = true;
 
 	/*
 		Menu-game loop
 	*/
-	retval = true;
-	kill = porting::signal_handler_killstatus();
+	bool retval         = true;
+	volatile auto *kill = porting::signal_handler_killstatus();
 
-	// HEREHERE
-	MainLoop::NextFrame([this, resolve]() { run_loop(resolve); });
-}
-
-void ClientLauncher::run_loop(std::function<void(bool)> resolve) {
-	// EXTRANEOUS INDENT
-		bool keep_running = m_rendering_engine->run() && !*kill && !g_gamecallback->shutdown_requested;
-		if (!keep_running) {
-			run_cleanup(resolve);
-			return;
-		}
-
+	while (m_rendering_engine->run() && !*kill &&
+		!g_gamecallback->shutdown_requested) {
 		// Set the window caption
 		auto driver_name = m_rendering_engine->getVideoDriver()->getName();
 		std::string caption = std::string(PROJECT_NAME_C) +
@@ -184,63 +162,57 @@ void ClientLauncher::run_loop(std::function<void(bool)> resolve) {
 		m_rendering_engine->get_raw_device()->
 			setWindowCaption(utf8_to_wide(caption).c_str());
 
-		// EXTRA INDENT
-		m_rendering_engine->get_gui_env()->clear();
+#ifdef NDEBUG
+		try {
+#endif
+			m_rendering_engine->get_gui_env()->clear();
 
-		/*
-			We need some kind of a root node to be able to add
-			custom gui elements directly on the screen.
-			Otherwise they won't be automatically drawn.
-		*/
-		guiroot = m_rendering_engine->get_gui_env()->addStaticText(L"",
-			core::rect<s32>(0, 0, 10000, 10000));
+			/*
+				We need some kind of a root node to be able to add
+				custom gui elements directly on the screen.
+				Otherwise they won't be automatically drawn.
+			*/
+			guiroot = m_rendering_engine->get_gui_env()->addStaticText(L"",
+				core::rect<s32>(0, 0, 10000, 10000));
 
-		launch_game([this, resolve](bool should_run_game) { run_after_launch_game(resolve, should_run_game); });
-}
+			bool should_run_game = launch_game(error_message, reconnect_requested,
+				start_data, cmd_args);
 
-void ClientLauncher::run_after_launch_game(std::function<void(bool)> resolve, bool should_run_game) {
-
-	// EXTRANEOUS INDENT
 			// Reset the reconnect_requested flag
 			reconnect_requested = false;
 
 			// If skip_main_menu, we only want to startup once
-			if (skip_main_menu && !first_loop) {
-				run_cleanup(resolve);
-				return;
-			}
-
+			if (skip_main_menu && !first_loop)
+				break;
 			first_loop = false;
 
 			if (!should_run_game) {
-				if (skip_main_menu) {
-					run_cleanup(resolve);
-					return;
-				}
-
-				MainLoop::NextFrame([this, resolve]() { run_loop(resolve); });
-				return;
+				if (skip_main_menu)
+					break;
+				continue;
 			}
 
 			// Break out of menu-game loop to shut down cleanly
-			if (!m_rendering_engine->run() || *kill) {
-				run_cleanup(resolve);
-				return;
-			}
+			if (!m_rendering_engine->run() || *kill)
+				break;
 
 			the_game(
 				kill,
 				input,
 				m_rendering_engine,
-				&start_data,
+				start_data,
 				error_message,
 				chat_backend,
-				&reconnect_requested,
-				[this, resolve]() { after_the_game(resolve); }
-				);
-}
+				&reconnect_requested
+			);
+#ifdef NDEBUG
+		} catch (std::exception &e) {
+			error_message = "Some exception: ";
+			error_message.append(debug_describe_exc(e));
+			errorstream << error_message << std::endl;
+		}
+#endif
 
-void ClientLauncher::after_the_game(std::function<void(bool)> resolve) {
 		m_rendering_engine->get_scene_manager()->clear();
 
 		if (g_touchcontrols) {
@@ -258,18 +230,13 @@ void ClientLauncher::after_the_game(std::function<void(bool)> resolve) {
 		if (!g_settings_path.empty())
 			g_settings->updateConfigFile(g_settings_path.c_str());
 
-					// If no main menu, show error and exit
-					if (skip_main_menu) {
-						if (!error_message.empty())
-							retval = false;
-						run_cleanup(resolve);
-						return;
-					}
-					MainLoop::NextFrame([this, resolve]() { run_loop(resolve); });
-					return;
-}
-
-void ClientLauncher::run_cleanup(std::function<void(bool)> resolve) {
+		// If no main menu, show error and exit
+		if (skip_main_menu) {
+			if (!error_message.empty())
+				retval = false;
+			break;
+		}
+	} // Menu-game loop
 
 	// If profiler was enabled print it one last time
 	if (g_settings->getFloat("profiler_print_interval") > 0) {
@@ -284,9 +251,8 @@ void ClientLauncher::run_cleanup(std::function<void(bool)> resolve) {
 	assert(g_menuclouds->getReferenceCount() == 1);
 	g_menuclouds->drop();
 	g_menuclouds = nullptr;
-	g_clouds_ssrc.reset();
-	resolve(retval);
-	return;
+
+	return retval;
 }
 
 void ClientLauncher::init_args(GameStartData &start_data, const Settings &cmd_args)
@@ -423,7 +389,9 @@ void ClientLauncher::config_guienv()
 	}
 }
 
-void ClientLauncher::launch_game(std::function<void(bool)> resolve)
+bool ClientLauncher::launch_game(std::string &error_message,
+		bool reconnect_requested, GameStartData &start_data,
+		const Settings &cmd_args)
 {
 	// Prepare and check the start data to launch a game
 	std::string error_message_lua = error_message;
@@ -441,7 +409,7 @@ void ClientLauncher::launch_game(std::function<void(bool)> resolve)
 					"failed to open: ")
 					+ cmd_args.get("password-file");
 			errorstream << error_message << std::endl;
-			resolve(false); return;
+			return false;
 		}
 	}
 
@@ -457,14 +425,11 @@ void ClientLauncher::launch_game(std::function<void(bool)> resolve)
 
 	/* Show the GUI menu
 	 */
-	server_name = "";
-	server_description = "";
+	std::string server_name, server_description;
 	if (!skip_main_menu) {
 		// Initialize menu data
 		// TODO: Re-use existing structs (GameStartData)
-
-		menudata_addr = new MainMenuData();
-		MainMenuData &menudata = *menudata_addr;
+		MainMenuData menudata;
 		menudata.address                         = start_data.address;
 		menudata.name                            = start_data.name;
 		menudata.password                        = start_data.password;
@@ -472,29 +437,18 @@ void ClientLauncher::launch_game(std::function<void(bool)> resolve)
 		menudata.script_data.errormessage        = std::move(error_message_lua);
 		menudata.script_data.reconnect_requested = reconnect_requested;
 
-		main_menu([this, resolve]() { after_main_menu(resolve); });
-	} else {
-		after_main_menu(resolve);
-	}
-}
-
-void ClientLauncher::after_main_menu(std::function<void(bool)> resolve) {
-	if (!skip_main_menu) {
-		MainMenuData &menudata = *menudata_addr;
+		main_menu(&menudata);
 
 		// Skip further loading if there was an exit signal.
-		if (*porting::signal_handler_killstatus()) {
-			delete menudata_addr; menudata_addr = nullptr;
-			resolve(false); return;
-		}
+		if (*porting::signal_handler_killstatus())
+			return false;
 
 		if (!menudata.script_data.errormessage.empty()) {
 			/* The calling function will pass this back into this function upon the
 			 * next iteration (if any) causing it to be displayed by the GUI
 			 */
 			error_message = menudata.script_data.errormessage;
-			delete menudata_addr; menudata_addr = nullptr;
-			resolve(false); return;
+			return false;
 		}
 
 		int newport = stoi(menudata.port);
@@ -518,23 +472,18 @@ void ClientLauncher::after_main_menu(std::function<void(bool)> resolve) {
 
 		start_data.local_server = !menudata.simple_singleplayer_mode &&
 			start_data.address.empty();
-		delete menudata_addr;
-		menudata_addr = nullptr;
 	} else {
 		start_data.local_server = !start_data.world_path.empty() &&
 			start_data.address.empty() && !start_data.name.empty();
 	}
 
-	if (!m_rendering_engine->run()) {
-		resolve(false);
-		return;
-	}
+	if (!m_rendering_engine->run())
+		return false;
 
 	if (!start_data.isSinglePlayer() && start_data.name.empty()) {
 		error_message = gettext("Please choose a name!");
 		errorstream << error_message << std::endl;
-		resolve(false);
-		return;
+		return false;
 	}
 
 	// If using simple singleplayer mode, override
@@ -550,7 +499,7 @@ void ClientLauncher::after_main_menu(std::function<void(bool)> resolve) {
 		error_message = gettext("Player name too long.");
 		start_data.name.resize(PLAYERNAME_SIZE);
 		g_settings->set("name", start_data.name);
-		resolve(false); return;
+		return false;
 	}
 
 	auto &worldspec = start_data.world_spec;
@@ -563,18 +512,14 @@ void ClientLauncher::after_main_menu(std::function<void(bool)> resolve) {
 			error_message = gettext("No world selected and no address "
 					"provided. Nothing to do.");
 			errorstream << error_message << std::endl;
-			resolve(false); return;
+			return false;
 		}
 
-		bool mayCreate = skip_main_menu && start_data.isSinglePlayer();
-		bool worldExists = fs::PathExists(worldspec.path);
-		if (!worldExists && !mayCreate) {
+		if (!fs::PathExists(worldspec.path)) {
 			error_message = gettext("Provided world path doesn't exist: ")
 					+ worldspec.path;
 			errorstream << error_message << std::endl;
-			resolve(false); return;
-		} else if (!worldExists) {
-			loadGameConfAndInitWorld(worldspec.path, worldspec.name, start_data.game_spec, true);
+			return false;
 		}
 
 		// Load gamespec for required game
@@ -583,65 +528,47 @@ void ClientLauncher::after_main_menu(std::function<void(bool)> resolve) {
 			error_message = gettext("Could not find or load game: ")
 					+ worldspec.gameid;
 			errorstream << error_message << std::endl;
-			resolve(false); return;
+			return false;
 		}
 
-		resolve(true); return;
+		return true;
 	}
+
 	start_data.world_path = start_data.world_spec.path;
-	resolve(true); return;
+	return true;
 }
 
-void ClientLauncher::main_menu(std::function<void()> resolve)
+void ClientLauncher::main_menu(MainMenuData *menudata)
 {
-
-	kill   = porting::signal_handler_killstatus();
+	volatile auto       *kill   = porting::signal_handler_killstatus();
+	video::IVideoDriver *driver = m_rendering_engine->get_video_driver();
+	auto                *device = m_rendering_engine->get_raw_device();
 
 	// Wait until app is in foreground because of #15883
 	infostream << "Waiting for app to be in foreground" << std::endl;
-	main_menu_wait_loop(resolve);
-}
-
-void ClientLauncher::main_menu_wait_loop(std::function<void()> resolve)
-{
-	auto device = m_rendering_engine->get_raw_device();
-	bool keep_going = m_rendering_engine->run() && !*kill;
-	if (keep_going && !device->isWindowVisible()) {
-		MainLoop::NextFrame([this, resolve]() { main_menu_wait_loop(resolve); });
-		return;
+	while (m_rendering_engine->run() && !*kill) {
+		if (device->isWindowVisible())
+			break;
+		sleep_ms(25);
 	}
-
 	infostream << "Waited for app to be in foreground" << std::endl;
 
 	infostream << "Waiting for other menus" << std::endl;
-	framemarker = new FrameMarker("ClientLauncher::main_menu()-wait-frame");
-	main_menu_loop(resolve);
-}
-
-void ClientLauncher::main_menu_loop(std::function<void()> resolve) {
-	// EXTRANEOUS INDENT
-		bool keep_going = m_rendering_engine->run() && !*kill;
-		if (!keep_going || !isMenuActive()) {
-			main_menu_after_loop(resolve);
-			return;
-		}
-		framemarker->start();
-		video::IVideoDriver *driver = m_rendering_engine->get_video_driver();
+	auto framemarker = FrameMarker("ClientLauncher::main_menu()-wait-frame").started();
+	while (m_rendering_engine->run() && !*kill) {
+		if (!isMenuActive())
+			break;
 		driver->beginScene(true, true, video::SColor(255, 128, 128, 128));
 		m_rendering_engine->get_gui_env()->drawAll();
 		driver->endScene();
-		framemarker->end();
+		framemarker.end();
 		// On some computers framerate doesn't seem to be automatically limited
-		//sleep_ms(25);
-		MainLoop::NextFrame([this, resolve]() { main_menu_loop(resolve); });
-}
-
-void ClientLauncher::main_menu_after_loop(std::function<void()> resolve) {
-	delete framemarker;
-	framemarker = nullptr;
+		sleep_ms(25);
+		framemarker.start();
+	}
+	framemarker.end();
 	infostream << "Waited for other menus" << std::endl;
 
-	auto device = m_rendering_engine->get_raw_device();
 	auto *cur_control = device->getCursorControl();
 	if (cur_control) {
 		// Cursor can be non-visible when coming from the game
@@ -651,13 +578,8 @@ void ClientLauncher::main_menu_after_loop(std::function<void()> resolve) {
 	}
 
 	/* show main menu */
-	new GUIEngine(&input->joystick, guiroot, m_rendering_engine, &g_menumgr, menudata_addr, *kill, [this, resolve]() {
-		main_menu_after_guiengine(resolve);
-        });
-	std::cout << "AFTER CONSTRUCTING GUIEngine" << std::endl;
-}
+	GUIEngine mymenu(&input->joystick, guiroot, m_rendering_engine, &g_menumgr, menudata, *kill);
 
-void ClientLauncher::main_menu_after_guiengine(std::function<void()> resolve) {
 	/* leave scene manager in a clean state */
 	m_rendering_engine->get_scene_manager()->clear();
 
@@ -670,6 +592,4 @@ void ClientLauncher::main_menu_after_guiengine(std::function<void()> resolve) {
 	 */
 	if (!g_settings_path.empty())
 		g_settings->updateConfigFile(g_settings_path.c_str());
-
-	resolve();
 }

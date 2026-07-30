@@ -76,17 +76,6 @@ LevelTarget info_target(g_logger, LL_INFO);
 LevelTarget verbose_target(g_logger, LL_VERBOSE);
 LevelTarget trace_target(g_logger, LL_TRACE);
 
-thread_local LogStream dstream(none_target);
-thread_local LogStream rawstream(none_target_raw);
-thread_local LogStream errorstream(error_target);
-thread_local LogStream warningstream(warning_target);
-thread_local LogStream actionstream(action_target);
-thread_local LogStream infostream(info_target);
-thread_local LogStream verbosestream(verbose_target);
-thread_local LogStream tracestream(trace_target);
-thread_local LogStream derr_con(verbose_target);
-thread_local LogStream dout_con(trace_target);
-
 // Android
 #ifdef __ANDROID__
 
@@ -368,3 +357,37 @@ void StreamProxy::fix_stream_state(std::ostream &os)
 	if (state & std::ios::failbit)
 		os << "(ostream:failbit)";
 }
+
+// The TLS variables live inside these accessors so that call sites never
+// touch a thread_local directly (see the comment in log.h). The accessor
+// names must not collide with the macros defined there.
+#undef dstream
+#undef rawstream
+#undef errorstream
+#undef warningstream
+#undef actionstream
+#undef infostream
+#undef verbosestream
+#undef tracestream
+#undef derr_con
+#undef dout_con
+
+#define MAKE_LOG_STREAM_ACCESSOR(name, target) \
+	LogStream &log_##name() \
+	{ \
+		static thread_local LogStream stream(target); \
+		return stream; \
+	}
+
+MAKE_LOG_STREAM_ACCESSOR(dstream, none_target)
+MAKE_LOG_STREAM_ACCESSOR(rawstream, none_target_raw)
+MAKE_LOG_STREAM_ACCESSOR(errorstream, error_target)
+MAKE_LOG_STREAM_ACCESSOR(warningstream, warning_target)
+MAKE_LOG_STREAM_ACCESSOR(actionstream, action_target)
+MAKE_LOG_STREAM_ACCESSOR(infostream, info_target)
+MAKE_LOG_STREAM_ACCESSOR(verbosestream, verbose_target)
+MAKE_LOG_STREAM_ACCESSOR(tracestream, trace_target)
+MAKE_LOG_STREAM_ACCESSOR(derr_con, verbose_target)
+MAKE_LOG_STREAM_ACCESSOR(dout_con, trace_target)
+
+#undef MAKE_LOG_STREAM_ACCESSOR

@@ -15,7 +15,6 @@
 
 #include <ostream>
 #include <cstring>
-#include <functional>
 #include "irrlichttypes.h"
 #include "networkexceptions.h"
 
@@ -56,8 +55,6 @@ public:
 	// any empty name resets the IP to the "any address"
 	// may throw ResolveError (address is unchanged in this case)
 	void Resolve(const char *name, Address *fallback = nullptr);
-
-        void ResolveAsync(const char *name, Address *fallback, std::function<void(BaseException*)> resolve);
 
 	void setAddress(u32 address);
 	void setAddress(u8 a, u8 b, u8 c, u8 d);
