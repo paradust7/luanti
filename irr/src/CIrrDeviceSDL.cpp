@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cassert>
+#include <cmath>
 
 #ifdef _IRR_EMSCRIPTEN_PLATFORM_
 #include <emscripten.h>
@@ -770,15 +771,11 @@ bool CIrrDeviceSDL::run()
 	memset(&irrevent, 0, sizeof(SEvent));
 	SDL_Event SDL_event;
 
-	// TODO(paradust):
-	//
-	// SDL/emscripten doesn't generate SDL_WINDOWEVENT_RESIZED or SDL_WINDOWEVENT_SIZE_CHANGED
-	// events when the canvas is resized externally (using the js api). It isn't clear why.
-	// This would match the behavior of other platforms. Until fixed, trigger the update manually.
-	if (canvas_updated && (Width != canvas_width || Height != canvas_height)) {
-                emscripten_set_canvas_element_size("#canvas", canvas_width, canvas_height);
-		SDL_SetWindowSize(Window, canvas_width, canvas_height);
+	if (canvas_updated) {
 		canvas_updated = false;
+		double dpr = emscripten_get_device_pixel_ratio();
+		SDL_SetWindowSize(Window, std::lround(canvas_width / dpr), std::lround(canvas_height / dpr));
+		emscripten_set_canvas_element_size("#canvas", canvas_width, canvas_height);
 	}
 
 	while (!Close && wrap_PollEvent(&SDL_event)) {
