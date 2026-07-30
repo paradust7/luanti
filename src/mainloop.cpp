@@ -76,10 +76,12 @@ static EM_BOOL on_key(
     const EmscriptenKeyboardEvent* event,
     void* user_data) {
 
+    bool isEscape = (strcmp(event->code, "Escape") == 0);
+
     bool want = wantPointerLock.load();
     if (havePointerLock && !want) {
         emscripten_exit_pointerlock();
-    } else if (!havePointerLock && want) {
+    } else if (!havePointerLock && want && !isEscape) {
         emscripten_request_pointerlock("#canvas", false);
     }
     return EM_FALSE;
