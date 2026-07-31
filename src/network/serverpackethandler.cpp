@@ -4,20 +4,22 @@
 
 #include "chatmessage.h"
 #include "server.h"
+#include "serverenvironment.h"
 #include "log.h"
 #include "emerge.h"
+#include "itemdef.h"
 #include "mapblock.h"
 #include "modchannels.h"
 #include "nodedef.h"
+#include "porting.h" // strcasecmp
 #include "remoteplayer.h"
 #include "rollback_interface.h"
 #include "scripting_server.h"
 #include "serialization.h"
 #include "settings.h"
 #include "tool.h"
-#include "version.h"
-#include "irrlicht_changes/printing.h"
 #include "network/connection.h"
+#include "network/networkexceptions.h"
 #include "network/networkpacket.h"
 #include "network/networkprotocol.h"
 #include "network/serveropcodes.h"
@@ -26,7 +28,6 @@
 #include "util/auth.h"
 #include "util/base64.h"
 #include "util/pointedthing.h"
-#include "util/serialize.h"
 #include "util/srp.h"
 #include "clientdynamicinfo.h"
 
@@ -270,6 +271,13 @@ void Server::handleCommand_Init2(NetworkPacket* pkt)
 	session_t peer_id = pkt->getPeerId();
 	verbosestream << "Server: Got TOSERVER_INIT2 from " << peer_id << std::endl;
 
+	RemoteClient *client = getClientNoEx(peer_id, CS_Invalid);
+	if (!client || client->getState() != CS_AwaitingInit2) {
+		actionstream << "Server: Ignoring TOSERVER_INIT2 in wrong state from "
+			<< peer_id << std::endl;
+		return;
+	}
+
 	m_clients.event(peer_id, CSE_GotInit2);
 	u16 protocol_version = m_clients.getProtocolVersion(peer_id);
 
@@ -294,9 +302,6 @@ void Server::handleCommand_Init2(NetworkPacket* pkt)
 
 	// Send media announcement
 	sendMediaAnnouncement(peer_id, lang);
-
-	RemoteClient *client = getClient(peer_id, CS_InitDone);
-	assert(client);
 
 	// Keep client language for server translations
 	client->setLangCode(lang);
@@ -435,9 +440,6 @@ void Server::handleCommand_GotBlocks(NetworkPacket* pkt)
 void Server::process_PlayerPos(RemotePlayer *player, PlayerSAO *playersao,
 	NetworkPacket *pkt)
 {
-	if (pkt->getRemainingBytes() < 12 + 12 + 4 + 4 + 4 + 1 + 1)
-		return;
-
 	v3s32 ps, ss;
 	s32 f32pitch, f32yaw;
 	u8 f32fov;
@@ -462,17 +464,26 @@ void Server::process_PlayerPos(RemotePlayer *player, PlayerSAO *playersao,
 	fov = (f32)f32fov / 80.0f;
 	*pkt >> wanted_range;
 
-	if (pkt->getRemainingBytes() >= 1)
+	bool have_movement_data = false;
+	do {
+		if (!pkt->hasRemainingBytes())
+			break;
+		// >= 5.8.0-dev
 		*pkt >> bits;
 
-	if (pkt->getRemainingBytes() >= 8) {
+		if (!pkt->hasRemainingBytes())
+			break;
+		// >= 5.10.0-dev
 		f32 movement_speed;
 		*pkt >> movement_speed;
 		if (movement_speed != movement_speed) // NaN
 			movement_speed = 0.0f;
 		player->control.movement_speed = std::clamp(movement_speed, 0.0f, 1.0f);
 		*pkt >> player->control.movement_direction;
-	} else {
+		have_movement_data = true;
+	} while (0);
+
+	if (!have_movement_data) {
 		player->control.movement_speed = 0.0f;
 		player->control.movement_direction = 0.0f;
 		player->control.setMovementFromKeys();
@@ -829,7 +840,9 @@ void Server::handleCommand_PlayerItem(NetworkPacket* pkt)
 
 	*pkt >> item;
 
-	if (item >= player->getMaxHotbarItemcount()) {
+	if (player->getMaxHotbarItemcount() == 0) {
+		return; // ignore silently
+	} else if (item >= player->getMaxHotbarItemcount()) {
 		actionstream << "Player " << player->getName()
 			<< " tried to access item=" << item
 			<< " out of hotbar_itemcount="
@@ -925,8 +938,9 @@ void Server::handleCommand_Interact(NetworkPacket *pkt)
 	v3f player_pos = playersao->getLastGoodPosition();
 
 	// Update wielded item
-
-	if (item_i >= player->getMaxHotbarItemcount()) {
+	if (player->getMaxHotbarItemcount() == 0) {
+		return; // ignore silently
+	} else if (item_i >= player->getMaxHotbarItemcount()) {
 		actionstream << "Player " << player->getName()
 			<< " tried to access item=" << item_i
 			<< " out of hotbar_itemcount="
@@ -1045,7 +1059,7 @@ void Server::handleCommand_Interact(NetworkPacket *pkt)
 
 		ItemStack selected_item, hand_item;
 		ItemStack tool_item = playersao->getWieldedItem(&selected_item, &hand_item);
-		ToolCapabilities toolcap =
+		const ToolCapabilities &toolcap =
 				tool_item.getToolCapabilities(m_itemdef, &hand_item);
 		v3f dir = (pointed_object->getBasePosition() -
 				(playersao->getBasePosition() + playersao->getEyeOffset())
@@ -1053,7 +1067,7 @@ void Server::handleCommand_Interact(NetworkPacket *pkt)
 		float time_from_last_punch =
 			playersao->resetTimeFromLastPunch();
 
-		u32 wear = pointed_object->punch(dir, &toolcap, playersao,
+		u32 wear = pointed_object->punch(dir, toolcap, playersao,
 				time_from_last_punch, tool_item.wear);
 
 		// Callback may have changed item, so get it again
@@ -1173,11 +1187,6 @@ void Server::handleCommand_Interact(NetworkPacket *pkt)
 		std::optional<ItemStack> selected_item;
 		getWieldedItem(playersao, selected_item);
 
-		// Reset build time counter
-		if (pointed.type == POINTEDTHING_NODE &&
-				selected_item->getDefinition(m_itemdef).type == ITEM_NODE)
-			getClient(peer_id)->m_time_from_building = 0.0;
-
 		const bool had_prediction = !selected_item->getDefinition(m_itemdef).
 			node_placement_prediction.empty();
 
@@ -1198,6 +1207,10 @@ void Server::handleCommand_Interact(NetworkPacket *pkt)
 					SendInventory(player, true);
 			}
 
+			// on_secondary_use might have removed the object
+			if (pointed_object->isGone())
+				return;
+
 			pointed_object->rightClick(playersao);
 		} else if (m_script->item_OnPlace(selected_item, playersao, pointed)) {
 			// Placement was handled in lua
@@ -1209,6 +1222,8 @@ void Server::handleCommand_Interact(NetworkPacket *pkt)
 
 		if (pointed.type != POINTEDTHING_NODE)
 			return;
+
+		getClient(peer_id)->m_time_from_building = 0;
 
 		// If item has node placement prediction, always send the
 		// blocks to make sure the client knows what exactly happened
@@ -1658,7 +1673,9 @@ void Server::handleCommand_SrpBytesM(NetworkPacket* pkt)
 	srp_verifier_verify_session((SRPVerifier *) client->auth_data,
 		(unsigned char *)bytes_M.c_str(), &bytes_HAMK);
 
-	if (!bytes_HAMK) {
+	// skip authentication check for singleplayer world.
+	const bool is_true_singleplayer = isSingleplayer() && (strcasecmp(playername.c_str(), "singleplayer") == 0);
+	if (!bytes_HAMK && !is_true_singleplayer) {
 		if (wantSudo) {
 			actionstream << "Server: User " << playername << " at " << addr_s
 				<< " tried to change their password, but supplied wrong"
@@ -1810,11 +1827,11 @@ void Server::handleCommand_UpdateClientInfo(NetworkPacket *pkt)
 	*pkt >> info.real_hud_scaling;
 	*pkt >> info.max_fs_size.X;
 	*pkt >> info.max_fs_size.Y;
-	try {
-		// added in 5.9.0
+	info.touch_controls = false;
+
+	if (pkt->hasRemainingBytes()) {
+		// >= 5.9.0-dev
 		*pkt >> info.touch_controls;
-	} catch (PacketError &e) {
-		info.touch_controls = false;
 	}
 
 	session_t peer_id = pkt->getPeerId();

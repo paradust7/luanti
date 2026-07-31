@@ -5,8 +5,6 @@
 #include "guiChatConsole.h"
 #include "chat.h"
 #include "client/client.h"
-#include "debug.h"
-#include "gettime.h"
 #include "client/keycode.h"
 #include "settings.h"
 #include "porting.h"
@@ -17,6 +15,8 @@
 #include "irrlicht_changes/CGUITTFont.h"
 #include "util/string.h"
 #include "guiScrollBar.h"
+#include <IOSOperator.h>
+#include <IVideoDriver.h>
 #include <string>
 
 inline u32 clamp_u8(s32 value)
@@ -87,7 +87,7 @@ GUIChatConsole::GUIChatConsole(
 	m_is_ctrl_down = false;
 	m_cache_clickable_chat_weblinks = g_settings->getBool("clickable_chat_weblinks");
 
-	m_scrollbar.reset(new GUIScrollBar(env, this, -1, core::rect<s32>(0, 0, 30, m_height), false, true, tsrc));
+	m_scrollbar.reset(new GUIScrollBar(env, this, -1, core::rect<s32>(0, 0, 30, m_height), false, tsrc));
 	m_scrollbar->setSubElement(true);
 	m_scrollbar->setLargeStep(1);
 	m_scrollbar->setSmallStep(1);
@@ -123,7 +123,6 @@ bool GUIChatConsole::isOpenInhibited() const
 void GUIChatConsole::closeConsole()
 {
 	m_open = false;
-	Environment->removeFocus(this);
 	m_menumgr->deletingMenu(this);
 	m_scrollbar->setVisible(false);
 }
@@ -436,7 +435,7 @@ bool GUIChatConsole::OnEvent(const SEvent& event)
 		}
 
 		// Key input
-		if (KeyPress(event.KeyInput) == getKeySetting("keymap_console")) {
+		if (keySettingHasMatch("keymap_console", event.KeyInput)) {
 			closeConsole();
 
 			// inhibit open so the_game doesn't reopen immediately

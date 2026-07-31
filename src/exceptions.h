@@ -33,6 +33,12 @@ public:
 	}
 
 	COPY_MECHANISM(BaseException);
+
+	BaseException &append(const std::string &what)
+	{
+		m_s.append(what);
+		return *this;
+	}
 protected:
 	std::string m_s;
 };
@@ -112,6 +118,11 @@ class ModError : public BaseException {
 public:
 	ModError(const std::string &s): BaseException(s) {}
 	COPY_MECHANISM(ModError);
+};
+
+class MisbehavedSSCSMException : public BaseException {
+public:
+	MisbehavedSSCSMException(const std::string &s): BaseException(s) {}
 };
 
 

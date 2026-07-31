@@ -20,8 +20,6 @@ extern "C" {
 }
 
 #include "config.h"
-#include "util/enum_string.h"
-
 
 /*
 	Define our custom indices into the Lua registry table.
@@ -51,6 +49,8 @@ enum {
 	// trace them and optimize tables/string better than from the C API.
 	CUSTOM_RIDX_READ_VECTOR,
 	CUSTOM_RIDX_PUSH_VECTOR,
+	CUSTOM_RIDX_READ_VECTOR2,
+	CUSTOM_RIDX_PUSH_VECTOR2,
 	CUSTOM_RIDX_READ_NODE,
 	CUSTOM_RIDX_PUSH_NODE,
 	CUSTOM_RIDX_PUSH_MOVERESULT1,

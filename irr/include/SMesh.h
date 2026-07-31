@@ -26,7 +26,7 @@ struct SMesh final : public IAnimatedMesh
 	}
 
 	//! clean mesh
-	virtual void clear()
+	void clear()
 	{
 		for (auto *buf : MeshBuffers)
 			buf->drop();
@@ -137,9 +137,9 @@ struct SMesh final : public IAnimatedMesh
 	// Slightly hacky: Eventually should be consolidated with SSkinnedMesh,
 	// with all the animation-related parts behind an optional.
 
-	virtual f32 getMaxFrameNumber() const override { return 0.0f; }
-	virtual f32 getAnimationSpeed() const override { return 0.0f; }
-	virtual void setAnimationSpeed(f32 fps) override {}
+	f32 getMaxFrameNumber() const override { return 0.0f; }
+	void prepareForAnimation(u16 max_hw_joints) override {}
+	bool needsHwSkinning() const override { return false; }
 	E_ANIMATED_MESH_TYPE getMeshType() const override { return EAMT_STATIC; }
 };
 

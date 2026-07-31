@@ -42,13 +42,7 @@ struct SIrrlichtCreationParameters
 			LoggingLevel(ELL_INFORMATION),
 #endif
 			PrivateData(0),
-#ifdef IRR_MOBILE_PATHS
-			OGLES2ShaderPath("media/Shaders/"),
-#elif defined(_IRR_EMSCRIPTEN_PLATFORM_)
-			OGLES2ShaderPath("/luanti/media/Shaders/"),
-#else
-			OGLES2ShaderPath("../../media/Shaders/"),
-#endif
+			OGLES2ShaderPath("SHADER_PATH_WAS_NOT_SET"),
 			DriverDebug(false)
 	{
 	}

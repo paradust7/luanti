@@ -3,64 +3,71 @@
 // Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "server.h"
-#include "irr_v2d.h"
-#include "network/connection.h"
-#include "network/networkpacket.h"
-#include "network/networkprotocol.h"
-#include "network/serveropcodes.h"
-#include "server/ban.h"
-#include "environment.h"
-#include "servermap.h"
-#include "threading/mutex_auto_lock.h"
-#include "constants.h"
-#include "voxel.h"
+
+#include "chat_interface.h"
+#include "chatmessage.h"
 #include "config.h"
-#include "version.h"
-#include "filesys.h"
-#include "mapblock.h"
-#include "server/serveractiveobject.h"
-#include "serialization.h" // SER_FMT_VER_INVALID
-#include "settings.h"
-#include "profiler.h"
-#include "log.h"
-#include "scripting_server.h"
-#include "nodedef.h"
-#include "itemdef.h"
-#include "craftdef.h"
-#include "emerge.h"
-#include "mapgen/mapgen.h"
-#include "mapgen/mg_biome.h"
-#include "content_mapnode.h"
+#include "constants.h"
 #include "content_nodemeta.h"
-#include "content/mods.h"
-#include "modchannels.h"
-#include "server/serverlist.h"
-#include "util/string.h"
+#include "craftdef.h"
+#include "environment.h"
+#include "filesys.h"
+#include "gameparams.h"
+#include "gettext.h"
+#include "irr_v2d.h"
+#include "itemdef.h"
+#include "log.h"
+#include "mapblock.h"
+#include "nodedef.h"
+#include "particles.h"
+#include "profiler.h"
+#include "remoteplayer.h"
+#include "server/ban.h"
+#include "serverenvironment.h"
+#include "servermap.h"
+#include "server/player_sao.h"
 #include "server/rollback.h"
-#include "util/serialize.h"
-#include "util/thread.h"
-#include "defaultsettings.h"
-#include "server/mods.h"
+#include "server/serveractiveobject.h"
+#include "server/serverinventorymgr.h"
+#include "server/serverlist.h"
+#include "settings.h"
+#include "translation.h"
 #include "util/base64.h"
 #include "util/hashing.h"
 #include "util/hex.h"
+#include "util/serialize.h"
+#include "util/string.h"
+#include "util/thread.h"
+#include "util/tracy_wrapper.h"
+#include "version.h"
+
+// Mapgen
+#include "emerge.h"
+#include "mapgen/mapgen.h"
+#include "mapgen/mg_biome.h"
+
+// Modding
+#include "modchannels.h"
+#include "script/common/c_types.h" // LuaError
+#include "scripting_server.h"
+#include "server/mods.h" // ServerModManager
+
+// Network
+#include "network/connection.h"
+#include "network/networkexceptions.h"
+#include "network/networkpacket.h"
+#include "network/networkprotocol.h"
+#include "network/serveropcodes.h"
+#include "serialization.h" // SER_FMT_VER_INVALID
+
+// Database
 #include "database/database.h"
-#include "chatmessage.h"
-#include "chat_interface.h"
-#include "remoteplayer.h"
-#include "server/player_sao.h"
-#include "server/serverinventorymgr.h"
-#include "translation.h"
 #include "database/database-sqlite3.h"
 #if USE_POSTGRESQL
 #include "database/database-postgresql.h"
 #endif
 #include "database/database-files.h"
 #include "database/database-dummy.h"
-#include "gameparams.h"
-#include "particles.h"
-#include "gettext.h"
-#include "util/tracy_wrapper.h"
 
 #include <iostream>
 #include <queue>
@@ -251,6 +258,24 @@ std::wstring Server::ShutdownState::getShutdownTimerMessage() const
 	return ws.str();
 }
 
+static void enrich_exception(BaseException &e, const NetworkPacket &pkt, bool include_pos)
+{
+	const u16 cmd = pkt.getCommand();
+	std::ostringstream oss;
+	if (cmd < TOSERVER_NUM_MSG_TYPES)
+		oss << " name=" << toServerCommandTable[cmd].name;
+
+	if (include_pos) {
+		// (not necessary for PacketError: already in e.what())
+
+		oss << " cmd=" << cmd
+			<< " offset=" << pkt.getOffset()
+			<< " size=" << pkt.getSize();
+	}
+
+	e.append(" @").append(oss.str());
+}
+
 /*
 	Server
 */
@@ -342,10 +367,12 @@ Server::~Server()
 
 	actionstream << "Server: Shutting down" << std::endl;
 
+	auto old_async_fatal_error = m_async_fatal_error.get();
+
 	// Stop server step from happening
 	if (m_thread) {
 		stop();
-		delete m_thread;
+		// (Do not delete yet. Accessed by setAsyncFatalError().)
 	}
 
 	// Stop all emerge activity and finish off mapgen callbacks. Do this before
@@ -409,12 +436,18 @@ Server::~Server()
 	// Clean up files
 	for (auto &it : m_media) {
 		if (it.second.delete_at_shutdown) {
-			fs::DeleteSingleFileOrEmptyDirectory(it.second.path);
+			fs::DeleteSingleFileOrEmptyDirectory(it.second.path, true);
 		}
 	}
 
 	// emerge may depend on definition managers, so destroy first
 	m_emerge.reset();
+
+	// Catch one async error that just happened while this dtor is running
+	auto async_fatal_error = m_async_fatal_error.get();
+	if (old_async_fatal_error != async_fatal_error) {
+		errorstream << "Server: new AsyncErr during shutdown: " << async_fatal_error;
+	}
 
 	// Delete the rest in the reverse order of creation
 	delete m_game_settings;
@@ -424,6 +457,7 @@ Server::~Server()
 	delete m_itemdef;
 	delete m_nodedef;
 	delete m_craftdef;
+	delete m_thread;
 
 	while (!m_unsent_map_edit_queue.empty()) {
 		delete m_unsent_map_edit_queue.front();
@@ -1140,8 +1174,13 @@ void Server::Receive(float min_time)
 		} catch (const con::InvalidIncomingDataException &e) {
 			infostream << "Server::Receive(): InvalidIncomingDataException: what()="
 					<< e.what() << std::endl;
-		} catch (const SerializationError &e) {
+		} catch (SerializationError &e) {
+			enrich_exception(e, pkt, true);
 			infostream << "Server::Receive(): SerializationError: what()="
+					<< e.what() << std::endl;
+		} catch (PacketError &e) {
+			enrich_exception(e, pkt, false);
+			actionstream << "Server::Receive(): PacketError: what()="
 					<< e.what() << std::endl;
 		} catch (const ClientStateError &e) {
 			errorstream << "ClientStateError: peer=" << peer_id << " what()="
@@ -1339,10 +1378,6 @@ void Server::ProcessData(NetworkPacket *pkt)
 		handleCommand(pkt);
 	} catch (SendFailedException &e) {
 		errorstream << "Server::ProcessData(): SendFailedException: "
-				<< "what=" << e.what()
-				<< std::endl;
-	} catch (PacketError &e) {
-		actionstream << "Server::ProcessData(): PacketError: "
 				<< "what=" << e.what()
 				<< std::endl;
 	}
@@ -1557,7 +1592,7 @@ void Server::SendNodeDef(session_t peer_id,
 	Non-static send methods
 */
 
-void Server::SendInventory(RemotePlayer *player, bool incremental)
+void Server::SendInventory(RemotePlayer *player, bool incremental, bool skip_wield_anim)
 {
 	// Do not send new format to old clients
 	incremental &= player->protocol_version >= 38;
@@ -1574,8 +1609,15 @@ void Server::SendInventory(RemotePlayer *player, bool incremental)
 	player->inventory.serialize(os, incremental);
 	player->inventory.setModified(false);
 	player->setModified(true);
+	std::string content = os.str();
 
-	pkt.putRawString(os.str());
+	if (player->protocol_version >= 52) {
+		pkt.putLongString(content);
+		pkt << skip_wield_anim;
+	} else {
+		pkt.putRawString(content);
+	}
+
 	Send(&pkt);
 }
 
@@ -1843,8 +1885,14 @@ void Server::SendHUDAdd(session_t peer_id, u32 id, HudElement *form)
 
 	pkt << id << (u8) form->type << form->pos << form->name << form->scale
 			<< form->text << form->number << form->item << form->dir
-			<< form->align << form->offset << form->world_pos << form->size
-			<< form->z_index << form->text2 << form->style;
+			<< form->align << form->offset << form->world_pos;
+
+	if (m_clients.getProtocolVersion(peer_id) >= 52)
+		pkt << form->size;
+	else
+		pkt << v2s32::from(form->size);
+
+	pkt << form->z_index << form->text2 << form->style;
 
 	Send(&pkt);
 }
@@ -1876,9 +1924,14 @@ void Server::SendHUDChange(session_t peer_id, u32 id, HudElementStat stat, void 
 		case HUD_STAT_WORLD_POS:
 			pkt << *(v3f *) value;
 			break;
-		case HUD_STAT_SIZE:
-			pkt << *(v2s32 *) value;
+		case HUD_STAT_SIZE: {
+			v2f *v = (v2f *) value;
+			if (m_clients.getProtocolVersion(peer_id) >= 52)
+				pkt << *v;
+			else
+				pkt << v2s32::from(*v);
 			break;
+		}
 		default: // all other types
 			pkt << *(u32 *) value;
 			break;
@@ -1932,6 +1985,8 @@ void Server::SendSetSky(session_t peer_id, const SkyboxParams &params)
 
 		pkt << params.body_orbit_tilt << params.fog_distance << params.fog_start
 			<< params.fog_color;
+
+		pkt << params.auto_dim_skybox;
 	}
 
 	Send(&pkt);
@@ -1961,7 +2016,7 @@ void Server::SendSetStars(session_t peer_id, const StarParams &params)
 
 	pkt << params.visible << params.count
 		<< params.starcolor << params.scale
-		<< params.day_opacity;
+		<< params.day_opacity << params.star_seed;
 
 	Send(&pkt);
 }
@@ -2003,6 +2058,8 @@ void Server::SendSetLighting(session_t peer_id, const Lighting &lighting)
 	pkt << lighting.volumetric_light_strength << lighting.shadow_tint;
 	pkt << lighting.bloom_intensity << lighting.bloom_strength_factor <<
 			lighting.bloom_radius;
+
+	pkt << lighting.shadow_direction;
 
 	Send(&pkt);
 }
@@ -2618,7 +2675,7 @@ bool Server::addMediaFile(const std::string &filename,
 		".tr", ".po", ".mo",
 		// Fonts
 		".ttf", ".woff",
-		NULL
+		nullptr
 	};
 	if (removeStringEnd(filename, supported_ext).empty()) {
 		infostream << "Server: ignoring unsupported file extension: \""
@@ -2651,9 +2708,15 @@ bool Server::addMediaFile(const std::string &filename,
 		*digest_to = sha1;
 
 	// Put in list
-	m_media[filename] = MediaInfo(filepath, sha1);
+	m_media.insert_or_assign(filename, MediaInfo(filepath, sha1));
 	verbosestream << "Server: " << sha1_hex << " is " << filename
 			<< " (" << (filedata.size() >> 10) << "KiB)" << std::endl;
+
+	// Invalidate cached translations if we just added a translation file
+	if (Translations::isTranslationFile(filename)) {
+		// (could be optimized to clear only the relevant one, but not critical here)
+		server_translations.clear();
+	}
 
 	if (filedata_to)
 		*filedata_to = std::move(filedata);
@@ -2668,20 +2731,22 @@ void Server::fillMediaCache()
 	std::vector<std::string> paths;
 
 	// ordered in descending priority
-	paths.push_back(getBuiltinLuaPath() + DIR_DELIM + "locale");
-	fs::GetRecursiveDirs(paths, porting::path_user + DIR_DELIM + "textures" + DIR_DELIM + "server");
-	fs::GetRecursiveDirs(paths, m_gamespec.path + DIR_DELIM + "textures");
+	paths.push_back(getBuiltinLuaPath() + DIR_DELIM "locale");
+	fs::GetRecursiveDirs(paths,
+		porting::path_user + DIR_DELIM "textures" DIR_DELIM "server");
+	fs::GetRecursiveDirs(paths,
+		m_gamespec.path + DIR_DELIM "textures");
 	m_modmgr->getModsMediaPaths(paths);
 
 	// Collect media file information from paths into cache
 	for (const std::string &mediapath : paths) {
 		std::vector<fs::DirListNode> dirlist = fs::GetDirListing(mediapath);
-		for (const fs::DirListNode &dln : dirlist) {
+		for (const auto &dln : dirlist) {
 			if (dln.dir) // Ignore dirs (already in paths)
 				continue;
 
 			const std::string &filename = dln.name;
-			if (m_media.find(filename) != m_media.end()) // Do not override
+			if (m_media.count(filename) > 0) // Do not override
 				continue;
 
 			std::string filepath = mediapath;
@@ -2695,20 +2760,13 @@ void Server::fillMediaCache()
 
 void Server::sendMediaAnnouncement(session_t peer_id, const std::string &lang_code)
 {
-	std::string translation_formats[3] = { ".tr", ".po", ".mo" };
-	std::string lang_suffixes[3];
-	for (size_t i = 0; i < 3; i++) {
-		lang_suffixes[i].append(".").append(lang_code).append(translation_formats[i]);
-	}
-
 	auto include = [&] (const std::string &name, const MediaInfo &info) -> bool {
 		if (info.no_announce)
 			return false;
-		for (size_t j = 0; j < 3; j++) {
-			if (str_ends_with(name, translation_formats[j]) && !str_ends_with(name, lang_suffixes[j])) {
-				return false;
-			}
-		}
+		// Only send translations matching the client's language
+		auto this_lang_code = Translations::getFileLanguage(name);
+		if (!this_lang_code.empty() && this_lang_code != lang_code)
+			return false;
 		return true;
 	};
 
@@ -2912,11 +2970,12 @@ void Server::stepPendingDynMediaCallbacks(float dtime)
 
 		const auto &name = state.filename;
 		if (!name.empty()) {
-			assert(m_media.count(name));
-			sanity_check(m_media[name].ephemeral);
+			auto it = m_media.find(name);
+			assert(it != m_media.end());
+			sanity_check(it->second.ephemeral);
 
-			fs::DeleteSingleFileOrEmptyDirectory(m_media[name].path);
-			m_media.erase(name);
+			fs::DeleteSingleFileOrEmptyDirectory(it->second.path, true);
+			m_media.erase(it);
 		}
 		getScriptIface()->freeDynamicMediaCallback(token);
 		return true;
@@ -3998,6 +4057,11 @@ void Server::setAsyncFatalError(const std::string &error)
 		m_thread->stop();
 }
 
+void Server::setAsyncFatalError(const LuaError &e)
+{
+	setAsyncFatalError(std::string("Lua: ") + e.what());
+}
+
 // Not thread-safe.
 void Server::addShutdownError(const ModError &e)
 {
@@ -4013,6 +4077,11 @@ void Server::addShutdownError(const ModError &e)
 			*m_shutdown_errmsg += "\n\n" + msg;
 		}
 	}
+}
+
+Map &Server::getMap()
+{
+	return m_env->getMap();
 }
 
 v3f Server::findSpawnPos()

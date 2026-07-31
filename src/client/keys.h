@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <list>
-
 class KeyType
 {
 public:
@@ -24,6 +22,12 @@ public:
 		PLACE,
 
 		ESC,
+
+		// Camera look (keyboard)
+		CAMERA_YAW_LEFT,
+		CAMERA_YAW_RIGHT,
+		CAMERA_PITCH_UP,
+		CAMERA_PITCH_DOWN,
 
 		// Other
 		DROP,

@@ -49,6 +49,7 @@ local function load_settingtypes()
 		if not page then
 			page = add_page({
 				id = (section or "general"):lower():gsub(" ", "_"),
+				-- TRANSLATORS: Category for general settings
 				title = section or fgettext_ne("General"),
 				section = section,
 				content = {},
@@ -130,6 +131,8 @@ local function load()
 			{ heading = fgettext_ne("Movement") },
 			"arm_inertia",
 			"view_bobbing_amount",
+			{ heading = fgettext_ne("Damage") },
+			"hurt_flash_enabled"
 		},
 	})
 
@@ -137,6 +140,7 @@ local function load()
 
 	-- insert after "touch_controls"
 	table.insert(page_by_id.controls_touchscreen.content, 2, touchscreen_layout)
+
 	do
 		local content = page_by_id.graphics_and_audio_effects.content
 		local idx = table.indexof(content, "enable_dynamic_shadows")
@@ -144,6 +148,8 @@ local function load()
 
 		idx = table.indexof(content, "enable_auto_exposure") + 1
 		local setting_info = get_setting_info("enable_auto_exposure")
+		--[[ TRANSLATORS: "automatic exposure" refers to light. This note
+		will be displayed for the graphics setting 'enable_auto_exposure' ]]
 		local note = component_funcs.note(fgettext_ne("(The game will need to enable automatic exposure as well)"))
 		note.requires = setting_info.requires
 		note.context = setting_info.context
@@ -231,19 +237,25 @@ local function load()
 	}
 
 	get_setting_info("touch_controls").option_labels = {
+		-- TRANSLATORS: Automatic
 		["auto"] = fgettext_ne("Auto"),
 		["true"] = fgettext_ne("Enabled"),
 		["false"] = fgettext_ne("Disabled"),
 	}
 
 	get_setting_info("touch_interaction_style").option_labels = {
+		-- TRANSLATORS: Touchscreen interaction style
 		["tap"] = fgettext_ne("Tap"),
+		-- TRANSLATORS: Touchscreen interaction style
 		["tap_crosshair"] = fgettext_ne("Tap with crosshair"),
+		-- TRANSLATORS: Touchscreen interaction style
 		["buttons_crosshair"] = fgettext("Buttons with crosshair"),
 	}
 
 	get_setting_info("touch_punch_gesture").option_labels = {
+		-- TRANSLATORS: Touchscreen gesture
 		["short_tap"] = fgettext_ne("Short tap"),
+		-- TRANSLATORS: Touchscreen gesture
 		["long_tap"] = fgettext_ne("Long tap"),
 	}
 end
@@ -354,10 +366,10 @@ local function check_requirements(name, requires, context)
 		return true
 	end
 
-	local video_driver = core.get_active_driver()
 	local touch_support = core.irrlicht_device_supports_touch()
 	local touch_controls = core.settings:get("touch_controls")
 	local touch_interaction_style = core.settings:get("touch_interaction_style")
+	local shadows_support = core.driver_supports_shadows()
 	local special = {
 		android = PLATFORM == "Android",
 		desktop = PLATFORM ~= "Android",
@@ -366,9 +378,8 @@ local function check_requirements(name, requires, context)
 		-- be used, so we show settings for both.
 		touchscreen = touch_support and (touch_controls == "auto" or core.is_yes(touch_controls)),
 		keyboard_mouse = not touch_support or (touch_controls == "auto" or not core.is_yes(touch_controls)),
-		opengl = (video_driver == "opengl" or video_driver == "opengl3"),
-		gles = video_driver:sub(1, 5) == "ogles",
 		touch_interaction_style_tap = touch_interaction_style ~= "buttons_crosshair",
+		shadows_support = shadows_support,
 	}
 
 	for req_key, req_value in pairs(requires) do
@@ -407,18 +418,8 @@ function page_has_contents(page, actual_content)
 	for _, item in ipairs(actual_content) do
 		if item == false or item.heading then --luacheck: ignore
 			-- skip
-		elseif type(item) == "string" then
-			local setting = get_setting_info(item)
-			assert(setting, "Unknown setting: " .. item)
-			if check_requirements(setting.name, setting.requires, setting.context) then
-				return true
-			end
-		elseif item.get_formspec then
-			if check_requirements(item.id, item.requires, item.context) then
-				return true
-			end
 		else
-			error("Unknown content in page: " .. dump(item))
+			return true
 		end
 	end
 
@@ -429,6 +430,7 @@ end
 local function build_page_components(page)
 	-- Filter settings based on requirements
 	local content = {}
+	local settings_off = {}
 	local last_heading
 	for _, item in ipairs(page.content) do
 		if item == false then --luacheck: ignore
@@ -437,8 +439,9 @@ local function build_page_components(page)
 			last_heading = item
 		else
 			local name, requires, context
+			local setting
 			if type(item) == "string" then
-				local setting = get_setting_info(item)
+				setting = get_setting_info(item)
 				assert(setting, "Unknown setting: " .. item)
 				name = setting.name
 				requires = setting.requires
@@ -457,6 +460,8 @@ local function build_page_components(page)
 					last_heading = nil
 				end
 				content[#content + 1] = item
+			elseif setting then
+				settings_off[#settings_off + 1] = setting
 			end
 		end
 	end
@@ -474,6 +479,14 @@ local function build_page_components(page)
 		elseif item.heading then
 			retval[i] = component_funcs.heading(item.heading)
 		end
+	end
+
+	if #settings_off > 0 then
+		retval[#retval + 1] = component_funcs.heading(fgettext_ne("Unavailable"),
+			-- luacheck: ignore
+			fgettext_ne("These settings are unavailable due to your platform, hardware or in combination with the current settings.")
+		)
+		retval[#retval + 1] = component_funcs.unavail_list(settings_off)
 	end
 	return retval
 end
@@ -518,12 +531,14 @@ local function get_formspec(dialogdata)
 
 		("button[0,%f;%f,0.8;back;%s]"):format(
 				tabsize.height + 0.2, back_w,
+				-- TRANSLATORS: Button text to go back
 				fgettext("Back")),
 
 		("box[%f,%f;%f,0.8;#0000008C]"):format(
 			back_w + 0.2, tabsize.height + 0.2, checkbox_w),
 		("checkbox[%f,%f;show_technical_names;%s;%s]"):format(
 			back_w + 2*0.2, tabsize.height + 0.6,
+			-- TRANSLATORS: Checkbox that toggles displaying the technical setting names
 			fgettext("Show technical names"), tostring(show_technical_names)),
 
 		("box[%f,%f;%f,0.8;#0000008C]"):format(
@@ -540,6 +555,7 @@ local function get_formspec(dialogdata)
 			"image_button[0,0;0.75,0.75;", core.formspec_escape(defaulttexturedir .. "search.png"), ";search;]",
 			"image_button[0.75,0;0.75,0.75;", core.formspec_escape(defaulttexturedir .. "clear.png"), ";search_clear;]",
 			"tooltip[search;", fgettext("Search"), "]",
+			-- TRANSLATORS: Tooltip of a button that clears input
 			"tooltip[search_clear;", fgettext("Clear"), "]",
 		"container_end[]",
 		("scroll_container[0.25,1.25;%f,%f;leftscroll;vertical;0.1;0]"):format(
@@ -566,6 +582,7 @@ local function get_formspec(dialogdata)
 
 	if #filtered_pages == 0 then
 		fs[#fs + 1] = "label[0.1,0.41;"
+		-- TRANSLATORS: No search results
 		fs[#fs + 1] = fgettext("No results")
 		fs[#fs + 1] = "]"
 	end
@@ -614,8 +631,32 @@ local function get_formspec(dialogdata)
 
 		if show_reset then
 			local default = comp.setting.default
+
+			if comp.setting.type == "bool" then
+				if default == "true" then
+					default = fgettext_ne("Enabled")
+				elseif default == "false" then
+					default = fgettext_ne("Disabled")
+				end
+			elseif comp.setting.type == "key" then
+				default = (default ~= "")
+					and core.get_key_description(default)
+
+					-- TRANSLATORS: Indicates that the action does not have a corresponding keybinding.
+					or fgettext_ne("Not bound")
+			else
+				local sinfo = get_setting_info(comp.setting.name)
+				if sinfo and sinfo.option_labels and sinfo.option_labels[default] then
+					default = sinfo.option_labels[default]
+				elseif default == "" then
+					-- TRANSLATORS: Shown when a default setting is the empty string
+					default = fgettext_ne("<empty>")
+				end
+			end
+
 			local reset_tooltip = default and
-					fgettext("Reset setting to default ($1)", tostring(default)) or
+					-- TRANSLATORS: $1 will be replaced with a default setting value
+					fgettext("Reset setting to default: $1", tostring(default)) or
 					fgettext("Reset setting to default")
 			fs[#fs + 1] = ("image_button[%f,%f;0.5,0.5;%s;%s;]"):format(
 					right_pane_width - 1.4, info_reset_y, reset_icon_path, "reset_" .. i)

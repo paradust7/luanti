@@ -19,18 +19,10 @@ public:
 	//! Gets the maximum frame number, 0 if the mesh is static.
 	virtual f32 getMaxFrameNumber() const = 0;
 
-	//! Gets the animation speed of the animated mesh.
-	/** \return The number of frames per second to play the
-	animation with by default. If the amount is 0,
-	it is a static, non animated mesh. */
-	virtual f32 getAnimationSpeed() const = 0;
+	virtual void prepareForAnimation(u16 max_hw_joints) = 0;
 
-	//! Sets the animation speed of the animated mesh.
-	/** \param fps Number of frames per second to play the
-	animation with by default. If the amount is 0,
-	it is not animated. The actual speed is set in the
-	scene node the mesh is instantiated in.*/
-	virtual void setAnimationSpeed(f32 fps) = 0;
+	//! Whether the mesh needs shader-based hardware skinning
+	virtual bool needsHwSkinning() const = 0;
 
 	//! Returns the type of the animated mesh. Useful for safe downcasts.
 	E_ANIMATED_MESH_TYPE getMeshType() const = 0;

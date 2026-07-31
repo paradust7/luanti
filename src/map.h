@@ -4,22 +4,23 @@
 
 #pragma once
 
-#include <iostream>
-#include <set>
+#include <list>
 #include <map>
+#include <ostream>
+#include <set>
+#include <unordered_map>
 
 #include "irrlichttypes_bloated.h"
-#include "mapblock.h"
+#include "mapblock.h" // for forEachNodeInArea
 #include "mapnode.h"
 #include "constants.h"
 #include "voxel.h"
 #include "modifiedstate.h"
-#include "util/numeric.h"
-#include "nodetimer.h"
-#include "debug.h"
+#include "util/numeric.h" // for forEachNodeInArea
 
 class MapSector;
 class NodeMetadata;
+class NodeTimer;
 class IGameDef;
 
 /*
@@ -304,7 +305,8 @@ class MMVManip : public VoxelManipulator
 {
 public:
 	MMVManip(Map *map);
-	virtual ~MMVManip() = default;
+	~MMVManip() override;
+	DISABLE_CLASS_COPY(MMVManip)
 
 	/*
 		Loads specified area from map and *adds* it to the area already
@@ -344,6 +346,10 @@ public:
 	// Is it impossible to call initialEmerge / blitBackAll?
 	inline bool isOrphan() const { return !m_map; }
 
+	std::list<MMVManip **>::iterator addTrackedRef(MMVManip **ref_ref);
+
+	void removeTrackedRef(std::list<MMVManip **>::iterator it);
+
 	bool m_is_dirty = false;
 
 protected:
@@ -351,4 +357,8 @@ protected:
 
 	// may be null
 	Map *m_map = nullptr;
+
+private:
+	// references to this that need to be cleared on destruction
+	std::list<MMVManip **> m_tracked_refs;
 };

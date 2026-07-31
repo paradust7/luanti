@@ -20,6 +20,7 @@
 #include "SOverrideMaterial.h"
 #include "S3DVertex.h" // E_VERTEX_TYPE
 #include "SVertexIndex.h" // E_INDEX_TYPE
+#include "HWBuffer.h"
 
 namespace io
 {
@@ -54,12 +55,27 @@ const c8 *const FogTypeNames[] = {
 struct SFrameStats {
 	//! Number of draw calls
 	u32 Drawcalls = 0;
-	//! Count of primitives drawn
+	//! Number of primitives drawn
 	u32 PrimitivesDrawn = 0;
 	//! Number of hardware buffers uploaded (new or updated)
 	u32 HWBuffersUploaded = 0;
 	//! Number of active hardware buffers
 	u32 HWBuffersActive = 0;
+	//! Number of software skinned mesh scene nodes
+	u32 SWSkinnedMeshes = 0;
+	//! Number of hardware skinned mesh scene nodes
+	u32 HWSkinnedMeshes = 0;
+};
+
+struct SDriverLimits {
+	//! Major and minor GL version
+	core::vector2di GLVersion;
+	//! Maximum amount of primitives that can be rendered in a single call
+	u32 MaxPrimitiveCount = 0;
+	//! Maximum width/height for a texture
+	u32 MaxTextureSize = 0;
+	//! Maximum number of images in an array texture
+	u32 MaxArrayTextureImages = 0;
 };
 
 //! Interface to driver which is able to perform 2d and 3d graphics functions.
@@ -129,6 +145,12 @@ public:
 	world, or projection.
 	\param mat Matrix describing the transformation. */
 	virtual void setTransform(E_TRANSFORMATION_STATE state, const core::matrix4 &mat) = 0;
+
+	//! Returns the maximum number of joint transformation matrices the hardware and driver support.
+	virtual u16 getMaxJointTransforms() const = 0;
+
+	//! Sets joint transformation matrices for skinned meshes.
+	virtual void setJointTransforms(const std::vector<core::matrix4> &jointMatrices) = 0;
 
 	//! Returns the transformation set by setTransform
 	/** \param state Transformation type to query
@@ -302,20 +324,11 @@ public:
 	//! Eagerly upload buffer to hardware
 	/** This can be a good idea if you have a newly created or modified buffer,
 	which you know you will draw in the near future (e.g. end of same frame,
-	or next frame), because it gives the GPU driver to copy the contents. */
-	virtual void updateHardwareBuffer(const scene::IVertexBuffer *vb) = 0;
-
-	//! Eagerly upload buffer to hardware
-	/** This can be a good idea if you have a newly created or modified buffer,
-	which you know you will draw in the near future (e.g. end of same frame,
-	or next frame), because it gives the GPU driver to copy the contents. */
-	virtual void updateHardwareBuffer(const scene::IIndexBuffer *ib) = 0;
+	or next frame), because it gives the GPU driver time to copy the contents. */
+	virtual void updateHardwareBuffer(const scene::HWBuffer *buf) = 0;
 
 	//! Remove hardware buffer
-	virtual void removeHardwareBuffer(const scene::IVertexBuffer *vb) = 0;
-
-	//! Remove hardware buffer
-	virtual void removeHardwareBuffer(const scene::IIndexBuffer *ib) = 0;
+	virtual void removeHardwareBuffer(const scene::HWBuffer *buf) = 0;
 
 	//! Remove all hardware buffers
 	virtual void removeAllHardwareBuffers() = 0;
@@ -369,32 +382,6 @@ public:
 	//! Blit contents of one render target to another one.
 	/** This is glBlitFramebuffer in OpenGL. */
 	virtual void blitRenderTarget(IRenderTarget *from, IRenderTarget *to) = 0;
-
-	//! Sets a boolean alpha channel on the texture based on a color key.
-	/** This makes the texture fully transparent at the texels where
-	this color key can be found when using for example draw2DImage
-	with useAlphachannel==true.  The alpha of other texels is not modified.
-	\param texture Texture whose alpha channel is modified.
-	\param color Color key color. Every texel with this color will
-	become fully transparent as described above. Please note that the
-	colors of a texture may be converted when loading it, so the
-	color values may not be exactly the same in the engine and for
-	example in picture edit programs. To avoid this problem, you
-	could use the makeColorKeyTexture method, which takes the
-	position of a pixel instead a color value. */
-	virtual void makeColorKeyTexture(video::ITexture *texture,
-			video::SColor color) const = 0;
-
-	//! Sets a boolean alpha channel on the texture based on the color at a position.
-	/** This makes the texture fully transparent at the texels where
-	the color key can be found when using for example draw2DImage
-	with useAlphachannel==true.  The alpha of other texels is not modified.
-	\param texture Texture whose alpha channel is modified.
-	\param colorKeyPixelPos Position of a pixel with the color key
-	color. Every texel with this color will become fully transparent as
-	described above. */
-	virtual void makeColorKeyTexture(video::ITexture *texture,
-			core::position2d<s32> colorKeyPixelPos) const = 0;
 
 	//! Set a render target.
 	/** This will only work if the driver supports the
@@ -803,10 +790,6 @@ public:
 			f32 &start, f32 &end, f32 &density,
 			bool &pixelFog, bool &rangeFog) = 0;
 
-	//! Get the current color format of the color buffer
-	/** \return Color format of the color buffer. */
-	virtual ECOLOR_FORMAT getColorFormat() const = 0;
-
 	//! Get the size of the screen or render window.
 	/** \return Size of screen or render window. */
 	virtual const core::dimension2d<u32> &getScreenSize() const = 0;
@@ -818,16 +801,10 @@ public:
 	\return Size of render target or screen/window */
 	virtual const core::dimension2d<u32> &getCurrentRenderTargetSize() const = 0;
 
-	//! Returns current frames per second value.
-	/** This value is updated approximately every 1.5 seconds and
-	is only intended to provide a rough guide to the average frame
-	rate. It is not suitable for use in performing timing
-	calculations or framerate independent movement.
-	\return Approximate amount of frames per second drawn. */
-	virtual s32 getFPS() const = 0;
-
-	//! Return some statistics about the last frame
-	virtual SFrameStats getFrameStats() const = 0;
+	//! Get statistics as a mutable reference so they
+	//! can be updated from outside during rendering.
+	//! \return Statistics about the last (current) frame.
+	virtual SFrameStats &getFrameStats() = 0;
 
 	//! Gets name of this video driver.
 	/** \return Returns the name of the video driver, e.g. in case
@@ -852,11 +829,8 @@ public:
 	\param writer: Pointer to the external writer created. */
 	virtual void addExternalImageWriter(IImageWriter *writer) = 0;
 
-	//! Returns the maximum amount of primitives
-	/** (mostly vertices) which the device is able to render with
-	one drawVertexPrimitiveList call.
-	\return Maximum amount of primitives. */
-	virtual u32 getMaximalPrimitiveCount() const = 0;
+	//! Returns some common driver limits.
+	virtual SDriverLimits getLimits() const = 0;
 
 	//! Enables or disables a texture creation flag.
 	/** These flags define how textures should be created. By
@@ -1000,26 +974,6 @@ public:
 	/** \return Amount of currently available material renderers. */
 	virtual u32 getMaterialRendererCount() const = 0;
 
-	//! Get name of a material renderer
-	/** This string can, e.g., be used to test if a specific
-	renderer already has been registered/created, or use this
-	string to store data about materials: This returned name will
-	be also used when serializing materials.
-	\param idx Id of the material renderer. Can be a value of the
-	E_MATERIAL_TYPE enum or a value which was returned by
-	addMaterialRenderer().
-	\return String with the name of the renderer, or 0 if not
-	existing */
-	virtual const c8 *getMaterialRendererName(u32 idx) const = 0;
-
-	//! Sets the name of a material renderer.
-	/** Will have no effect on built-in material renderers.
-	\param idx: Id of the material renderer. Can be a value of the
-	E_MATERIAL_TYPE enum or a value which was returned by
-	addMaterialRenderer().
-	\param name: New name of the material renderer. */
-	virtual void setMaterialRendererName(u32 idx, const c8 *name) = 0;
-
 	//! Swap the material renderers used for certain id's
 	/** Swap the IMaterialRenderers responsible for rendering specific
 	 material-id's. This means every SMaterial using a MaterialType
@@ -1116,7 +1070,11 @@ public:
 	virtual void setAllowZWriteOnTransparent(bool flag) = 0;
 
 	//! Get the maximum texture size supported.
-	virtual core::dimension2du getMaxTextureSize() const = 0;
+	inline core::dimension2du getMaxTextureSize() const
+	{
+		auto l = getLimits();
+		return {l.MaxTextureSize, l.MaxTextureSize};
+	}
 
 	//! Check if the driver supports creating textures with the given color format
 	/**	\return True if the format is available, false if not. */

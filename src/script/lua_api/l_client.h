@@ -6,8 +6,6 @@
 #pragma once
 
 #include "lua_api/l_base.h"
-#include "itemdef.h"
-#include "tool.h"
 
 class ModApiClient : public ModApiBase
 {
@@ -71,4 +69,5 @@ private:
 
 public:
 	static void Initialize(lua_State *L, int top);
+	static void InitializeSSCSM(lua_State *L, int top);
 };

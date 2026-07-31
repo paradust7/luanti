@@ -6,7 +6,7 @@
 #include <IBillboardSceneNode.h>
 #include <ICameraSceneNode.h>
 #include <IMeshManipulator.h>
-#include <IAnimatedMeshSceneNode.h>
+#include <AnimatedMeshSceneNode.h>
 #include <ISceneNode.h>
 #include "client/client.h"
 #include "client/renderingengine.h"
@@ -212,6 +212,8 @@ static scene::SMesh *generateNodeMesh(Client *client, MapNode n,
 		MapblockMeshGenerator(&mmd, &collector).generate();
 	}
 
+	const AlphaMode alpha_mode = ndef->get(n).alpha;
+
 	auto mesh = make_irr<scene::SMesh>();
 	animation.clear();
 	for (int layer = 0; layer < MAX_TILE_LAYERS; layer++) {
@@ -224,10 +226,8 @@ static scene::SMesh *generateNodeMesh(Client *client, MapNode n,
 			p.applyTileColor();
 
 			if (p.layer.material_flags & MATERIAL_FLAG_ANIMATION) {
-				const FrameSpec &frame = (*p.layer.frames)[0];
-				p.layer.texture = frame.texture;
-
-				animation.emplace_back(MeshAnimationInfo{mesh->getMeshBufferCount(), 0, p.layer});
+				animation.emplace_back(MeshAnimationInfo{
+					mesh->getMeshBufferCount(), 0, p.layer});
 			}
 
 			auto buf = make_irr<scene::SMeshBuffer>();
@@ -236,9 +236,8 @@ static scene::SMesh *generateNodeMesh(Client *client, MapNode n,
 
 			// Set up material
 			auto &mat = buf->Material;
-			u32 shader_id = shdsrc->getShader("object_shader", p.layer.material_type, NDT_NORMAL);
-			mat.MaterialType = shdsrc->getShaderInfo(shader_id).material;
 			p.layer.applyMaterialOptions(mat, layer);
+			getAdHocNodeShader(mat, shdsrc, "object_shader", alpha_mode, layer == 1);
 
 			mesh->addMeshBuffer(buf.get());
 		}
@@ -400,7 +399,7 @@ scene::ISceneNode *GenericCAO::getSceneNode() const
 	return NULL;
 }
 
-scene::IAnimatedMeshSceneNode *GenericCAO::getAnimatedMeshSceneNode() const
+scene::AnimatedMeshSceneNode *GenericCAO::getAnimatedMeshSceneNode() const
 {
 	return m_animated_meshnode;
 }
@@ -582,32 +581,35 @@ void GenericCAO::addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr)
 	infostream << "GenericCAO::addToScene(): " <<
 		enum_to_string(es_ObjectVisual, m_prop.visual)<< std::endl;
 
-	if (m_prop.visual != OBJECTVISUAL_NODE &&
-			m_prop.visual != OBJECTVISUAL_WIELDITEM &&
-			m_prop.visual != OBJECTVISUAL_ITEM)
-	{
-		IShaderSource *shader_source = m_client->getShaderSource();
-		MaterialType material_type;
+	auto updateMaterialType = [this](bool hw_skin) {
+		if (m_prop.visual != OBJECTVISUAL_NODE &&
+				m_prop.visual != OBJECTVISUAL_WIELDITEM &&
+				m_prop.visual != OBJECTVISUAL_ITEM)
+		{
+			IShaderSource *shader_source = m_client->getShaderSource();
+			MaterialType material_type;
 
-		if (m_prop.shaded && m_prop.glow == 0)
-			material_type = (m_prop.use_texture_alpha) ?
-				TILE_MATERIAL_ALPHA : TILE_MATERIAL_BASIC;
-		else
-			material_type = (m_prop.use_texture_alpha) ?
-				TILE_MATERIAL_PLAIN_ALPHA : TILE_MATERIAL_PLAIN;
+			if (m_prop.shaded && m_prop.glow == 0)
+				material_type = (m_prop.use_texture_alpha) ?
+					TILE_MATERIAL_ALPHA : TILE_MATERIAL_BASIC;
+			else
+				material_type = (m_prop.use_texture_alpha) ?
+					TILE_MATERIAL_PLAIN_ALPHA : TILE_MATERIAL_PLAIN;
 
-		u32 shader_id = shader_source->getShader("object_shader", material_type, NDT_NORMAL);
-		m_material_type = shader_source->getShaderInfo(shader_id).material;
-	} else {
-		// Not used, so make sure it's not valid
-		m_material_type = EMT_INVALID;
-	}
+			u32 shader_id = shader_source->getShader("object_shader", material_type, NDT_NORMAL,
+				false, hw_skin);
+			m_material_type = shader_source->getShaderInfo(shader_id).material;
+		} else {
+			// Not used, so make sure it's not valid
+			m_material_type = video::EMT_INVALID;
+		}
+	};
 
 	m_matrixnode = m_smgr->addDummyTransformationSceneNode();
 	m_matrixnode->grab();
 
-	auto setMaterial = [this] (video::SMaterial &mat) {
-		if (m_material_type != EMT_INVALID)
+	auto setMaterial = [this](video::SMaterial &mat) {
+		if (m_material_type != video::EMT_INVALID)
 			mat.MaterialType = m_material_type;
 		mat.FogEnable = true;
 		mat.forEachTexture([] (auto &tex) {
@@ -616,12 +618,15 @@ void GenericCAO::addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr)
 		});
 	};
 
-	auto setSceneNodeMaterials = [setMaterial] (scene::ISceneNode *node) {
+	auto setSceneNodeMaterials = [&] (scene::ISceneNode *node, bool hw_skin = false) {
+		updateMaterialType(hw_skin);
 		node->forEachMaterial(setMaterial);
 	};
 
 	switch(m_prop.visual) {
 	case OBJECTVISUAL_UPRIGHT_SPRITE: {
+		updateMaterialType(false);
+
 		auto mesh = make_irr<scene::SMesh>();
 		f32 dx = BS * m_prop.visual_size.X / 2;
 		f32 dy = BS * m_prop.visual_size.Y / 2;
@@ -695,24 +700,28 @@ void GenericCAO::addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr)
 			// set vertex colors to ensure alpha is set
 			setMeshColor(m_animated_meshnode->getMesh(), video::SColor(0xFFFFFFFF));
 
-			setSceneNodeMaterials(m_animated_meshnode);
+			setSceneNodeMaterials(m_animated_meshnode, mesh->needsHwSkinning());
 
 			m_animated_meshnode->forEachMaterial([this] (auto &mat) {
 				mat.BackfaceCulling = m_prop.backface_culling;
 			});
 
 			m_animated_meshnode->setOnAnimateCallback([&](f32 dtime) {
-				for (auto &it : m_bone_override) {
-					auto* bone = m_animated_meshnode->getJointNode(it.first.c_str());
-					if (!bone)
-						continue;
-
-					BoneOverride &props = it.second;
+				for (auto it = m_bone_override.begin(); it != m_bone_override.end();) {
+					BoneOverride &props = it->second;
 					props.dtime_passed += dtime;
 
-					bone->setPosition(props.getPosition(bone->getPosition()));
-					bone->setRotation(props.getRotationEulerDeg(bone->getRotation()));
-					bone->setScale(props.getScale(bone->getScale()));
+					if (props.isIdentity()) {
+						it = m_bone_override.erase(it);
+						continue;
+					}
+
+					if (auto *bone = m_animated_meshnode->getJointNode(it->first.c_str())) {
+						bone->setPosition(props.getPosition(bone->getPosition()));
+						bone->setRotation(props.getRotationEulerDeg(bone->getRotation()));
+						bone->setScale(props.getScale(bone->getScale()));
+					}
+					++it;
 				}
 			});
 		} else
@@ -770,24 +779,6 @@ void GenericCAO::addToScene(ITextureSource *tsrc, scene::ISceneManager *smgr)
 				tsrc->getTextureForMesh("unknown_object.png"));
 		}
 		break;
-	}
-
-	/* Set VBO hint */
-	// wieldmesh sets its own hint, no need to handle it
-	if (m_meshnode || m_animated_meshnode) {
-		// sprite uses vertex animation
-		if (m_meshnode && m_prop.visual != OBJECTVISUAL_UPRIGHT_SPRITE)
-			m_meshnode->getMesh()->setHardwareMappingHint(scene::EHM_STATIC);
-
-		if (m_animated_meshnode) {
-			auto *mesh = m_animated_meshnode->getMesh();
-			// skinning happens on the CPU
-			if (m_animated_meshnode->getJointCount() > 0)
-				mesh->setHardwareMappingHint(scene::EHM_STREAM, scene::EBT_VERTEX);
-			else
-				mesh->setHardwareMappingHint(scene::EHM_STATIC, scene::EBT_VERTEX);
-			mesh->setHardwareMappingHint(scene::EHM_STATIC, scene::EBT_INDEX);
-		}
 	}
 
 	/* don't update while punch texture modifier is active */
@@ -1110,7 +1101,7 @@ void GenericCAO::step(float dtime, ClientEnvironment *env)
 			moveresult = collisionMoveSimple(env,env->getGameDef(),
 					box, m_prop.stepheight, dtime,
 					&p_pos, &p_velocity, m_acceleration,
-					this, m_prop.collideWithObjects);
+					this, m_prop.collideWithObjects, m_prop.step_up_mode);
 			// Apply results
 			m_position = p_pos;
 			m_velocity = p_velocity;
@@ -1433,7 +1424,7 @@ void GenericCAO::updateAttachments()
 	{
 		parent->updateAttachments();
 		scene::ISceneNode *parent_node = parent->getSceneNode();
-		scene::IAnimatedMeshSceneNode *parent_animated_mesh_node =
+		scene::AnimatedMeshSceneNode *parent_animated_mesh_node =
 				parent->getAnimatedMeshSceneNode();
 		if (parent_animated_mesh_node && !m_attachment_bone.empty()) {
 			parent_node = parent_animated_mesh_node->getJointNode(m_attachment_bone.c_str());
@@ -1583,60 +1574,37 @@ void GenericCAO::processMessage(const std::string &data)
 
 		updateTextureAnim();
 	} else if (cmd == AO_CMD_SET_PHYSICS_OVERRIDE) {
-		float override_speed = readF32(is);
-		float override_jump = readF32(is);
-		float override_gravity = readF32(is);
+		PlayerPhysicsOverride phys; // defaults defined by ctor
+
+		phys.speed   = readF32(is);
+		phys.jump    = readF32(is);
+		phys.gravity = readF32(is);
+
 		// MT 0.4.10 legacy: send inverted for detault `true` if the server sends nothing
-		bool sneak = !readU8(is);
-		bool sneak_glitch = !readU8(is);
-		bool new_move = !readU8(is);
+		phys.sneak        = !readU8(is);
+		phys.sneak_glitch = !readU8(is);
+		phys.new_move     = !readU8(is);
 
 		// new overrides since 5.8.0
-		float override_speed_climb = readF32(is);
-		float override_speed_crouch = readF32(is);
-		float override_liquid_fluidity = readF32(is);
-		float override_liquid_fluidity_smooth = readF32(is);
-		float override_liquid_sink = readF32(is);
-		float override_acceleration_default = readF32(is);
-		float override_acceleration_air = readF32(is);
-		if (is.eof()) {
-			override_speed_climb = 1.0f;
-			override_speed_crouch = 1.0f;
-			override_liquid_fluidity = 1.0f;
-			override_liquid_fluidity_smooth = 1.0f;
-			override_liquid_sink = 1.0f;
-			override_acceleration_default = 1.0f;
-			override_acceleration_air = 1.0f;
+		if (canRead(is)) {
+			phys.speed_climb            = readF32(is);
+			phys.speed_crouch           = readF32(is);
+			phys.liquid_fluidity        = readF32(is);
+			phys.liquid_fluidity_smooth = readF32(is);
+			phys.liquid_sink            = readF32(is);
+			phys.acceleration_default   = readF32(is);
+			phys.acceleration_air       = readF32(is);
 		}
 
 		// new overrides since 5.9.0
-		float override_speed_fast = readF32(is);
-		float override_acceleration_fast = readF32(is);
-		float override_speed_walk = readF32(is);
-		if (is.eof()) {
-			override_speed_fast = 1.0f;
-			override_acceleration_fast = 1.0f;
-			override_speed_walk = 1.0f;
+		if (canRead(is)) {
+			phys.speed_fast        = readF32(is);
+			phys.acceleration_fast = readF32(is);
+			phys.speed_walk        = readF32(is);
 		}
 
 		if (m_is_local_player) {
-			auto &phys = m_env->getLocalPlayer()->physics_override;
-			phys.speed = override_speed;
-			phys.jump = override_jump;
-			phys.gravity = override_gravity;
-			phys.sneak = sneak;
-			phys.sneak_glitch = sneak_glitch;
-			phys.new_move = new_move;
-			phys.speed_climb = override_speed_climb;
-			phys.speed_crouch = override_speed_crouch;
-			phys.liquid_fluidity = override_liquid_fluidity;
-			phys.liquid_fluidity_smooth = override_liquid_fluidity_smooth;
-			phys.liquid_sink = override_liquid_sink;
-			phys.acceleration_default = override_acceleration_default;
-			phys.acceleration_air = override_acceleration_air;
-			phys.speed_fast = override_speed_fast;
-			phys.acceleration_fast = override_acceleration_fast;
-			phys.speed_walk = override_speed_walk;
+			m_env->getLocalPlayer()->physics_override = phys;
 		}
 	} else if (cmd == AO_CMD_SET_ANIMATION) {
 		v2f range = readV2F32(is);
@@ -1689,39 +1657,41 @@ void GenericCAO::processMessage(const std::string &data)
 			props.scale.previous = props.scale.vector;
 		} else {
 			// Disable interpolation
-			props.position.interp_timer = 0.0f;
-			props.rotation.interp_timer = 0.0f;
-			props.scale.interp_timer = 0.0f;
+			props.position.interp_duration = 0.0f;
+			props.rotation.interp_duration = 0.0f;
+			props.scale.interp_duration = 0.0f;
 		}
 		// Read new values
 		props.position.vector = readV3F32(is);
 		props.rotation.next = core::quaternion(readV3F32(is) * core::DEGTORAD);
-		props.scale.vector = readV3F32(is); // reads past end of string on older cmds
-		if (is.eof()) {
-			// Backwards compatibility
-			props.scale.vector = v3f(1, 1, 1); // restore the scale which was not sent
+
+		if (!canRead(is)) {
+			// For PROTOCOL_VERSION < 44
+			// scale.vector : default
 			props.position.absolute = true;
 			props.rotation.absolute = true;
 		} else {
-			props.position.interp_timer = readF32(is);
-			props.rotation.interp_timer = readF32(is);
-			props.scale.interp_timer = readF32(is);
+			// For PROTOCOL_VERSION >= 44
+			props.scale.vector = readV3F32(is);
+			props.position.interp_duration = readF32(is);
+			props.rotation.interp_duration = readF32(is);
+			props.scale.interp_duration = readF32(is);
 			u8 absoluteFlag = readU8(is);
 			props.position.absolute = (absoluteFlag & 1) > 0;
 			props.rotation.absolute = (absoluteFlag & 2) > 0;
 			props.scale.absolute = (absoluteFlag & 4) > 0;
 		}
-		if (props.isIdentity()) {
-			m_bone_override.erase(bone);
-		} else {
-			m_bone_override[bone] = props;
-		}
+		m_bone_override[bone] = props;
 	} else if (cmd == AO_CMD_ATTACH_TO) {
 		u16 parent_id = readS16(is);
 		std::string bone = deSerializeString16(is);
 		v3f position = readV3F32(is);
 		v3f rotation = readV3F32(is);
-		bool force_visible = readU8(is); // Returns false for EOF
+		bool force_visible = false;
+		if (canRead(is)) {
+			// >= 5.4.0-dev
+			force_visible = readU8(is);
+		}
 
 		setAttachment(parent_id, bone, position, rotation, force_visible);
 	} else if (cmd == AO_CMD_PUNCHED) {
@@ -1792,8 +1762,8 @@ bool GenericCAO::directReportPunch(v3f dir, const ItemStack *punchitem,
 	const ItemStack *hand_item, float time_from_last_punch)
 {
 	assert(punchitem);	// pre-condition
-	const ToolCapabilities *toolcap =
-			&punchitem->getToolCapabilities(m_client->idef(), hand_item);
+	const ToolCapabilities &toolcap =
+			punchitem->getToolCapabilities(m_client->idef(), hand_item);
 	PunchDamageResult result = getPunchDamage(
 			m_armor_groups,
 			toolcap,

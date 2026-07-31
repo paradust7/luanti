@@ -18,7 +18,6 @@
 #include "guiScrollBar.h"
 #include "guiTable.h"
 #include "util/string.h"
-#include "util/enriched_string.h"
 #include "StyleSpec.h"
 #include <ICursorControl.h> // gui::ECURSOR_ICON
 #include <IGUIStaticText.h>
@@ -69,6 +68,7 @@ struct TextDest
 	virtual ~TextDest() = default;
 
 	virtual void gotText(const StringMap &fields) = 0;
+	virtual void requestScreenshot() {}
 
 	std::string m_formname;
 };
@@ -257,21 +257,22 @@ public:
 	/*
 		Remove and re-add (or reposition) stuff
 	*/
-	void regenerateGui(v2u32 screensize);
+	void regenerateGui(v2u32 screensize) override;
 
 	GUIInventoryList::ItemSpec getItemAtPos(v2s32 p) const;
 	void drawSelectedItem();
-	void drawMenu();
+	void drawMenu() override;
 	void updateSelectedItem();
 	ItemStack verifySelectedItem();
 
 	s16 getNextInventoryRing(const InventoryLocation &inventoryloc, const std::string &listname);
 
 	void acceptInput(FormspecQuitMode quitmode=quit_mode_no);
-	bool preprocessEvent(const SEvent& event);
-	bool OnEvent(const SEvent& event);
-	bool doPause;
-	bool pausesGame() { return doPause; }
+	bool preprocessEvent(const SEvent& event) override;
+	bool OnEvent(const SEvent& event) override;
+
+	bool doPause = false;
+	bool pausesGame() override { return doPause; }
 
 	GUITable* getTable(const std::string &tablename);
 	std::vector<std::string>* getDropDownValues(const std::string &name);
@@ -289,12 +290,15 @@ public:
 	static double getImgsize(v2u32 avail_screensize, double screen_dpi, double gui_scaling);
 
 protected:
+	bool remapClickOutside(const SEvent &event) override;
+
 	v2s32 getBasePos() const
 	{
 			return padding + offset + AbsoluteRect.UpperLeftCorner;
 	}
-	std::wstring getLabelByID(s32 id);
-	std::string getNameByID(s32 id);
+
+	std::wstring getLabelByID(s32 id) override;
+	std::string getNameByID(s32 id) override;
 	const FieldSpec *getSpecByID(s32 id);
 	v2s32 getElementBasePos(const std::vector<std::string> *v_pos);
 	v2s32 getRealCoordinateBasePos(const std::vector<std::string> &v_pos);
@@ -385,6 +389,8 @@ private:
 	std::optional<std::string> m_focused_element = std::nullopt;
 	JoystickController        *m_joystick;
 	bool                       m_show_debug = false;
+	bool                       m_show_focus = false;
+	gui::IGUIElement          *m_last_focused = nullptr;
 
 	struct parserData {
 		bool explicit_size;
@@ -495,6 +501,12 @@ private:
 
 	void showTooltip(const std::wstring &text, const video::SColor &color,
 		const video::SColor &bgcolor);
+
+	/**
+	 * Auto-scrolls a scroll container to center the focused element.
+	 * Handles both vertical and horizontal scrolling.
+	 */
+	void autoScroll();
 
 	/**
 	 * In formspec version < 2 the elements were not ordered properly. Some element

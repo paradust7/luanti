@@ -7,7 +7,10 @@
 #include "IMeshBuffer.h"
 #include "CVertexBuffer.h"
 #include "CIndexBuffer.h"
+#include "WeightBuffer.h"
+#include "IVertexBuffer.h"
 #include "S3DVertex.h"
+#include "vector3d.h"
 #include <cassert>
 
 namespace scene
@@ -90,7 +93,7 @@ struct SSkinMeshBuffer final : public IMeshBuffer
 	}
 
 	//! Get standard vertex at given index
-	virtual video::S3DVertex *getVertex(u32 index)
+	video::S3DVertex *getVertex(u32 index)
 	{
 		switch (VertexType) {
 		case video::EVT_2TCOORDS:
@@ -216,6 +219,42 @@ public:
 
 	//! Call this after changing the positions of any vertex.
 	void boundingBoxNeedsRecalculated(void) { BoundingBoxNeedsRecalculated = true; }
+
+	WeightBuffer *getWeights()
+	{
+		switch (VertexType) {
+		case video::EVT_STANDARD:
+			return Vertices_Standard->Weights.get();
+		case video::EVT_2TCOORDS:
+			return Vertices_2TCoords->Weights.get();
+		case video::EVT_TANGENTS:
+			return Vertices_Tangents->Weights.get();
+		default:
+			IRR_CODE_UNREACHABLE();
+		}
+	}
+
+	void addWeightBuffer()
+	{
+		switch (VertexType) {
+		case video::EVT_STANDARD:
+			Vertices_Standard->Weights.reset(new WeightBuffer(getVertexCount()));
+			break;
+		case video::EVT_2TCOORDS:
+			Vertices_2TCoords->Weights.reset(new WeightBuffer(getVertexCount()));
+			break;
+		case video::EVT_TANGENTS:
+			Vertices_Tangents->Weights.reset(new WeightBuffer(getVertexCount()));
+			break;
+		default:
+			IRR_CODE_UNREACHABLE();
+		}
+	}
+
+	const WeightBuffer *getWeights() const
+	{
+		return const_cast<SSkinMeshBuffer*>(this)->getWeights();
+	}
 
 	SVertexBufferTangents *Vertices_Tangents;
 	SVertexBufferLightMap *Vertices_2TCoords;

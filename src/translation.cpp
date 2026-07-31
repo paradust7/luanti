@@ -6,7 +6,6 @@
 #include "log.h"
 #include "util/hex.h"
 #include "util/string.h"
-#include "gettext.h"
 #include <unordered_map>
 
 
@@ -18,7 +17,7 @@ Translations *g_client_translations = &client_translations;
 Translations *g_client_translations = nullptr;
 #endif
 
-const std::string_view Translations::getFileLanguage(const std::string &filename)
+const std::string_view Translations::getFileLanguage(std::string_view filename)
 {
 	const char *translate_ext[] = {
 		".tr", ".po", ".mo", NULL

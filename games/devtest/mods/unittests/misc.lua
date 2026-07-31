@@ -231,6 +231,9 @@ local function test_mapgen_edges(cb)
 	end
 	local emerges_left = 2
 	local function emerge_block(blockpos, action, blocks_left, finished)
+		-- FIXME: EMERGE_CANCELLED can also mean that the block was already being
+		-- emerged. It's unlikely but this can break the test and we can't
+		-- really tell...
 		if action ~= core.EMERGE_CANCELLED then
 			table.insert(finished, blockpos)
 		end
@@ -276,6 +279,39 @@ local function test_on_mapblocks_changed(cb, player, pos)
 end
 unittests.register("test_on_mapblocks_changed", test_on_mapblocks_changed, {map=true, async=true})
 
+local function test_get_loaded_active_and_loadable_blocks(_, pos)
+	local loaded = core.get_loaded_blocks()
+	local loaded_set = {}
+
+	local loadable = core.get_loadable_blocks()
+	assert(type(loadable) == "table")
+	if #loadable > 0 then
+		assert(vector.check(loadable[1]))
+	end
+
+	local active = core.get_active_blocks()
+
+	for _, block in ipairs(loaded) do
+		loaded_set[core.hash_node_position(block)] = true
+		assert(core.compare_block_status(block * core.MAP_BLOCKSIZE, "loaded"),
+			("expected block %s from get_loaded_blocks to satisfy loaded status")
+			:format(core.pos_to_string(block)))
+	end
+
+	assert(#active <= #loaded,
+		"expected get_active_blocks to return at most as many block positions as get_loaded_blocks")
+	for _, block in ipairs(active) do
+		assert(core.compare_block_status(block * core.MAP_BLOCKSIZE, "active"),
+			("expected block %s from get_active_blocks to satisfy active status")
+			:format(core.pos_to_string(block)))
+		assert(loaded_set[core.hash_node_position(block)],
+			"expected get_active_blocks result to be a subset of get_loaded_blocks")
+	end
+
+end
+unittests.register("test_get_loaded_active_and_loadable_blocks",
+		test_get_loaded_active_and_loadable_blocks, {map=true})
+
 local function test_gennotify_api()
 	local DECO_ID = 123
 	local UD_ID = "unittests:dummy"
@@ -319,7 +355,7 @@ local function test_mapgen_env(cb)
 end
 unittests.register("test_mapgen_env", test_mapgen_env, {async=true})
 
-local function test_ipc_vector_preserve(cb)
+local function test_ipc_vector_preserve()
 	-- the IPC also uses register_portable_metatable
 	core.ipc_set("unittests:v", vector.new(4, 0, 4))
 	local v = core.ipc_get("unittests:v")
@@ -328,7 +364,7 @@ local function test_ipc_vector_preserve(cb)
 end
 unittests.register("test_ipc_vector_preserve", test_ipc_vector_preserve)
 
-local function test_ipc_poll(cb)
+local function test_ipc_poll()
 	core.ipc_set("unittests:flag", nil)
 	assert(core.ipc_poll("unittests:flag", 1) == false)
 
@@ -342,3 +378,32 @@ local function test_ipc_poll(cb)
 	print("delta: " .. (core.get_us_time() - t0) .. "us")
 end
 unittests.register("test_ipc_poll", test_ipc_poll)
+
+local function test_sandbox()
+	if not core.settings:get_bool("secure.enable_security") then
+		core.log("warning", "Lua sandbox disabled, skipping test")
+		return
+	end
+	-- this would point to _G but we have it unset
+	assert(package.loaded == nil)
+	-- string metatable must match global string table
+	assert(rawequal(getmetatable("").__index, string))
+	-- (some) entirely dangerous functions
+	assert(debug.getupvalue == nil)
+	assert(debug.setlocal == nil)
+	assert(debug.getmetatable == nil)
+	assert(os.execute == nil)
+	assert(io.popen == nil)
+	-- getinfo should not allow access to functions
+	assert(debug.getinfo(1).func == nil)
+	assert(debug.getinfo(function() end, "f").func ~= nil)
+end
+unittests.register("test_sandbox", test_sandbox)
+
+local function test_str_pack_unpack()
+	local fmt = "> d!2 xh"
+	assert(fmt:packsize() == 12) -- 8 double, 1 padding, 1 implicit align, 2 short
+	local a, b = fmt:unpack(fmt:pack(42.3, -384))
+	assert(a == 42.3 and b == -384)
+end
+unittests.register("test_str_pack_unpack", test_str_pack_unpack)

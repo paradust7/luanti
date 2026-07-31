@@ -7,7 +7,6 @@
 #include "lua_api/l_settings.h"
 #include "common/c_converter.h"
 #include "common/c_content.h"
-#include "cpp_api/s_async.h"
 #include "network/networkprotocol.h"
 #include "serialization.h"
 #include <json/json.h>
@@ -15,7 +14,6 @@
 #include "cpp_api/s_security.h"
 #include "porting.h"
 #include "convert_json.h"
-#include "debug.h"
 #include "log.h"
 #include "log_internal.h"
 #include "tool.h"
@@ -30,6 +28,7 @@
 #include "util/png.h"
 #include "player.h"
 #include "daynightratio.h"
+#include "constants.h"
 #include <cstdio>
 
 // only available in zstd 1.3.5+
@@ -79,6 +78,16 @@ int ModApiUtil::l_get_us_time(lua_State *L)
 {
 	NO_MAP_LOCK_REQUIRED;
 	lua_pushnumber(L, porting::getTimeUs());
+	return 1;
+}
+
+// get_us_time() for SSCSM
+int ModApiUtil::l_get_us_time_sscsm(lua_State *L)
+{
+	NO_MAP_LOCK_REQUIRED;
+	auto t = porting::getTimeUs();
+	t = t - t % SSCSM_CLOCK_RESOLUTION_US;
+	lua_pushnumber(L, t);
 	return 1;
 }
 
@@ -197,12 +206,12 @@ int ModApiUtil::l_get_dig_params(lua_State *L)
 int ModApiUtil::l_get_hit_params(lua_State *L)
 {
 	NO_MAP_LOCK_REQUIRED;
-	std::unordered_map<std::string, int> groups;
+	ItemGroupList groups;
 	read_groups(L, 1, groups);
 	ToolCapabilities tp = read_tool_capabilities(L, 2);
 	float time_from_last_punch = readParam<float>(L, 3, 1000000);
 	int wear = readParam<int>(L, 4, 0);
-	push_hit_params(L, getHitParams(groups, &tp,
+	push_hit_params(L, getHitParams(groups, tp,
 		time_from_last_punch, wear));
 	return 1;
 }
@@ -260,6 +269,21 @@ int ModApiUtil::l_is_yes(lua_State *L)
 
 	bool yes = is_yes(str);
 	lua_pushboolean(L, yes);
+	return 1;
+}
+
+// path_exists(path)
+int ModApiUtil::l_path_exists(lua_State *L)
+{
+	NO_MAP_LOCK_REQUIRED;
+
+	std::string path = luaL_checkstring(L, 1); //path
+
+	CHECK_SECURE_PATH(L, path.c_str(), false);
+
+	bool exists = fs::PathExists(path);
+	lua_pushboolean(L, exists);
+
 	return 1;
 }
 
@@ -579,7 +603,7 @@ int ModApiUtil::l_colorspec_to_colorstring(lua_State *L)
 {
 	NO_MAP_LOCK_REQUIRED;
 
-	video::SColor color(0);
+	video::SColor color;
 	if (read_color(L, 1, &color)) {
 		char colorstring[10];
 		snprintf(colorstring, 10, "#%02X%02X%02X%02X",
@@ -596,7 +620,7 @@ int ModApiUtil::l_colorspec_to_bytes(lua_State *L)
 {
 	NO_MAP_LOCK_REQUIRED;
 
-	video::SColor color(0);
+	video::SColor color;
 	if (read_color(L, 1, &color)) {
 		u8 colorbytes[4] = {
 			(u8) color.getRed(),
@@ -616,7 +640,7 @@ int ModApiUtil::l_colorspec_to_table(lua_State *L)
 {
 	NO_MAP_LOCK_REQUIRED;
 
-	video::SColor color(0);
+	video::SColor color;
 	if (read_color(L, 1, &color)) {
 		push_ARGB8(L, color);
 		return 1;
@@ -724,6 +748,8 @@ void ModApiUtil::Initialize(lua_State *L, int top)
 
 	API_FCT(is_yes);
 
+	API_FCT(path_exists);
+
 	API_FCT(get_builtin_path);
 	API_FCT(get_user_path);
 
@@ -798,6 +824,37 @@ void ModApiUtil::InitializeClient(lua_State *L, int top)
 	lua_setfield(L, top, "settings");
 }
 
+void ModApiUtil::InitializeSSCSM(lua_State *L, int top)
+{
+	API_FCT(log);
+
+	registerFunction(L, "get_us_time", l_get_us_time_sscsm, top);
+
+	API_FCT(parse_json);
+	API_FCT(write_json);
+
+	API_FCT(is_yes);
+
+	API_FCT(compress);
+	API_FCT(decompress);
+
+	API_FCT(encode_base64);
+	API_FCT(decode_base64);
+
+	API_FCT(get_version);
+	API_FCT(sha1);
+	API_FCT(sha256);
+	API_FCT(colorspec_to_colorstring);
+	API_FCT(colorspec_to_bytes);
+	API_FCT(colorspec_to_table);
+	API_FCT(time_to_day_night_ratio);
+
+	API_FCT(get_last_run_mod);
+	API_FCT(set_last_run_mod);
+
+	API_FCT(urlencode);
+}
+
 void ModApiUtil::InitializeAsync(lua_State *L, int top)
 {
 	API_FCT(log);
@@ -808,6 +865,8 @@ void ModApiUtil::InitializeAsync(lua_State *L, int top)
 	API_FCT(write_json);
 
 	API_FCT(is_yes);
+
+	API_FCT(path_exists);
 
 	API_FCT(get_builtin_path);
 	API_FCT(get_user_path);

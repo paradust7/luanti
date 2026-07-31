@@ -16,7 +16,13 @@
 #include <emscripten/html5.h>
 #endif
 
+#ifdef _IRR_USE_SDL3_
+#define SDL_DISABLE_OLD_NAMES
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_mouse.h>
+#else
 #include <SDL.h>
+#endif
 
 #include <memory>
 #include <unordered_map>
@@ -58,9 +64,6 @@ public:
 
 	//! returns if window is minimized.
 	bool isWindowMinimized() const override;
-
-	//! returns color format of the window.
-	video::ECOLOR_FORMAT getColorFormat() const override;
 
 	//! notifies the device that it should close itself
 	void closeDevice() override;
@@ -107,17 +110,22 @@ public:
 	}
 
 	//! Get the SDL version
-	std::string getVersionString() const override
-	{
-		SDL_version ver;
-		SDL_GetVersion(&ver);
-		return std::to_string(ver.major) + "." + std::to_string(ver.minor) + "." + std::to_string(ver.patch);
-	}
+	std::string getVersionString() const override;
 
 	//! Get the display density in dots per inch.
 	float getDisplayDensity() const override;
 
 	void SwapWindow();
+
+	// We need this twice to handle showing an error *with* or *without*
+	// the SDL device even being initialized.
+
+	static bool showErrorMessageBox(SDL_Window *window, const char *title, const char *message);
+	inline bool showErrorMessageBox(const char *title, const char *message)
+	{
+		// (Window can be null, but that's ok)
+		return showErrorMessageBox(Window, title, message);
+	}
 
 	//! Implementation of the linux cursor control
 	class CCursorControl : public gui::ICursorControl
@@ -133,17 +141,24 @@ public:
 		void setVisible(bool visible) override
 		{
 			IsVisible = visible;
+
 #ifdef _IRR_EMSCRIPTEN_PLATFORM_
 			// The main loop takes care of reconciling the browser state
 			// and the desired state below.
 			emloop_set_pointerlock(visible ? 0 : 1);
 #else
+
+#ifdef _IRR_USE_SDL3_
 			if (visible)
-				SDL_ShowCursor(SDL_ENABLE);
-			else {
-				SDL_ShowCursor(SDL_DISABLE);
-			}
+				SDL_ShowCursor();
+			else
+				SDL_HideCursor();
+#else
+			SDL_ShowCursor(visible ? SDL_ENABLE : SDL_DISABLE);
 #endif
+
+#endif // _IRR_EMSCRIPTEN_PLATFORM_
+
 		}
 
 		//! Returns if the cursor is currently visible.
@@ -181,9 +196,13 @@ public:
 					static_cast<int>(x / Device->ScaleX),
 					static_cast<int>(y / Device->ScaleY));
 #endif
-#endif
+#endif // 0
 
+#ifdef _IRR_USE_SDL3_
+			if (SDL_GetWindowRelativeMouseMode(Device->Window)) {
+#else
 			if (SDL_GetRelativeMouseMode()) {
+#endif
 				// There won't be an event for this warp (details on libsdl-org/SDL/issues/6034)
 				Device->MouseX = x;
 				Device->MouseY = y;
@@ -214,14 +233,17 @@ public:
 		virtual void setRelativeMode(bool relative) override
 		{
 #if 0
+#ifdef _IRR_USE_SDL3_
+			if (relative != (bool)SDL_GetWindowRelativeMouseMode(Device->Window)) {
+				SDL_SetWindowRelativeMouseMode(Device->Window, relative);
+			}
+#else
 			// Only change it when necessary, as it flushes mouse motion when enabled
 			if (relative != static_cast<bool>(SDL_GetRelativeMouseMode())) {
-				if (relative)
-					SDL_SetRelativeMouseMode(SDL_TRUE);
-				else
-					SDL_SetRelativeMouseMode(SDL_FALSE);
+				SDL_SetRelativeMouseMode(relative ? SDL_TRUE : SDL_FALSE);
 			}
 #endif
+#endif // 0
 		}
 
 		void setActiveIcon(gui::ECURSOR_ICON iconId) override
@@ -281,8 +303,13 @@ public:
 		{
 			void operator()(SDL_Cursor *ptr)
 			{
+#ifdef _IRR_USE_SDL3_
+				if (ptr)
+					SDL_DestroyCursor(ptr);
+#else
 				if (ptr)
 					SDL_FreeCursor(ptr);
+#endif
 			}
 		};
 		std::vector<std::unique_ptr<SDL_Cursor, CursorDeleter>> Cursors;
@@ -301,9 +328,9 @@ private:
 	static bool keyIsKnownSpecial(EKEY_CODE irrlichtKey);
 
 	// Return the Char that should be sent to Irrlicht for the given key (either the one passed in or 0).
-	static int findCharToPassToIrrlicht(uint32_t sdlKey, EKEY_CODE irrlichtKey, bool numlock);
+	static wchar_t findCharToPassToIrrlicht(uint32_t sdlKey, EKEY_CODE irrlichtKey, u16 keymod);
 
-	std::variant<u32, EKEY_CODE> getScancodeFromKey(const Keycode &key) const override;
+	u32 getScancodeFromKey(const Keycode &key) const override;
 	Keycode getKeyFromScancode(const u32 scancode) const override;
 
 	// Check if a text box is in focus. Enable or disable SDL_TEXTINPUT events only if in focus.
@@ -336,7 +363,9 @@ private:
 
 	bool Resizable;
 
+#ifndef _IRR_USE_SDL3_
 	static u32 getFullscreenFlag(bool fullscreen);
+#endif // SDL3: Replaced by boolean
 
 	core::rect<s32> lastElemPos;
 

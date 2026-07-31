@@ -6,9 +6,7 @@
 #include "version.h"
 #include "settings.h"
 #include "serverlist.h"
-#include "filesys.h"
 #include "log.h"
-#include "network/networkprotocol.h"
 #include <json/json.h>
 #include "convert_json.h"
 #include "httpfetch.h"
@@ -83,7 +81,7 @@ void sendAnnounce(AnnounceAction action,
 	}
 
 	HTTPFetchRequest fetch_request;
-	fetch_request.caller = HTTPFETCH_PRINT_ERR;
+	fetch_request.caller = HTTPFETCH_PRINT_BODY;
 	fetch_request.url = g_settings->get("serverlist_url") + std::string("/announce");
 	fetch_request.method = HTTP_POST;
 	fetch_request.fields["json"] = fastWriteJson(server);

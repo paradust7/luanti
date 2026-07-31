@@ -12,13 +12,10 @@
 #include "rect.h"
 #include "os.h"
 #include "Keycodes.h"
-#include <cwctype> // std::iswspace, std::iswpunct
+#include <cwctype> // std::iswspace, std::iswpunct, std::iswalnum
 
 /*
 	todo:
-	optional scrollbars
-	ctrl+left/right to select word
-	double click/ctrl click: word select + drag to select whole words, triple click to select line
 	optional? dragging selected text
 	numerical
 */
@@ -244,6 +241,31 @@ bool CGUIEditBox::OnEvent(const SEvent &event)
 	return IGUIElement::OnEvent(event);
 }
 
+s32 CGUIEditBox::getCtrlKeyWord(s32 startpos, s8 dir)
+{
+	assert(dir == 1 || dir == -1);
+
+	s32 endpos = startpos;
+	wchar_t prev_c = L'\0';
+	for (s32 i = startpos; i >= 0 && i <= (s32)Text.size(); i += dir) {
+		// This only handles Latin characters.
+		const wchar_t c = Text[i];
+
+		endpos = i;
+		if (std::abs(i - startpos) > 2) {
+			// End of word
+			if (!std::iswspace(prev_c) && std::iswspace(c))
+				break;
+			// End of a sentence.
+			if (std::iswpunct(prev_c) && !std::iswpunct(c))
+				break;
+		}
+		prev_c = c;
+	}
+	// When going back: stop before space
+	return endpos + (endpos > 0 && dir < 0);
+}
+
 bool CGUIEditBox::processKey(const SEvent &event)
 {
 	if (!event.KeyInput.PressedDown)
@@ -301,11 +323,14 @@ bool CGUIEditBox::processKey(const SEvent &event)
 				newMarkEnd = 0;
 			}
 			break;
+
+		case KEY_BACK:
+		case KEY_DELETE:
 		case KEY_LEFT:
 		case KEY_RIGHT:
-			processKeyLR(event.KeyInput, newMarkBegin, newMarkEnd);
-			BlinkStartTime = os::Timer::getTime();
+			// Handled later
 			break;
+
 		default:
 			return false;
 		}
@@ -359,20 +384,28 @@ bool CGUIEditBox::processKey(const SEvent &event)
 				sendGuiEvent(EGET_EDITBOX_ENTER);
 			}
 			return true;
-		case KEY_LEFT:
-		case KEY_RIGHT:
-			processKeyLR(event.KeyInput, newMarkBegin, newMarkEnd);
+		case KEY_UP:
+		case KEY_DOWN:
+			if (!onKeyUpDown(event.KeyInput, newMarkBegin, newMarkEnd, 1)) {
+				return false;
+			}
 			BlinkStartTime = os::Timer::getTime();
 			break;
-		case KEY_UP:
-			if (!onKeyUp(event, newMarkBegin, newMarkEnd)) {
-				return false;
+		case KEY_PRIOR:
+		case KEY_NEXT:
+			if (gui::IGUIFont *font = getActiveFont()) {
+				const f32 WINDOW_SCROLL_FACTOR = 0.75f; // of all visible lines
+
+				// This is a "good enough" approximation
+				u32 lineHeight = font->getDimension(L"A").Height + font->getKerning(L'A').Y;
+				f32 linesMax = WINDOW_SCROLL_FACTOR *
+					AbsoluteClippingRect.getHeight() / (f32)lineHeight;
+
+				if (!onKeyUpDown(event.KeyInput, newMarkBegin, newMarkEnd, linesMax + 0.5f)) {
+					return false;
+				}
 			}
-			break;
-		case KEY_DOWN:
-			if (!onKeyDown(event, newMarkBegin, newMarkEnd)) {
-				return false;
-			}
+			BlinkStartTime = os::Timer::getTime();
 			break;
 		case KEY_INSERT:
 			if (!isEnabled() || !IsWritable)
@@ -380,21 +413,12 @@ bool CGUIEditBox::processKey(const SEvent &event)
 
 			OverwriteMode = !OverwriteMode;
 			break;
+
 		case KEY_BACK:
-			textChanged = onKeyBack();
-			if (textChanged) {
-				BlinkStartTime = os::Timer::getTime();
-				newMarkBegin = 0;
-				newMarkEnd = 0;
-			}
-			break;
 		case KEY_DELETE:
-			textChanged = onKeyDelete();
-			if (textChanged) {
-				BlinkStartTime = os::Timer::getTime();
-				newMarkBegin = 0;
-				newMarkEnd = 0;
-			}
+		case KEY_LEFT:
+		case KEY_RIGHT:
+			// Handled later
 			break;
 
 		case KEY_ESCAPE:
@@ -433,6 +457,25 @@ bool CGUIEditBox::processKey(const SEvent &event)
 		}
 	}
 
+	switch (event.KeyInput.Key) {
+		case KEY_BACK:
+		case KEY_DELETE:
+			textChanged = onKeyBackDelete(event.KeyInput);
+			if (textChanged) {
+				BlinkStartTime = os::Timer::getTime();
+				newMarkBegin = 0;
+				newMarkEnd = 0;
+			}
+			break;
+		case KEY_LEFT:
+		case KEY_RIGHT:
+			processKeyLR(event.KeyInput, newMarkBegin, newMarkEnd);
+			BlinkStartTime = os::Timer::getTime();
+			break;
+		default:
+			break;
+	}
+
 	// Set new text markers
 	setTextMarkers(newMarkBegin, newMarkEnd);
 
@@ -453,28 +496,13 @@ void CGUIEditBox::processKeyLR(const SEvent::SKeyInput &input, s32 &new_mark_beg
 {
 	const s8 dir = input.Key == KEY_RIGHT ? 1 : -1;
 
-	s32 new_pos = CursorPos;
+	s32 new_pos;
 	if (input.Control) {
 		// Advance to next/previous word
-		wchar_t prev_c = L'\0';
-		for (s32 i = new_pos; i >= 0 && i <= (s32)Text.size(); i += dir) {
-			// This only handles Latin characters.
-			const wchar_t c = Text[i];
-
-			new_pos = i;
-			if (std::abs(i - CursorPos) > 2) {
-				// End of word
-				if (!std::iswspace(prev_c) && std::iswspace(c))
-					break;
-				// End of a sentence.
-				if (std::iswpunct(prev_c) && !std::iswpunct(c))
-					break;
-			}
-			prev_c = c;
-		}
+		new_pos = getCtrlKeyWord(CursorPos, dir);
 	} else {
 		// Advance by +1/-1 character
-		new_pos += dir;
+		new_pos = CursorPos + dir;
 	}
 
 	if (!input.Shift) {
@@ -496,64 +524,60 @@ void CGUIEditBox::processKeyLR(const SEvent::SKeyInput &input, s32 &new_mark_beg
 	}
 }
 
-bool CGUIEditBox::onKeyUp(const SEvent &event, s32 &mark_begin, s32 &mark_end)
+bool CGUIEditBox::onKeyUpDown(const SEvent::SKeyInput &input, s32 &mark_begin,
+		s32 &mark_end, u32 lines_max)
 {
-	if (MultiLine || (WordWrap && BrokenText.size() > 1)) {
-		s32 lineNo = getLineFromPos(CursorPos);
-		s32 mb = (MarkBegin == MarkEnd) ? CursorPos :
-			(MarkBegin > MarkEnd ? MarkBegin : MarkEnd);
-		if (lineNo > 0) {
-			s32 cp = CursorPos - BrokenTextPositions[lineNo];
-			if ((s32)BrokenText[lineNo - 1].size() < cp) {
-				CursorPos = BrokenTextPositions[lineNo - 1] +
-					core::max_((u32)1, BrokenText[lineNo - 1].size()) - 1;
+	if (!MultiLine && !(WordWrap && BrokenText.size() > 1))
+		return false;
+
+	const s8 dir = (input.Key == KEY_DOWN || input.Key == KEY_NEXT) ? 1 : -1;
+	s32 new_pos = CursorPos;
+
+	for (u32 i = 0; i < lines_max; ++i) {
+		s32 lineNo = getLineFromPos(new_pos);
+
+		if (dir > 0) {
+			// Down
+			if (lineNo >= (s32)BrokenText.size() - 1) {
+				if (i == 0)
+					new_pos = Text.size();
+				break;
 			}
-			else
-				CursorPos = BrokenTextPositions[lineNo - 1] + cp;
-		}
-
-		if (event.KeyInput.Shift) {
-			mark_begin = mb;
-			mark_end = CursorPos;
 		} else {
-			mark_begin = 0;
-			mark_end = 0;
+			// Up
+			if (lineNo <= 0) {
+				if (i == 0)
+					new_pos = 0;
+				break;
+			}
 		}
 
-		return true;
+		s32 offset = new_pos - BrokenTextPositions[lineNo];
+		size_t next_len = BrokenText[lineNo + dir].size();
+		// Try to go to the same position in the next line, or clamp.
+		new_pos = BrokenTextPositions[lineNo + dir] +
+			std::max<s32>(0, std::min<s32>(offset, next_len));
 	}
 
-	return false;
-}
-
-bool CGUIEditBox::onKeyDown(const SEvent &event, s32 &mark_begin, s32 &mark_end)
-{
-	if (MultiLine || (WordWrap && BrokenText.size() > 1)) {
-		s32 lineNo = getLineFromPos(CursorPos);
-		s32 mb = (MarkBegin == MarkEnd) ? CursorPos :
-			(MarkBegin < MarkEnd ? MarkBegin : MarkEnd);
-		if (lineNo < (s32)BrokenText.size() - 1) {
-			s32 cp = CursorPos - BrokenTextPositions[lineNo];
-			if ((s32)BrokenText[lineNo + 1].size() < cp) {
-				CursorPos = BrokenTextPositions[lineNo + 1] +
-					core::max_((u32)1, BrokenText[lineNo + 1].size()) - 1;
-			}
-			else
-				CursorPos = BrokenTextPositions[lineNo + 1] + cp;
-		}
-
-		if (event.KeyInput.Shift) {
-			mark_begin = mb;
-			mark_end = CursorPos;
-		} else {
-			mark_begin = 0;
-			mark_end = 0;
-		}
-
-		return true;
+	if (!input.Shift) {
+		// Reset selection
+		mark_begin = 0;
+		mark_end = 0;
 	}
 
-	return false;
+	if (new_pos >= 0 && new_pos <= (s32)Text.size()) {
+		// Update cursor (and selection)
+		if (input.Shift) {
+			if (MarkBegin == MarkEnd)
+				mark_begin = CursorPos;
+
+			mark_end = new_pos;
+		}
+
+		CursorPos = new_pos;
+	}
+
+	return true;
 }
 
 void CGUIEditBox::onKeyControlC(const SEvent &event)
@@ -647,42 +671,7 @@ bool CGUIEditBox::onKeyControlV(const SEvent &event, s32 &mark_begin, s32 &mark_
 	return true;
 }
 
-bool CGUIEditBox::onKeyBack()
-{
-	if (!isEnabled() || Text.empty() || !IsWritable)
-		return false;
-
-	core::stringw s;
-
-	if (MarkBegin != MarkEnd) {
-		// delete marked text
-		const s32 realmbgn =
-				MarkBegin < MarkEnd ? MarkBegin : MarkEnd;
-		const s32 realmend =
-				MarkBegin < MarkEnd ? MarkEnd : MarkBegin;
-
-		s = Text.subString(0, realmbgn);
-		s.append(Text.subString(realmend, Text.size() - realmend));
-		Text = s;
-
-		CursorPos = realmbgn;
-	} else {
-		// delete text behind cursor
-		if (CursorPos > 0)
-			s = Text.subString(0, CursorPos - 1);
-		else
-			s = L"";
-		s.append(Text.subString(CursorPos, Text.size() - CursorPos));
-		Text = s;
-		--CursorPos;
-	}
-
-	if (CursorPos < 0)
-		CursorPos = 0;
-	return true;
-}
-
-bool CGUIEditBox::onKeyDelete()
+bool CGUIEditBox::onKeyBackDelete(const SEvent::SKeyInput &input)
 {
 	if (!isEnabled() || Text.empty() || !IsWritable)
 		return false;
@@ -700,9 +689,21 @@ bool CGUIEditBox::onKeyDelete()
 
 		CursorPos = realmbgn;
 	} else {
-		// delete text before cursor
+		// Direction where the text shall be deleted
+		s8 dir = input.Key == KEY_DELETE ? 1 : -1;
+
+		s32 endpos;
+		if (input.Control)
+			endpos = getCtrlKeyWord(CursorPos, dir);
+		else
+			endpos = CursorPos + dir;
+
+		endpos = std::max<s32>(0, endpos);
+		if (endpos < CursorPos)
+			std::swap(CursorPos, endpos);
+
 		s = Text.subString(0, CursorPos);
-		s.append(Text.subString(CursorPos + 1, Text.size() - CursorPos - 1));
+		s.append(Text.subString(endpos, Text.size() - endpos));
 		Text = s;
 	}
 
@@ -992,6 +993,11 @@ bool CGUIEditBox::processMouse(const SEvent &event)
 {
 	switch (event.MouseInput.Event) {
 	case EMIE_LMOUSE_LEFT_UP:
+		if (InhibitLeftMouseUpOnce) {
+			InhibitLeftMouseUpOnce = false;
+			break;
+		}
+
 		if (Environment->hasFocus(this)) {
 			CursorPos = getCursorPos(event.MouseInput.X, event.MouseInput.Y);
 			if (MouseMarking) {
@@ -999,6 +1005,61 @@ bool CGUIEditBox::processMouse(const SEvent &event)
 			}
 			MouseMarking = false;
 			calculateScrollPos();
+			return true;
+		}
+		break;
+	case EMIE_LMOUSE_DOUBLE_CLICK:
+		// Select the clicked word
+		if (!Text.empty()) {
+			// The cursor is already set by the first EMIE_LMOUSE_PRESSED_DOWN.
+			s32 newMarkBegin = CursorPos,
+				newMarkEnd = CursorPos;
+
+			const bool is_alnum = std::iswalnum(
+				Text[std::min<size_t>(CursorPos, Text.size() - 1)]
+			);
+			for (; newMarkEnd < (s32)Text.size(); ++newMarkEnd) {
+				if (!!std::iswalnum(Text[newMarkEnd]) != is_alnum)
+					break;
+			}
+			for (; newMarkBegin > 0; --newMarkBegin) {
+				if (!!std::iswalnum(Text[newMarkBegin - 1]) != is_alnum)
+					break;
+			}
+
+			setTextMarkers(newMarkBegin, newMarkEnd);
+			// The mouse up event fires afterwards. Prevent selection changes there.
+			InhibitLeftMouseUpOnce = true;
+			MouseMarking = false;
+			return true;
+		}
+		break;
+	case EMIE_LMOUSE_TRIPLE_CLICK:
+		// Select a 'new line'-separated line. This may span multiple broken lines.
+		if (!Text.empty()) {
+			s32 newMarkBegin = CursorPos,
+				newMarkEnd = CursorPos;
+
+			if (MultiLine) {
+				for (; newMarkEnd < (s32)Text.size(); ++newMarkEnd) {
+					wchar_t c = Text[newMarkEnd];
+					if (c == L'\r'|| c == L'\n')
+						break;
+				}
+
+				for (; newMarkBegin > 0; --newMarkBegin) {
+					wchar_t c = Text[newMarkBegin - 1];
+					if (c == '\r' || c == '\n')
+						break;
+				}
+			} else {
+				newMarkBegin = 0;
+				newMarkEnd = Text.size();
+			}
+
+			setTextMarkers(newMarkBegin, newMarkEnd);
+			InhibitLeftMouseUpOnce = true;
+			MouseMarking = false;
 			return true;
 		}
 		break;

@@ -2,21 +2,18 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
-#include <iomanip>
-#include <cerrno>
 #include <algorithm>
 #include <cmath>
 #include "network/mtp/internal.h"
-#include "serialization.h"
 #include "log.h"
 #include "porting.h"
 #include "network/mtp/threads.h"
 #include "network/peerhandler.h"
+#include "network/networkexceptions.h"
 #include "network/networkpacket.h"
 #include "util/serialize.h"
 #include "util/numeric.h"
 #include "util/string.h"
-#include "settings.h"
 #include "profiler.h"
 
 namespace con
@@ -34,7 +31,7 @@ namespace con
 // TODO: Clean this up.
 #define LOG(a) a
 
-#define PING_TIMEOUT 5.0f
+#define PING_INTERVAL 5.0f
 
 // exponent base
 #define RESEND_SCALE_BASE 1.5f
@@ -900,7 +897,7 @@ void Peer::RTTStatistics(float rtt, const std::string &profiler_id,
 			m_rtt.max_rtt = rtt;
 
 		/* do average calculation */
-		if (m_rtt.avg_rtt < 0.0)
+		if (m_rtt.avg_rtt < 0)
 			m_rtt.avg_rtt  = rtt;
 		else
 			m_rtt.avg_rtt  = m_rtt.avg_rtt * (num_samples/(num_samples-1)) +
@@ -922,7 +919,7 @@ void Peer::RTTStatistics(float rtt, const std::string &profiler_id,
 		if (jitter >= m_rtt.jitter_max)
 			m_rtt.jitter_max = jitter;
 
-		if (m_rtt.jitter_avg < 0.0)
+		if (m_rtt.jitter_avg < 0)
 			m_rtt.jitter_avg  = jitter;
 		else
 			m_rtt.jitter_avg  = m_rtt.jitter_avg * (num_samples/(num_samples-1)) +
@@ -1005,7 +1002,7 @@ void UDPPeer::reportRTT(float rtt)
 {
 	if (rtt < 0)
 		return;
-	RTTStatistics(rtt,"rudp",MAX_RELIABLE_WINDOW_SIZE*10);
+	RTTStatistics(rtt, "network", MAX_RELIABLE_WINDOW_SIZE*10);
 
 	// use this value to decide the resend timeout
 	const float rtt_stat = getStat(AVG_RTT);
@@ -1029,7 +1026,7 @@ void UDPPeer::reportRTT(float rtt)
 bool UDPPeer::Ping(float dtime,SharedBuffer<u8>& data)
 {
 	m_ping_timer += dtime;
-	if (!isHalfOpen() && m_ping_timer >= PING_TIMEOUT)
+	if (!isHalfOpen() && m_ping_timer >= PING_INTERVAL)
 	{
 		// Create and send PING packet
 		writeU8(&data[0], PACKET_TYPE_CONTROL);

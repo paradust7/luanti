@@ -16,7 +16,6 @@
 #include "position2d.h"
 #include "SColor.h" // video::ECOLOR_FORMAT
 #include <string>
-#include <variant>
 
 class ILogger;
 class IEventReceiver;
@@ -196,10 +195,6 @@ public:
 	or similar. */
 	virtual bool supportsTouchEvents() const { return false; }
 
-	//! Get the current color format of the window
-	/** \return Color format of the window. */
-	virtual video::ECOLOR_FORMAT getColorFormat() const = 0;
-
 	//! Notifies the device that it should close itself.
 	/** IrrlichtDevice::run() will always return false after closeDevice() was called. */
 	virtual void closeDevice() = 0;
@@ -350,13 +345,19 @@ public:
 	//! Get the corresponding scancode for the keycode.
 	/**
 	\param key The keycode to convert.
-	\return The implementation-dependent scancode for the key (represented by the u32 component) or, if a scancode is not
-	available, the corresponding Irrlicht keycode (represented by the EKEY_CODE component).
+	\return The implementation-dependent scancode for the key (represented by the u32 component) or 0 if a scancode is
+	not available.
 	*/
-	virtual std::variant<u32, EKEY_CODE> getScancodeFromKey(const Keycode &key) const {
+	virtual u32 getScancodeFromKey(const Keycode &key) const {
+		// Dummy/fallback implementation if the scancode/keycode conversion is not available:
+		// EKEY_CODE values are mapped directly
+		// wchar-based values are maped to KEY_KEY_CODES_COUNT + value
 		if (auto pv = std::get_if<EKEY_CODE>(&key))
 			return *pv;
-		return (u32)std::get<wchar_t>(key);
+		if (auto scancode = std::get_if<wchar_t>(&key))
+			return KEY_KEY_CODES_COUNT + *scancode;
+		else
+			return 0;
 	}
 
 	//! Get the corresponding keycode for the scancode.
@@ -365,6 +366,7 @@ public:
 	\return The corresponding keycode.
 	*/
 	virtual Keycode getKeyFromScancode(const u32 scancode) const {
-		return Keycode(KEY_UNKNOWN, (wchar_t)scancode);
+		(void)scancode;
+		return Keycode(KEY_UNKNOWN, (wchar_t)0xFFFF);
 	}
 };

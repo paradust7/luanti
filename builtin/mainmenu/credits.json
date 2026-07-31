@@ -47,11 +47,14 @@
 	],
 	"#": "For updating active/previous contributors, see the script in ./util/gather_git_credits.py",
 	"contributors": [
-		"Lucas OH",
-		"Xeno333"
+		"siliconsniffer",
+		"Wuzzy (Wuzzy2)",
+		"kromka-chleba",
+		"CrazyladMT",
+		"jordan4ibanez",
+		"Elias Åström"
 	],
 	"previous_contributors": [
-		"Wuzzy (Wuzzy2)",
 		"Ælla Chiana Moskopp (erle) <erle@dieweltistgarnichtso.net> [Logo]",
 		"numzero",
 		"red-001 <red-001@outlook.ie>",

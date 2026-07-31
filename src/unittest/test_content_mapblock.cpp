@@ -4,16 +4,15 @@
 
 #include "test.h"
 
-#include <algorithm>
-#include <numeric>
-
 #include "gamedef.h"
+#include "inventory.h" // ItemStack
 #include "dummygamedef.h"
 #include "client/content_mapblock.h"
 #include "client/mapblock_mesh.h"
 #include "client/meshgen/collector.h"
+#include "client/node_visuals.h"
+#include <memory>
 #include "mesh_compare.h"
-#include "util/directiontables.h"
 
 namespace {
 
@@ -27,13 +26,29 @@ public:
 		return const_cast<NodeDefManager *>(m_nodedef);
 	}
 
-	content_t registerNode(ItemDefinition itemdef, ContentFeatures nodedef) {
+	content_t registerNode(const ItemDefinition &itemdef, const ContentFeatures &nodedef,
+			std::unique_ptr<NodeVisuals> visuals) {
 		item_mgr()->registerItem(itemdef);
-		return node_mgr()->set(nodedef.name, nodedef);
+
+		NodeDefManager *mgr = node_mgr();
+		content_t id = mgr->set(nodedef.name, nodedef);
+
+		// mgr->set cannot add ContentFeatures that already contain visuals
+		// We set them manually instead of calling NodeVisuals::fillNodeVisuals
+		ContentFeatures &f = const_cast<ContentFeatures&>(mgr->get(id));
+		setNodeVisuals(f, std::move(visuals));
+
+		return id;
 	}
 
 	void finalize() {
 		node_mgr()->resolveCrossrefs();
+
+		// Need to fill node visuals for predefined nodes
+		node_mgr()->applyFunction([] (ContentFeatures &f) {
+			if (!f.visuals)
+				setNodeVisuals(f);
+		});
 	}
 
 	MeshMakeData makeSingleNodeMMD(bool smooth_lighting = true)
@@ -58,16 +73,17 @@ public:
 		itemdef.description = name;
 
 		ContentFeatures f;
+		auto visuals = constructNodeVisuals(&f);
 		f.name = itemdef.name;
 		f.drawtype = NDT_NORMAL;
-		f.solidness = 2;
+		visuals->solidness = 2;
 		f.alpha = ALPHAMODE_OPAQUE;
 		for (TileDef &tiledef : f.tiledef)
 			tiledef.name = name + ".png";
-		for (TileSpec &tile : f.tiles)
+		for (TileSpec &tile : visuals->tiles)
 			tile.layers[0].texture_id = texture;
 
-		return registerNode(itemdef, f);
+		return registerNode(itemdef, f, std::move(visuals));
 	}
 
 	content_t addLiquidSource(std::string name, u32 texture)
@@ -78,9 +94,10 @@ public:
 		itemdef.description = name;
 
 		ContentFeatures f;
+		auto visuals = constructNodeVisuals(&f);
 		f.name = itemdef.name;
 		f.drawtype = NDT_LIQUID;
-		f.solidness = 1;
+		visuals->solidness = 1;
 		f.alpha = ALPHAMODE_BLEND;
 		f.light_propagates = true;
 		f.param_type = CPT_LIGHT;
@@ -91,10 +108,10 @@ public:
 		f.liquid_alternative_flowing = "test:" + name + "_flowing";
 		for (TileDef &tiledef : f.tiledef)
 			tiledef.name = name + ".png";
-		for (TileSpec &tile : f.tiles)
+		for (TileSpec &tile : visuals->tiles)
 			tile.layers[0].texture_id = texture;
 
-		return registerNode(itemdef, f);
+		return registerNode(itemdef, f, std::move(visuals));
 	}
 
 	content_t addLiquidFlowing(std::string name, u32 texture_top, u32 texture_side)
@@ -105,9 +122,10 @@ public:
 		itemdef.description = name;
 
 		ContentFeatures f;
+		auto visuals = constructNodeVisuals(&f);
 		f.name = itemdef.name;
 		f.drawtype = NDT_FLOWINGLIQUID;
-		f.solidness = 0;
+		visuals->solidness = 0;
 		f.alpha = ALPHAMODE_BLEND;
 		f.light_propagates = true;
 		f.param_type = CPT_LIGHT;
@@ -118,10 +136,10 @@ public:
 		f.liquid_alternative_flowing = "test:" + name + "_flowing";
 		f.tiledef_special[0].name = name + "_top.png";
 		f.tiledef_special[1].name = name + "_side.png";
-		f.special_tiles[0].layers[0].texture_id = texture_top;
-		f.special_tiles[1].layers[0].texture_id = texture_side;
+		visuals->special_tiles[0].layers[0].texture_id = texture_top;
+		visuals->special_tiles[1].layers[0].texture_id = texture_side;
 
-		return registerNode(itemdef, f);
+		return registerNode(itemdef, f, std::move(visuals));
 	}
 };
 

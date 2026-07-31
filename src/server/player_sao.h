@@ -6,10 +6,12 @@
 #pragma once
 
 #include "constants.h"
+#include "inventorymanager.h" // InventoryLocation
 #include "metadata.h"
 #include "network/networkprotocol.h"
 #include "unit_sao.h"
 #include "util/numeric.h"
+#include <set>
 
 /*
 	PlayerSAO needs some internals exposed.
@@ -99,7 +101,7 @@ public:
 		Interaction interface
 	*/
 
-	u32 punch(v3f dir, const ToolCapabilities *toolcap, ServerActiveObject *puncher,
+	u32 punch(v3f dir, const ToolCapabilities &toolcap, ServerActiveObject *puncher,
 			float time_from_last_punch, u16 initial_wear = 0) override;
 	void rightClick(ServerActiveObject *clicker) override;
 	void setHP(s32 hp, const PlayerHPChangeReason &reason) override
@@ -139,7 +141,7 @@ public:
 	float resetTimeFromLastPunch()
 	{
 		float r = m_time_from_last_punch;
-		m_time_from_last_punch = 0.0;
+		m_time_from_last_punch = 0;
 		return r;
 	}
 	void noCheatDigStart(const v3s16 &p)
@@ -248,7 +250,7 @@ struct PlayerHPChangeReason
 
 	// For PLAYER_PUNCH
 	ServerActiveObject *object = nullptr;
-	// For NODE_DAMAGE
+	// For NODE_DAMAGE and DROWNING
 	std::string node;
 	v3s16 node_pos;
 

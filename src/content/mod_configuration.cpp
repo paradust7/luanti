@@ -5,10 +5,12 @@
 #include "mod_configuration.h"
 #include "log.h"
 #include "settings.h"
+#include "subgames.h"
 #include "filesys.h"
 #include "gettext.h"
 #include "exceptions.h"
 #include "util/numeric.h"
+#include <list>
 #include <optional>
 #include <algorithm>
 
@@ -18,7 +20,8 @@ std::string ModConfiguration::getUnsatisfiedModsError() const
 	error << gettext("Some mods have unsatisfied dependencies:") << std::endl;
 
 	for (const ModSpec &mod : m_unsatisfied_mods) {
-		//~ Error when a mod is missing dependencies. Ex: "Mod Title is missing: mod1, mod2, mod3"
+		/* TRANSLATORS: Error when a mod is missing dependencies.
+		Example: "Mod Title is missing: mod1, mod2, mod3" */
 		error << " - " << fmtgettext("%s is missing:", mod.name.c_str());
 		for (const std::string &unsatisfied_depend : mod.unsatisfied_depends)
 			error << " " << unsatisfied_depend;
@@ -58,7 +61,7 @@ void ModConfiguration::addMods(const std::vector<ModSpec> &new_mods)
 		std::set<std::string> seen_this_iteration;
 
 		for (const ModSpec &mod : new_mods) {
-			if (mod.part_of_modpack != want_from_modpack)
+			if ((mod.modpack_depth > 0) != want_from_modpack)
 				continue;
 
 			// unrelated to this code, but we want to assert it somewhere

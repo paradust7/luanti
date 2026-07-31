@@ -6,10 +6,9 @@
 
 #include "irrlichttypes_bloated.h"
 #include "inventory.h"
-#include "constants.h"
 #include "util/basic_macros.h"
-#include "util/string.h"
 #include <string>
+#include <string_view>
 
 #define PLAYERNAME_SIZE 20
 
@@ -125,12 +124,14 @@ struct PlayerPhysicsOverride
 };
 
 /// @note numeric values are part of network protocol
-enum CameraMode {
+enum CameraMode : int {
 	// not a mode. indicates that any may be used.
 	CAMERA_MODE_ANY = 0,
 	CAMERA_MODE_FIRST,
 	CAMERA_MODE_THIRD,
-	CAMERA_MODE_THIRD_FRONT
+	CAMERA_MODE_THIRD_FRONT,
+
+	CameraMode_END // Dummy for validity check
 };
 
 extern const struct EnumString es_CameraMode[];

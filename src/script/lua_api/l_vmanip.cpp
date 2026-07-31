@@ -9,11 +9,19 @@
 #include "common/c_content.h"
 #include "common/c_converter.h"
 #include "common/c_packer.h"
-#include "environment.h"
-#include "map.h"
 #include "mapblock.h"
-#include "server.h"
+#include "serverenvironment.h"
+#include "servermap.h"
 #include "voxelalgorithms.h"
+
+// raises error if the LuaVoxelManip outlived its vm
+LuaVoxelManip *LuaVoxelManip::checkObjectValid(lua_State *L, int narg)
+{
+	auto *o = checkObject<LuaVoxelManip>(L, narg);
+	if (!o->vm)
+		luaL_error(L, "LuaVoxelManip::checkObjectValid(): vm is null");
+	return o;
+}
 
 // garbage collector
 int LuaVoxelManip::gc_object(lua_State *L)
@@ -28,7 +36,7 @@ int LuaVoxelManip::l_read_from_map(lua_State *L)
 {
 	MAP_LOCK_REQUIRED;
 
-	LuaVoxelManip *o = checkObject<LuaVoxelManip>(L, 1);
+	LuaVoxelManip *o = checkObjectValid(L, 1);
 	MMVManip *vm = o->vm;
 	if (vm->isOrphan())
 		return 0;
@@ -51,7 +59,7 @@ int LuaVoxelManip::l_initialize(lua_State *L)
 {
 	MAP_LOCK_REQUIRED;
 
-	LuaVoxelManip *o = checkObject<LuaVoxelManip>(L, 1);
+	LuaVoxelManip *o = checkObjectValid(L, 1);
 	MMVManip *vm = o->vm;
 
 	if (o->is_mapgen_vm)
@@ -85,7 +93,7 @@ int LuaVoxelManip::l_get_data(lua_State *L)
 {
 	NO_MAP_LOCK_REQUIRED;
 
-	LuaVoxelManip *o = checkObject<LuaVoxelManip>(L, 1);
+	LuaVoxelManip *o = checkObjectValid(L, 1);
 	bool use_buffer  = lua_istable(L, 2);
 
 	MMVManip *vm = o->vm;
@@ -110,7 +118,7 @@ int LuaVoxelManip::l_set_data(lua_State *L)
 {
 	NO_MAP_LOCK_REQUIRED;
 
-	LuaVoxelManip *o = checkObject<LuaVoxelManip>(L, 1);
+	LuaVoxelManip *o = checkObjectValid(L, 1);
 	MMVManip *vm = o->vm;
 
 	if (!lua_istable(L, 2))
@@ -138,7 +146,7 @@ int LuaVoxelManip::l_set_data(lua_State *L)
 
 int LuaVoxelManip::l_write_to_map(lua_State *L)
 {
-	LuaVoxelManip *o = checkObject<LuaVoxelManip>(L, 1);
+	LuaVoxelManip *o = checkObjectValid(L, 1);
 	bool update_light = !lua_isboolean(L, 2) || readParam<bool>(L, 2);
 
 	if (o->vm->isOrphan())
@@ -171,7 +179,7 @@ int LuaVoxelManip::l_get_node_at(lua_State *L)
 {
 	NO_MAP_LOCK_REQUIRED;
 
-	LuaVoxelManip *o = checkObject<LuaVoxelManip>(L, 1);
+	LuaVoxelManip *o = checkObjectValid(L, 1);
 	v3s16 pos        = check_v3s16(L, 2);
 
 	pushnode(L, o->vm->getNodeNoExNoEmerge(pos));
@@ -182,7 +190,7 @@ int LuaVoxelManip::l_set_node_at(lua_State *L)
 {
 	NO_MAP_LOCK_REQUIRED;
 
-	LuaVoxelManip *o = checkObject<LuaVoxelManip>(L, 1);
+	LuaVoxelManip *o = checkObjectValid(L, 1);
 	v3s16 pos        = check_v3s16(L, 2);
 	MapNode n        = readnode(L, 3);
 
@@ -192,14 +200,14 @@ int LuaVoxelManip::l_set_node_at(lua_State *L)
 
 int LuaVoxelManip::l_update_liquids(lua_State *L)
 {
-	LuaVoxelManip *o = checkObject<LuaVoxelManip>(L, 1);
+	LuaVoxelManip *o = checkObjectValid(L, 1);
 
 	return ModApiMapgen::update_liquids(L, o->vm);
 }
 
 int LuaVoxelManip::l_calc_lighting(lua_State *L)
 {
-	LuaVoxelManip *o = checkObject<LuaVoxelManip>(L, 1);
+	LuaVoxelManip *o = checkObjectValid(L, 1);
 	if (!o->is_mapgen_vm) {
 		log_deprecated(L, "calc_lighting called for a non-mapgen "
 			"VoxelManip object");
@@ -222,7 +230,7 @@ int LuaVoxelManip::l_calc_lighting(lua_State *L)
 
 int LuaVoxelManip::l_set_lighting(lua_State *L)
 {
-	LuaVoxelManip *o = checkObject<LuaVoxelManip>(L, 1);
+	LuaVoxelManip *o = checkObjectValid(L, 1);
 	if (!o->is_mapgen_vm) {
 		log_deprecated(L, "set_lighting called for a non-mapgen "
 			"VoxelManip object");
@@ -252,7 +260,7 @@ int LuaVoxelManip::l_get_light_data(lua_State *L)
 {
 	NO_MAP_LOCK_REQUIRED;
 
-	LuaVoxelManip *o = checkObject<LuaVoxelManip>(L, 1);
+	LuaVoxelManip *o = checkObjectValid(L, 1);
 	bool use_buffer  = lua_istable(L, 2);
 
 	MMVManip *vm = o->vm;
@@ -277,7 +285,7 @@ int LuaVoxelManip::l_set_light_data(lua_State *L)
 {
 	NO_MAP_LOCK_REQUIRED;
 
-	LuaVoxelManip *o = checkObject<LuaVoxelManip>(L, 1);
+	LuaVoxelManip *o = checkObjectValid(L, 1);
 	MMVManip *vm = o->vm;
 
 	if (!lua_istable(L, 2))
@@ -301,7 +309,7 @@ int LuaVoxelManip::l_get_param2_data(lua_State *L)
 {
 	NO_MAP_LOCK_REQUIRED;
 
-	LuaVoxelManip *o = checkObject<LuaVoxelManip>(L, 1);
+	LuaVoxelManip *o = checkObjectValid(L, 1);
 	bool use_buffer  = lua_istable(L, 2);
 
 	MMVManip *vm = o->vm;
@@ -326,7 +334,7 @@ int LuaVoxelManip::l_set_param2_data(lua_State *L)
 {
 	NO_MAP_LOCK_REQUIRED;
 
-	LuaVoxelManip *o = checkObject<LuaVoxelManip>(L, 1);
+	LuaVoxelManip *o = checkObjectValid(L, 1);
 	MMVManip *vm = o->vm;
 
 	if (!lua_istable(L, 2))
@@ -355,7 +363,7 @@ int LuaVoxelManip::l_was_modified(lua_State *L)
 {
 	NO_MAP_LOCK_REQUIRED;
 
-	LuaVoxelManip *o = checkObject<LuaVoxelManip>(L, 1);
+	LuaVoxelManip *o = checkObjectValid(L, 1);
 	MMVManip *vm = o->vm;
 
 	if (!o->is_mapgen_vm)
@@ -370,7 +378,7 @@ int LuaVoxelManip::l_get_emerged_area(lua_State *L)
 {
 	NO_MAP_LOCK_REQUIRED;
 
-	LuaVoxelManip *o = checkObject<LuaVoxelManip>(L, 1);
+	LuaVoxelManip *o = checkObjectValid(L, 1);
 
 	push_v3s16(L, o->vm->m_area.MinEdge);
 	push_v3s16(L, o->vm->m_area.MaxEdge);
@@ -382,7 +390,7 @@ int LuaVoxelManip::l_close(lua_State *L)
 {
 	NO_MAP_LOCK_REQUIRED;
 
-	LuaVoxelManip *o = checkObject<LuaVoxelManip>(L, 1);
+	LuaVoxelManip *o = checkObjectValid(L, 1);
 
 	if (o->is_mapgen_vm)
 		throw LuaError("Cannot dispose of mapgen VoxelManip object");
@@ -395,14 +403,21 @@ LuaVoxelManip::LuaVoxelManip(MMVManip *mmvm, bool is_mg_vm) :
 	is_mapgen_vm(is_mg_vm),
 	vm(mmvm)
 {
+	vm_ref_tracker = vm->addTrackedRef(&vm);
 }
 
-LuaVoxelManip::LuaVoxelManip(Map *map) : vm(new MMVManip(map))
+LuaVoxelManip::LuaVoxelManip(Map *map) :
+	LuaVoxelManip(new MMVManip(map), false)
 {
 }
 
 LuaVoxelManip::~LuaVoxelManip()
 {
+	if (!vm)
+		return;
+
+	vm->removeTrackedRef(vm_ref_tracker);
+
 	if (!is_mapgen_vm)
 		delete vm;
 }
@@ -443,7 +458,7 @@ void LuaVoxelManip::create(lua_State *L, MMVManip *mmvm, bool is_mapgen_vm)
 
 void *LuaVoxelManip::packIn(lua_State *L, int idx)
 {
-	LuaVoxelManip *o = checkObject<LuaVoxelManip>(L, idx);
+	LuaVoxelManip *o = checkObjectValid(L, idx);
 
 	if (o->is_mapgen_vm)
 		throw LuaError("nope");

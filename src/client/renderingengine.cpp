@@ -12,10 +12,12 @@
 #include "util/numeric.h"
 #include "guiscalingfilter.h"
 #include "localplayer.h"
+#include "gettext.h"
 #include "client/hud.h"
 #include "client/texturesource.h"
 #include "camera.h"
 #include "minimap.h"
+#include "porting.h"
 #include "clientmap.h"
 #include "renderingengine.h"
 #include "render/core.h"
@@ -25,7 +27,6 @@
 #include "irr_ptr.h"
 
 RenderingEngine *RenderingEngine::s_singleton = nullptr;
-const video::SColor RenderingEngine::MENU_SKY_COLOR = video::SColor(255, 140, 186, 250);
 
 /* Helper classes */
 
@@ -60,7 +61,7 @@ public:
 		auto *driver = services->getVideoDriver();
 		assert(driver);
 
-		video::SColor fog_color(0);
+		video::SColor fog_color;
 		video::E_FOG_TYPE fog_type = video::EFT_FOG_LINEAR;
 		f32 fog_start = 0;
 		f32 fog_end = 0;
@@ -82,7 +83,7 @@ public:
 	}
 };
 
-IShaderUniformSetter *FogShaderUniformSetterFactory::create()
+IShaderUniformSetter *FogShaderUniformSetterFactory::create(const std::string &name)
 {
 	return new FogShaderUniformSetter();
 }
@@ -132,7 +133,7 @@ static IrrlichtDevice *createDevice(SIrrlichtCreationParameters params, std::opt
 			return device;
 	}
 
-	throw std::runtime_error("Could not initialize the device with any supported video driver");
+	throw BaseException(gettext("Could not initialize any supported video driver!"));
 }
 
 /* RenderingEngine class */
@@ -290,8 +291,9 @@ void RenderingEngine::draw_load_screen(const std::wstring &text,
 
 	auto *driver = get_video_driver();
 
-	driver->setFog(RenderingEngine::MENU_SKY_COLOR);
-	driver->beginScene(true, true, RenderingEngine::MENU_SKY_COLOR);
+	driver->setFog(m_menu_sky_color);
+	driver->beginScene(true, true, m_menu_sky_color);
+
 	if (g_settings->getBool("menu_clouds")) {
 		g_menuclouds->step(dtime * 3);
 		g_menucloudsmgr->drawAll();
@@ -356,8 +358,8 @@ std::vector<video::E_DRIVER_TYPE> RenderingEngine::getSupportedVideoDrivers()
 	// Only check these drivers. We do not support software and D3D in any capacity.
 	// ordered by preference (best first)
 	static const video::E_DRIVER_TYPE glDrivers[] = {
-		video::EDT_OPENGL,
 		video::EDT_OPENGL3,
+		video::EDT_OPENGL,
 		video::EDT_OGLES2,
 		video::EDT_NULL,
 	};
@@ -391,12 +393,18 @@ void RenderingEngine::draw_scene(video::SColor skycolor, bool show_hud,
 const VideoDriverInfo &RenderingEngine::getVideoDriverInfo(video::E_DRIVER_TYPE type)
 {
 	static const std::unordered_map<int, VideoDriverInfo> driver_info_map = {
-		{(int)video::EDT_NULL,   {"null",   "NULL Driver"}},
-		{(int)video::EDT_OPENGL, {"opengl", "OpenGL"}},
+		{(int)video::EDT_NULL,    {"null",    "NULL Driver"}},
+		{(int)video::EDT_OPENGL,  {"opengl",  "OpenGL (legacy)"}},
 		{(int)video::EDT_OPENGL3, {"opengl3", "OpenGL 3+"}},
-		{(int)video::EDT_OGLES2, {"ogles2", "OpenGL ES2"}},
+		{(int)video::EDT_OGLES2,  {"ogles2",  "OpenGL ES 2"}},
 	};
 	return driver_info_map.at((int)type);
+}
+
+void RenderingEngine::showErrorMessageBox(const std::string &message)
+{
+	auto *device = s_singleton ? s_singleton->m_device : nullptr;
+	::showErrorMessageBox(device, PROJECT_NAME_C, message.c_str());
 }
 
 float RenderingEngine::getDisplayDensity()

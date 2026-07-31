@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "IIndexBuffer.h"
 #include "SIrrCreationParameters.h"
 
 
@@ -48,8 +49,7 @@ public:
 
 	struct SHWBufferLink_opengl : public SHWBufferLink
 	{
-		SHWBufferLink_opengl(const scene::IVertexBuffer *vb) : SHWBufferLink(vb) {}
-		SHWBufferLink_opengl(const scene::IIndexBuffer *ib) : SHWBufferLink(ib) {}
+		SHWBufferLink_opengl(const scene::HWBuffer *buf) : SHWBufferLink(buf) {}
 
 		GLuint vbo_ID = 0;
 		u32 vbo_Size = 0;
@@ -58,11 +58,7 @@ public:
 	//! updates hardware buffer if needed
 	bool updateHardwareBuffer(SHWBufferLink *HWBuffer) override;
 
-	//! Create hardware buffer from vertex buffer
-	SHWBufferLink *createHardwareBuffer(const scene::IVertexBuffer *vb) override;
-
-	//! Create hardware buffer from index buffer
-	SHWBufferLink *createHardwareBuffer(const scene::IIndexBuffer *ib) override;
+	SHWBufferLink *createHardwareBuffer(const scene::HWBuffer *buf) override;
 
 	//! Delete hardware buffer (only some drivers can)
 	void deleteHardwareBuffer(SHWBufferLink *HWBuffer) override;
@@ -183,9 +179,6 @@ public:
 	//! Returns type of video driver
 	E_DRIVER_TYPE getDriverType() const override;
 
-	//! get color format of the current color buffer
-	ECOLOR_FORMAT getColorFormat() const override;
-
 	//! Returns the transformation set by setTransform
 	const core::matrix4 &getTransform(E_TRANSFORMATION_STATE state) const override;
 
@@ -241,10 +234,7 @@ public:
 	//! IMaterialRendererServices)
 	IVideoDriver *getVideoDriver() override;
 
-	//! Returns the maximum amount of primitives (mostly vertices) which
-	//! the device is able to render with one drawIndexedTriangleList
-	//! call.
-	u32 getMaximalPrimitiveCount() const override;
+	SDriverLimits getLimits() const override;
 
 	virtual ITexture *addRenderTargetTexture(const core::dimension2d<u32> &size,
 			const io::path &name, const ECOLOR_FORMAT format = ECF_UNKNOWN) override;
@@ -273,9 +263,6 @@ public:
 
 	//! Returns the graphics card vendor name.
 	core::stringc getVendorInfo() override { return VendorName; }
-
-	//! Returns the maximum texture size supported.
-	core::dimension2du getMaxTextureSize() const override;
 
 	//! Removes a texture from the texture cache and deletes it, freeing lot of memory.
 	void removeTexture(ITexture *texture) override;
@@ -373,9 +360,6 @@ private:
 	core::stringc VendorName;
 
 	core::matrix4 TextureFlipMatrix;
-
-	//! Color buffer format
-	ECOLOR_FORMAT ColorFormat;
 
 	E_OPENGL_FIXED_PIPELINE_STATE FixedPipelineState;
 

@@ -7,7 +7,6 @@
 #include <map>
 #include <unordered_map>
 #include "irr_ptr.h"
-#include "irrlicht_changes/CGUITTFont.h"
 #include "util/basic_macros.h"
 #include "irrlichttypes.h"
 #include "irrString.h" // utf8_to_wide
@@ -16,6 +15,11 @@
 namespace gui {
 	class IGUIEnvironment;
 	class IGUIFont;
+}
+
+// Luanti namespace
+namespace gui {
+	struct SGUITTFace;
 }
 
 #define FONT_SIZE_UNSPECIFIED 0xFFFFFFFF
@@ -162,6 +166,8 @@ private:
 	/** refresh after fonts have been changed */
 	void refresh();
 
+	gui::SGUITTFace *getOrLoadFace(const std::string &filename);
+
 	/** callback to be used on change of font size setting */
 	static void fontSettingChanged(const std::string &name, void *userdata);
 
@@ -173,6 +179,9 @@ private:
 
 	/** internal storage for caching fonts of different size */
 	std::map<unsigned int, gui::IGUIFont*> m_font_cache[FontSpec::MAX_VARIANTS];
+
+	/** local faces, indexed by file path */
+	std::unordered_map<std::string, irr_ptr<gui::SGUITTFace>> m_local_faces;
 
 	/** media-provided faces, indexed by filename (without extension) */
 	std::unordered_map<std::string, irr_ptr<gui::SGUITTFace>> m_media_faces;

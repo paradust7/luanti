@@ -13,12 +13,17 @@
 #include "COpenGLCoreRenderTarget.h"
 #include "COpenGLCoreCacheHandler.h"
 
+#include "HWBuffer.h"
+#include "Common.h"
+#include "WeightBuffer.h"
 #include "MaterialRenderer.h"
 #include "FixedPipelineRenderer.h"
 #include "Renderer2D.h"
 
 #include "EVertexAttributes.h"
 #include "CImage.h"
+#include "IReadFile.h"
+#include "matrix4.h"
 #include "os.h"
 
 #include "mt_opengl.h"
@@ -58,6 +63,7 @@ static const VertexType vtStandard = {
 				{EVA_NORMAL, 3, GL_FLOAT, VertexAttribute::Mode::Regular, offsetof(S3DVertex, Normal)},
 				{EVA_COLOR, 4, GL_UNSIGNED_BYTE, VertexAttribute::Mode::Normalized, offsetof(S3DVertex, Color)},
 				{EVA_TCOORD0, 2, GL_FLOAT, VertexAttribute::Mode::Regular, offsetof(S3DVertex, TCoords)},
+				{EVA_AUX, 1, GL_UNSIGNED_SHORT, VertexAttribute::Mode::Integer, offsetof(S3DVertex, Aux)},
 		},
 };
 
@@ -66,6 +72,7 @@ static const VertexType vtStandard = {
 // - only one class in the hierarchy has non-static data members
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Winvalid-offsetof"
+
 
 static const VertexType vt2TCoords = {
 		sizeof(S3DVertex2TCoords),
@@ -153,8 +160,7 @@ COpenGL3DriverBase::COpenGL3DriverBase(const SIrrlichtCreationParameters &params
 		MaterialRenderer2DActive(0), MaterialRenderer2DTexture(0), MaterialRenderer2DNoTexture(0),
 		CurrentRenderMode(ERM_NONE), Transformation3DChanged(true),
 		OGLES2ShaderPath(params.OGLES2ShaderPath),
-		ColorFormat(ECF_R8G8B8), ContextManager(contextManager), EnableErrorTest(params.DriverDebug),
-		QuadIndexVBO(GL_ELEMENT_ARRAY_BUFFER)
+		ContextManager(contextManager), EnableErrorTest(params.DriverDebug)
 {
 	if (!ContextManager)
 		return;
@@ -172,6 +178,8 @@ COpenGL3DriverBase::COpenGL3DriverBase(const SIrrlichtCreationParameters &params
 COpenGL3DriverBase::~COpenGL3DriverBase()
 {
 	QuadIndexVBO.destroy();
+	JointTransformsUBO.destroy();
+
 	for (auto &vbo : tempVBO)
 		vbo.destroy();
 	for (auto &ibo : tempIBO)
@@ -179,7 +187,8 @@ COpenGL3DriverBase::~COpenGL3DriverBase()
 
 	deleteMaterialRenders();
 
-	CacheHandler->getTextureCache().clear();
+	if (CacheHandler)
+		CacheHandler->getTextureCache().clear();
 
 	removeAllRenderTargets();
 	deleteAllTextures();
@@ -220,6 +229,14 @@ void COpenGL3DriverBase::initQuadsIndices(u32 max_vertex_count)
 	assert(QuadIndexVBO.exists());
 }
 
+void COpenGL3DriverBase::initMaxJointTransforms()
+{
+	size_t max_mats = Feature.MaxUBOSize / sizeof(core::matrix4); // tightly packed
+	if (max_mats > 1024)
+		max_mats = 1024; // limit to something reasonable
+	MaxJointTransforms = static_cast<u16>(max_mats);
+}
+
 void COpenGL3DriverBase::initVersion()
 {
 	Name = GL.GetString(GL_VERSION);
@@ -243,8 +260,13 @@ bool COpenGL3DriverBase::isVersionAtLeast(int major, int minor) const noexcept
 
 bool COpenGL3DriverBase::genericDriverInit(const core::dimension2d<u32> &screenSize, bool stencilBuffer)
 {
-	initVersion();
-	initFeatures();
+	try {
+		initVersion();
+		initFeatures();
+	} catch (std::runtime_error &e) {
+		os::Printer::log(e.what(), ELL_ERROR);
+		return false;
+	}
 	printTextureFormats();
 
 	if (EnableErrorTest) {
@@ -260,6 +282,7 @@ bool COpenGL3DriverBase::genericDriverInit(const core::dimension2d<u32> &screenS
 	}
 
 	initQuadsIndices();
+	initMaxJointTransforms();
 
 	// reset cache handler
 	delete CacheHandler;
@@ -480,7 +503,15 @@ void COpenGL3DriverBase::setTransform(E_TRANSFORMATION_STATE state, const core::
 	Transformation3DChanged = true;
 }
 
-bool COpenGL3DriverBase::uploadHardwareBuffer(OpenGLVBO &vbo,
+void COpenGL3DriverBase::setJointTransforms(const std::vector<core::matrix4> &jointMatrices)
+{
+	assert(jointMatrices.size() <= getMaxJointTransforms());
+	JointTransformsUBO.upload(jointMatrices.data(), jointMatrices.size() * sizeof(core::matrix4), 0, GL_DYNAMIC_DRAW);
+	GL.BindBufferBase(GL_UNIFORM_BUFFER, 0, JointTransformsUBO.getName());
+	TEST_GL_ERROR(this);
+}
+
+bool COpenGL3DriverBase::uploadHardwareBuffer(OGLBufferObject &vbo,
 	const void *buffer, size_t bufferSize, scene::E_HARDWARE_MAPPING hint)
 {
 	accountHWBufferUpload(bufferSize);
@@ -496,47 +527,18 @@ bool COpenGL3DriverBase::uploadHardwareBuffer(OpenGLVBO &vbo,
 	return (!TEST_GL_ERROR(this));
 }
 
-bool COpenGL3DriverBase::updateVertexHardwareBuffer(SHWBufferLink_opengl *HWBuffer)
+bool COpenGL3DriverBase::_updateHardwareBuffer(SHWBufferLink_opengl *HWBuffer)
 {
 	if (!HWBuffer)
 		return false;
 
-	assert(HWBuffer->IsVertex);
-	const auto *vb = HWBuffer->VertexBuffer;
-	assert(vb);
+	const auto *buf = HWBuffer->Buffer;
 
-	const u32 vertexSize = getVertexPitchFromType(vb->getType());
-	const size_t bufferSize = vertexSize * vb->getCount();
+	const u32 vertexSize = buf->getElementSize();
+	const size_t bufferSize = vertexSize * buf->getCount();
 
-	return uploadHardwareBuffer(HWBuffer->Vbo, vb->getData(),
-		bufferSize, vb->getHardwareMappingHint());
-}
-
-bool COpenGL3DriverBase::updateIndexHardwareBuffer(SHWBufferLink_opengl *HWBuffer)
-{
-	if (!HWBuffer)
-		return false;
-
-	assert(!HWBuffer->IsVertex);
-	const auto *ib = HWBuffer->IndexBuffer;
-	assert(ib);
-
-	u32 indexSize;
-	switch (ib->getType()) {
-	case EIT_16BIT:
-		indexSize = sizeof(u16);
-		break;
-	case EIT_32BIT:
-		indexSize = sizeof(u32);
-		break;
-	default:
-		return false;
-	}
-
-	const size_t bufferSize = ib->getCount() * indexSize;
-
-	return uploadHardwareBuffer(HWBuffer->Vbo, ib->getData(),
-		bufferSize, ib->getHardwareMappingHint());
+	return uploadHardwareBuffer(HWBuffer->Vbo, buf->getData(),
+		bufferSize, buf->MappingHint);
 }
 
 bool COpenGL3DriverBase::updateHardwareBuffer(SHWBufferLink *HWBuffer)
@@ -546,54 +548,31 @@ bool COpenGL3DriverBase::updateHardwareBuffer(SHWBufferLink *HWBuffer)
 
 	auto *b = static_cast<SHWBufferLink_opengl *>(HWBuffer);
 
-	if (b->IsVertex) {
-		assert(b->VertexBuffer);
-		if (b->ChangedID != b->VertexBuffer->getChangedID() || !b->Vbo.exists()) {
-			if (!updateVertexHardwareBuffer(b))
-				return false;
-			b->ChangedID = b->VertexBuffer->getChangedID();
-		}
-	} else {
-		assert(b->IndexBuffer);
-		if (b->ChangedID != b->IndexBuffer->getChangedID() || !b->Vbo.exists()) {
-			if (!updateIndexHardwareBuffer(b))
-				return false;
-			b->ChangedID = b->IndexBuffer->getChangedID();
-		}
+	b->UnusedCounter = 0;
+	assert(b->Buffer);
+	if (b->ChangedID != b->Buffer->getChangedID() || !b->Vbo.exists()) {
+		if (!_updateHardwareBuffer(b))
+			return false;
+		b->ChangedID = b->Buffer->getChangedID();
 	}
+
 	return true;
 }
 
-COpenGL3DriverBase::SHWBufferLink *COpenGL3DriverBase::createHardwareBuffer(const scene::IVertexBuffer *vb)
+COpenGL3DriverBase::SHWBufferLink *COpenGL3DriverBase::createHardwareBuffer(const scene::HWBuffer *buf)
 {
-	if (!vb || vb->getHardwareMappingHint() == scene::EHM_NEVER)
+	if (!buf || buf->MappingHint == scene::EHM_NEVER)
 		return 0;
 
-	auto *HWBuffer = new SHWBufferLink_opengl(vb);
-	registerHardwareBuffer(HWBuffer);
+	auto *link = new SHWBufferLink_opengl(buf);
+	registerHardwareBuffer(link);
 
-	if (!updateVertexHardwareBuffer(HWBuffer)) {
-		deleteHardwareBuffer(HWBuffer);
-		return 0;
+	if (!updateHardwareBuffer(link)) {
+		deleteHardwareBuffer(link);
+		return nullptr;
 	}
 
-	return HWBuffer;
-}
-
-COpenGL3DriverBase::SHWBufferLink *COpenGL3DriverBase::createHardwareBuffer(const scene::IIndexBuffer *ib)
-{
-	if (!ib || ib->getHardwareMappingHint() == scene::EHM_NEVER)
-		return 0;
-
-	auto *HWBuffer = new SHWBufferLink_opengl(ib);
-	registerHardwareBuffer(HWBuffer);
-
-	if (!updateIndexHardwareBuffer(HWBuffer)) {
-		deleteHardwareBuffer(HWBuffer);
-		return 0;
-	}
-
-	return HWBuffer;
+	return link;
 }
 
 void COpenGL3DriverBase::deleteHardwareBuffer(SHWBufferLink *HWBuffer)
@@ -614,14 +593,34 @@ void COpenGL3DriverBase::drawBuffers(const scene::IVertexBuffer *vb,
 	if (!vb || !ib)
 		return;
 
+	const auto *wb = vb->getWeightBuffer();
+	SHWBufferLink_opengl *hw_weights = nullptr;
+	if (wb) {
+		hw_weights = static_cast<SHWBufferLink_opengl *>(getBufferLink(wb));
+		updateHardwareBuffer(hw_weights);
+		assert(hw_weights->Vbo.exists());
+	}
+
 	auto *hwvert = static_cast<SHWBufferLink_opengl *>(getBufferLink(vb));
 	auto *hwidx = static_cast<SHWBufferLink_opengl *>(getBufferLink(ib));
 	updateHardwareBuffer(hwvert);
 	updateHardwareBuffer(hwidx);
 
+	if (hw_weights) {
+		// Bind the weight & joint ID VBOs
+		GL.BindBuffer(GL_ARRAY_BUFFER, hw_weights->Vbo.getName());
+		const GLsizei stride = sizeof(scene::WeightBuffer::VertexWeights);
+		GL.VertexAttribPointer(EVA_WEIGHTS, 4, GL_FLOAT, GL_FALSE, stride,
+				reinterpret_cast<void *>(offsetof(scene::WeightBuffer::VertexWeights, weights)));
+		GL.EnableVertexAttribArray(EVA_WEIGHTS);
+		GL.VertexAttribIPointer(EVA_JOINT_IDS, 4,  GL_UNSIGNED_SHORT, stride,
+				reinterpret_cast<void *>(offsetof(scene::WeightBuffer::VertexWeights, joint_ids)));
+		GL.EnableVertexAttribArray(EVA_JOINT_IDS);
+		GL.BindBuffer(GL_ARRAY_BUFFER, 0);
+	}
+
 	const void *vertices = vb->getData();
 	if (hwvert) {
-		assert(hwvert->IsVertex);
 		assert(hwvert->Vbo.exists());
 		GL.BindBuffer(GL_ARRAY_BUFFER, hwvert->Vbo.getName());
 		vertices = nullptr;
@@ -629,7 +628,6 @@ void COpenGL3DriverBase::drawBuffers(const scene::IVertexBuffer *vb,
 
 	const void *indexList = ib->getData();
 	if (hwidx) {
-		assert(!hwidx->IsVertex);
 		assert(hwidx->Vbo.exists());
 		GL.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, hwidx->Vbo.getName());
 		indexList = nullptr;
@@ -638,6 +636,11 @@ void COpenGL3DriverBase::drawBuffers(const scene::IVertexBuffer *vb,
 	drawVertexPrimitiveList(vertices, vb->getCount(), indexList,
 		PrimitiveCount, vb->getType(), PrimitiveType, ib->getType());
 
+	if (hw_weights) {
+		GL.DisableVertexAttribArray(EVA_WEIGHTS);
+		GL.VertexAttrib4f(EVA_WEIGHTS, 0.0f, 0.0f, 0.0f, 0.0f);
+		GL.DisableVertexAttribArray(EVA_JOINT_IDS);
+	}
 	if (hwvert)
 		GL.BindBuffer(GL_ARRAY_BUFFER, 0);
 	if (hwidx)
@@ -1049,7 +1052,7 @@ void COpenGL3DriverBase::drawGeneric(const void *vertices, int vertexCount, cons
 	if (tempIBOBound) abort();
 	if (indexList && indexCount) {
 		while (tempIBO.size() <= tempIBOIndex)
-			tempIBO.emplace_back(GL_ELEMENT_ARRAY_BUFFER);
+			tempIBO.emplace_back(OGLBufferObject::TARGET_IBO);
 		tempIBO[tempIBOIndex].upload(reinterpret_cast<const void*>(indexList), indexWidth * indexCount, 0, GL_STREAM_DRAW);
 		GL.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, tempIBO[tempIBOIndex].getName());
 		tempIBOIndex += 1;
@@ -1101,7 +1104,7 @@ void COpenGL3DriverBase::beginDraw(const VertexType &vertexType, uintptr_t verti
 	if (verticesBase != 0) {
 		if (tempVBOBound) abort();
 		while (tempVBO.size() <= tempVBOIndex)
-			tempVBO.emplace_back(GL_ARRAY_BUFFER);
+			tempVBO.emplace_back(OGLBufferObject::TARGET_VBO);
 		tempVBO[tempVBOIndex].upload(reinterpret_cast<void*>(verticesBase), vertexCount * vertexType.VertexSize, 0, GL_STREAM_DRAW);
 		GL.BindBuffer(GL_ARRAY_BUFFER, tempVBO[tempVBOIndex].getName());
 		tempVBOIndex += 1;
@@ -1110,6 +1113,11 @@ void COpenGL3DriverBase::beginDraw(const VertexType &vertexType, uintptr_t verti
 	}
 #endif
 	for (auto &attr : vertexType) {
+		if (attr.mode == VertexAttribute::Mode::Integer && Version.Major < 3) {
+			// assume we know what we're doing and just skip if not supported
+			continue;
+		}
+
 		GL.EnableVertexAttribArray(attr.Index);
 		switch (attr.mode) {
 		case VertexAttribute::Mode::Regular:
@@ -1155,6 +1163,9 @@ void COpenGL3DriverBase::setMaterial(const SMaterial &material)
 {
 	Material = material;
 	OverrideMaterial.apply(Material);
+
+	if (!CacheHandler) // can be null during early cleanup
+		return;
 
 	for (u32 i = 0; i < Feature.MaxTextureUnits; ++i) {
 		auto *texture = material.getTexture(i);
@@ -1255,6 +1266,8 @@ void COpenGL3DriverBase::setRenderStates3DMode()
 		if (static_cast<u32>(Material.MaterialType) < MaterialRenderers.size())
 			MaterialRenderers[Material.MaterialType].Renderer->OnSetMaterial(
 					Material, LastMaterial, ResetRenderStates, this);
+		else
+			os::Printer::log("Attempt to render with invalid material", ELL_WARNING);
 
 		LastMaterial = Material;
 		CacheHandler->correctCacheMaterial(LastMaterial);
@@ -1639,12 +1652,6 @@ E_DRIVER_TYPE COpenGL3DriverBase::getDriverType() const
 	return EDT_OPENGL3;
 }
 
-//! returns color format
-ECOLOR_FORMAT COpenGL3DriverBase::getColorFormat() const
-{
-	return ColorFormat;
-}
-
 //! Get a vertex shader constant index.
 s32 COpenGL3DriverBase::getVertexShaderConstantID(const c8 *name)
 {
@@ -1769,10 +1776,14 @@ ITexture *COpenGL3DriverBase::addRenderTargetTextureCubemap(const u32 sideLen, c
 	return renderTargetTexture;
 }
 
-//! Returns the maximum amount of primitives
-u32 COpenGL3DriverBase::getMaximalPrimitiveCount() const
+SDriverLimits COpenGL3DriverBase::getLimits() const
 {
-	return Version.Spec == OpenGLSpec::ES ? 65535 : 0x7fffffff;
+	SDriverLimits ret;
+	ret.GLVersion = core::vector2di(Version.Major, Version.Minor);
+	ret.MaxPrimitiveCount = Version.Spec == OpenGLSpec::ES ? UINT16_MAX : INT32_MAX;
+	ret.MaxTextureSize = MaxTextureSize;
+	ret.MaxArrayTextureImages = MaxArrayTextureLayers;
+	return ret;
 }
 
 bool COpenGL3DriverBase::setRenderTargetEx(IRenderTarget *target, u16 clearFlag, SColor clearColor, f32 clearDepth, u8 clearStencil)
@@ -1785,8 +1796,10 @@ bool COpenGL3DriverBase::setRenderTargetEx(IRenderTarget *target, u16 clearFlag,
 	if (CurrentRenderTarget) {
 		// Update mip-map of the generated texture, if enabled.
 		auto textures = CurrentRenderTarget->getTexture();
-		for (size_t i = 0; i < textures.size(); ++i)
-			textures[i]->regenerateMipMapLevels();
+		for (size_t i = 0; i < textures.size(); ++i) {
+			if (textures[i])
+				textures[i]->regenerateMipMapLevels();
+		}
 	}
 
 	core::dimension2d<u32> destRenderTargetSize(0, 0);
@@ -1941,11 +1954,6 @@ void COpenGL3DriverBase::removeTexture(ITexture *texture)
 {
 	CacheHandler->getTextureCache().remove(texture);
 	CNullDriver::removeTexture(texture);
-}
-
-core::dimension2du COpenGL3DriverBase::getMaxTextureSize() const
-{
-	return core::dimension2du(MaxTextureSize, MaxTextureSize);
 }
 
 GLenum COpenGL3DriverBase::getGLBlend(E_BLEND_FACTOR factor) const

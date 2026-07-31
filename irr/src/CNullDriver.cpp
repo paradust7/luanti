@@ -3,6 +3,8 @@
 // For conditions of distribution and use, see copyright notice in irrlicht.h
 
 #include "CNullDriver.h"
+#include "IIndexBuffer.h"
+#include "IVertexBuffer.h"
 #include "IVideoDriver.h"
 #include "SMaterial.h"
 #include "os.h"
@@ -12,7 +14,7 @@
 #include "IImageLoader.h"
 #include "IImageWriter.h"
 #include "IMaterialRenderer.h"
-#include "IAnimatedMeshSceneNode.h"
+#include "AnimatedMeshSceneNode.h"
 #include "CMeshManipulator.h"
 #include "CColorConverter.h"
 #include "IReferenceCounted.h"
@@ -37,16 +39,6 @@ IImageWriter *createImageWriterJPG();
 
 //! creates a writer which is able to save png images
 IImageWriter *createImageWriterPNG();
-
-namespace
-{
-//! no-op material renderer
-class CDummyMaterialRenderer : public IMaterialRenderer
-{
-public:
-	CDummyMaterialRenderer() {}
-};
-}
 
 //! constructor
 CNullDriver::CNullDriver(io::IFileSystem *io, const core::dimension2d<u32> &screenSize) :
@@ -208,7 +200,6 @@ bool CNullDriver::beginScene(u16 clearFlag, SColor clearColor, f32 clearDepth, u
 
 bool CNullDriver::endScene()
 {
-	FPSCounter.registerFrame(os::Timer::getRealTime());
 	expireHardwareBuffers();
 	updateAllOcclusionQueries();
 	return true;
@@ -281,6 +272,8 @@ u32 CNullDriver::getTextureCount() const
 ITexture *CNullDriver::addTexture(const core::dimension2d<u32> &size, const io::path &name, ECOLOR_FORMAT format)
 {
 	IImage *image = new CImage(format, size);
+	// the image data will be uploaded, so zero it
+	memset(image->getData(), 0, image->getImageDataSizeInBytes());
 	ITexture *t = addTexture(name, image);
 	image->drop();
 	return t;
@@ -680,12 +673,6 @@ void CNullDriver::draw2DLine(const core::position2d<s32> &start,
 {
 }
 
-//! returns color format
-ECOLOR_FORMAT CNullDriver::getColorFormat() const
-{
-	return ECF_R5G6B5;
-}
-
 //! returns screen size
 const core::dimension2d<u32> &CNullDriver::getScreenSize() const
 {
@@ -706,13 +693,7 @@ const core::dimension2d<u32> &CNullDriver::getCurrentRenderTargetSize() const
 		return CurrentRenderTargetSize;
 }
 
-// returns current frames per second value
-s32 CNullDriver::getFPS() const
-{
-	return FPSCounter.getFPS();
-}
-
-SFrameStats CNullDriver::getFrameStats() const
+SFrameStats &CNullDriver::getFrameStats()
 {
 	return FrameStats;
 }
@@ -725,130 +706,18 @@ const char *CNullDriver::getName() const
 	return "Irrlicht NullDevice";
 }
 
-//! Creates a boolean alpha channel of the texture based of an color key.
-void CNullDriver::makeColorKeyTexture(video::ITexture *texture,
-		video::SColor color) const
+SDriverLimits CNullDriver::getLimits() const
 {
-	if (!texture)
-		return;
-
-	if (texture->getColorFormat() != ECF_A1R5G5B5 &&
-			texture->getColorFormat() != ECF_A8R8G8B8) {
-		os::Printer::log("Error: Unsupported texture color format for making color key channel.", ELL_ERROR);
-		return;
-	}
-
-	if (texture->getColorFormat() == ECF_A1R5G5B5) {
-		u16 *p = (u16 *)texture->lock();
-
-		if (!p) {
-			os::Printer::log("Could not lock texture for making color key channel.", ELL_ERROR);
-			return;
-		}
-
-		const core::dimension2d<u32> dim = texture->getSize();
-		const u32 pitch = texture->getPitch() / 2;
-
-		// color with alpha disabled (i.e. fully transparent)
-		const u16 refZeroAlpha = (0x7fff & color.toA1R5G5B5());
-
-		const u32 pixels = pitch * dim.Height;
-
-		for (u32 pixel = 0; pixel < pixels; ++pixel) {
-			// If the color matches the reference color, ignoring alphas,
-			// set the alpha to zero.
-			if (((*p) & 0x7fff) == refZeroAlpha)
-				(*p) = refZeroAlpha;
-
-			++p;
-		}
-
-		texture->unlock();
-	} else {
-		u32 *p = (u32 *)texture->lock();
-
-		if (!p) {
-			os::Printer::log("Could not lock texture for making color key channel.", ELL_ERROR);
-			return;
-		}
-
-		core::dimension2d<u32> dim = texture->getSize();
-		u32 pitch = texture->getPitch() / 4;
-
-		// color with alpha disabled (fully transparent)
-		const u32 refZeroAlpha = 0x00ffffff & color.color;
-
-		const u32 pixels = pitch * dim.Height;
-		for (u32 pixel = 0; pixel < pixels; ++pixel) {
-			// If the color matches the reference color, ignoring alphas,
-			// set the alpha to zero.
-			if (((*p) & 0x00ffffff) == refZeroAlpha)
-				(*p) = refZeroAlpha;
-
-			++p;
-		}
-
-		texture->unlock();
-	}
-	texture->regenerateMipMapLevels();
-}
-
-//! Creates an boolean alpha channel of the texture based of an color key position.
-void CNullDriver::makeColorKeyTexture(video::ITexture *texture,
-		core::position2d<s32> colorKeyPixelPos) const
-{
-	if (!texture)
-		return;
-
-	if (texture->getColorFormat() != ECF_A1R5G5B5 &&
-			texture->getColorFormat() != ECF_A8R8G8B8) {
-		os::Printer::log("Error: Unsupported texture color format for making color key channel.", ELL_ERROR);
-		return;
-	}
-
-	SColor colorKey;
-
-	if (texture->getColorFormat() == ECF_A1R5G5B5) {
-		u16 *p = (u16 *)texture->lock(ETLM_READ_ONLY);
-
-		if (!p) {
-			os::Printer::log("Could not lock texture for making color key channel.", ELL_ERROR);
-			return;
-		}
-
-		u32 pitch = texture->getPitch() / 2;
-
-		const u16 key16Bit = 0x7fff & p[colorKeyPixelPos.Y * pitch + colorKeyPixelPos.X];
-
-		colorKey = video::A1R5G5B5toA8R8G8B8(key16Bit);
-	} else {
-		u32 *p = (u32 *)texture->lock(ETLM_READ_ONLY);
-
-		if (!p) {
-			os::Printer::log("Could not lock texture for making color key channel.", ELL_ERROR);
-			return;
-		}
-
-		u32 pitch = texture->getPitch() / 4;
-		colorKey = 0x00ffffff & p[colorKeyPixelPos.Y * pitch + colorKeyPixelPos.X];
-	}
-
-	texture->unlock();
-	makeColorKeyTexture(texture, colorKey);
-}
-
-//! Returns the maximum amount of primitives (mostly vertices) which
-//! the device is able to render with one drawIndexedTriangleList
-//! call.
-u32 CNullDriver::getMaximalPrimitiveCount() const
-{
-	return 0xFFFFFFFF;
+	SDriverLimits ret;
+	ret.MaxPrimitiveCount = 0xFFFFFFFF;
+	ret.MaxTextureSize = 0x10000; // maybe large enough
+	return ret;
 }
 
 //! checks triangle count and print warning if wrong
 bool CNullDriver::checkPrimitiveCount(u32 prmCount) const
 {
-	const u32 m = getMaximalPrimitiveCount();
+	const u32 m = getLimits().MaxPrimitiveCount;
 
 	if (prmCount > m) {
 		char tmp[128];
@@ -1076,10 +945,8 @@ void CNullDriver::drawBuffers(const scene::IVertexBuffer *vb,
 	if (!vb || !ib)
 		return;
 
-	if (vb->getHWBuffer() || ib->getHWBuffer()) {
-		// subclass is supposed to override this if it supports hw buffers
-		assert(false);
-	}
+	// subclass is supposed to override this if it supports hw buffers
+	assert(!vb->Link && !ib->Link);
 
 	drawVertexPrimitiveList(vb->getData(), vb->getCount(), ib->getData(),
 		primCount, vb->getType(), pType, ib->getType());
@@ -1096,30 +963,16 @@ void CNullDriver::drawMeshBufferNormals(const scene::IMeshBuffer *mb, f32 length
 	}
 }
 
-CNullDriver::SHWBufferLink *CNullDriver::getBufferLink(const scene::IVertexBuffer *vb)
+CNullDriver::SHWBufferLink *CNullDriver::getBufferLink(const scene::HWBuffer *buf)
 {
-	if (!vb || !isHardwareBufferRecommend(vb))
-		return 0;
+	if (!buf || !isHardwareBufferRecommend(buf))
+		return nullptr;
 
 	// search for hardware links
-	SHWBufferLink *HWBuffer = reinterpret_cast<SHWBufferLink *>(vb->getHWBuffer());
-	if (HWBuffer)
-		return HWBuffer;
+	if (auto *link = reinterpret_cast<SHWBufferLink *>(buf->Link))
+		return link;
 
-	return createHardwareBuffer(vb); // no hardware links, and mesh wants one, create it
-}
-
-CNullDriver::SHWBufferLink *CNullDriver::getBufferLink(const scene::IIndexBuffer *ib)
-{
-	if (!ib || !isHardwareBufferRecommend(ib))
-		return 0;
-
-	// search for hardware links
-	SHWBufferLink *HWBuffer = reinterpret_cast<SHWBufferLink *>(ib->getHWBuffer());
-	if (HWBuffer)
-		return HWBuffer;
-
-	return createHardwareBuffer(ib); // no hardware links, and mesh wants one, create it
+	return createHardwareBuffer(buf);
 }
 
 void CNullDriver::registerHardwareBuffer(SHWBufferLink *HWBuffer)
@@ -1131,17 +984,18 @@ void CNullDriver::registerHardwareBuffer(SHWBufferLink *HWBuffer)
 
 void CNullDriver::expireHardwareBuffers()
 {
-	for (size_t i = 0; i < HWBufferList.size(); ) {
-		auto *Link = HWBufferList[i];
+	// 10 - 30s at usual framerates
+	constexpr u16 DELETE_AFTER_UNUSED_FRAMES = 60 * 25;
 
-		bool del;
-		if (Link->IsVertex)
-			del = !Link->VertexBuffer || Link->VertexBuffer->getReferenceCount() == 1;
-		else
-			del = !Link->IndexBuffer || Link->IndexBuffer->getReferenceCount() == 1;
+	for (size_t i = 0; i < HWBufferList.size(); ) {
+		auto *link = HWBufferList[i];
+
+		bool del = link->UnusedCounter++ >= DELETE_AFTER_UNUSED_FRAMES ||
+			!link->Buffer || link->Buffer->getReferenceCount() == 1;
+
 		// deleting can reorder, so don't advance in list
 		if (del)
-			deleteHardwareBuffer(Link);
+			deleteHardwareBuffer(link);
 		else
 			i++;
 	}
@@ -1166,40 +1020,20 @@ void CNullDriver::deleteHardwareBuffer(SHWBufferLink *HWBuffer)
 	delete HWBuffer;
 }
 
-void CNullDriver::updateHardwareBuffer(const scene::IVertexBuffer *vb)
+void CNullDriver::updateHardwareBuffer(const scene::HWBuffer *buf)
 {
-	if (!vb)
+	if (!buf)
 		return;
-	auto *link = getBufferLink(vb);
-	if (link)
+	if (auto *link = getBufferLink(buf))
 		updateHardwareBuffer(link);
 }
 
-void CNullDriver::updateHardwareBuffer(const scene::IIndexBuffer *ib)
+void CNullDriver::removeHardwareBuffer(const scene::HWBuffer *buf)
 {
-	if (!ib)
+	if (!buf)
 		return;
-	auto *link = getBufferLink(ib);
-	if (link)
-		updateHardwareBuffer(link);
-}
-
-void CNullDriver::removeHardwareBuffer(const scene::IVertexBuffer *vb)
-{
-	if (!vb)
-		return;
-	SHWBufferLink *HWBuffer = reinterpret_cast<SHWBufferLink *>(vb->getHWBuffer());
-	if (HWBuffer)
-		deleteHardwareBuffer(HWBuffer);
-}
-
-void CNullDriver::removeHardwareBuffer(const scene::IIndexBuffer *ib)
-{
-	if (!ib)
-		return;
-	SHWBufferLink *HWBuffer = reinterpret_cast<SHWBufferLink *>(ib->getHWBuffer());
-	if (HWBuffer)
-		deleteHardwareBuffer(HWBuffer);
+	if (auto *link = reinterpret_cast<SHWBufferLink *>(buf->Link))
+		deleteHardwareBuffer(link);
 }
 
 //! Remove all hardware buffers
@@ -1209,27 +1043,19 @@ void CNullDriver::removeAllHardwareBuffers()
 		deleteHardwareBuffer(HWBufferList.front());
 }
 
-bool CNullDriver::isHardwareBufferRecommend(const scene::IVertexBuffer *vb)
+bool CNullDriver::isHardwareBufferRecommend(const scene::HWBuffer *buf)
 {
-	if (!vb || vb->getHardwareMappingHint() == scene::EHM_NEVER)
+	if (buf->MappingHint == scene::EHM_NEVER)
 		return false;
 
-	if (vb->getCount() < MinVertexCountForVBO)
-		return false;
-
-	return true;
-}
-
-bool CNullDriver::isHardwareBufferRecommend(const scene::IIndexBuffer *ib)
-{
-	if (!ib || ib->getHardwareMappingHint() == scene::EHM_NEVER)
-		return false;
-
-	// This is a bit stupid
-	if (ib->getCount() < MinVertexCountForVBO * 3)
-		return false;
-
-	return true;
+	if (dynamic_cast<const scene::IVertexBuffer *>(buf)) {
+		return buf->getCount() >= MinVertexCountForVBO;
+	} else if (dynamic_cast<const scene::IIndexBuffer *>(buf)) {
+		// This is a bit stupid
+		return buf->getCount() >= 3 * MinVertexCountForVBO;
+	} else {
+		return true;
+	}
 }
 
 //! Create occlusion query.
@@ -1244,7 +1070,7 @@ void CNullDriver::addOcclusionQuery(scene::ISceneNode *node, const scene::IMesh 
 		else if (node->getType() == scene::ESNT_MESH)
 			mesh = static_cast<scene::IMeshSceneNode *>(node)->getMesh();
 		else
-			mesh = static_cast<scene::IAnimatedMeshSceneNode *>(node)->getMesh();
+			mesh = static_cast<scene::AnimatedMeshSceneNode *>(node)->getMesh();
 		if (!mesh)
 			return;
 	}
@@ -1427,15 +1253,6 @@ s32 CNullDriver::addMaterialRenderer(IMaterialRenderer *renderer, const char *na
 	return MaterialRenderers.size() - 1;
 }
 
-//! Sets the name of a material renderer.
-void CNullDriver::setMaterialRendererName(u32 idx, const char *name)
-{
-	if (idx < numBuiltInMaterials || idx >= MaterialRenderers.size())
-		return;
-
-	MaterialRenderers[idx].Name = name;
-}
-
 void CNullDriver::swapMaterialRenderers(u32 idx1, u32 idx2, bool swapNames)
 {
 	if (idx1 < MaterialRenderers.size() && idx2 < MaterialRenderers.size()) {
@@ -1481,15 +1298,6 @@ IMaterialRenderer *CNullDriver::getMaterialRenderer(u32 idx) const
 u32 CNullDriver::getMaterialRendererCount() const
 {
 	return MaterialRenderers.size();
-}
-
-//! Returns name of the material renderer
-const char *CNullDriver::getMaterialRendererName(u32 idx) const
-{
-	if (idx < MaterialRenderers.size())
-		return MaterialRenderers[idx].Name.c_str();
-
-	return 0;
 }
 
 //! Returns pointer to the IGPUProgrammingServices interface.
@@ -1648,7 +1456,7 @@ void CNullDriver::deleteShaderMaterial(s32 material)
 	auto &ref = MaterialRenderers[idx];
 	if (ref.Renderer)
 		ref.Renderer->drop();
-	ref.Renderer = new CDummyMaterialRenderer();
+	ref.Renderer = new IMaterialRenderer();
 	ref.Name.clear();
 }
 
@@ -1730,11 +1538,6 @@ SMaterial &CNullDriver::getMaterial2D()
 void CNullDriver::enableMaterial2D(bool enable)
 {
 	OverrideMaterial2DEnabled = enable;
-}
-
-core::dimension2du CNullDriver::getMaxTextureSize() const
-{
-	return core::dimension2du(0x10000, 0x10000); // maybe large enough
 }
 
 bool CNullDriver::needsTransparentRenderPass(const video::SMaterial &material) const

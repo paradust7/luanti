@@ -2,58 +2,78 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 // Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
-#include <iostream>
-#include <algorithm>
-#include <sstream>
-#include <cmath>
-#include <IFileSystem.h>
-#include <json/json.h>
 #include "client.h"
-#include "client/fontengine.h"
-#include "network/clientopcodes.h"
-#include "network/connection.h"
-#include "network/networkpacket.h"
-#include "threading/mutex_auto_lock.h"
+
+#include "chatmessage.h"
 #include "client/clientevent.h"
+#include "clientdynamicinfo.h"
+#include "client/fontengine.h"
+#include "client/localplayer.h"
+#include "clientmap.h"
+#include "clientmedia.h"
+#include "client/mesh_generator_thread.h"
+#include "client/particles.h"
 #include "client/renderingengine.h"
 #include "client/sound.h"
 #include "client/texturepaths.h"
 #include "client/texturesource.h"
-#include "client/mesh_generator_thread.h"
-#include "client/particles.h"
-#include "client/localplayer.h"
-#include "util/auth.h"
-#include "util/directiontables.h"
-#include "util/pointedthing.h"
-#include "util/serialize.h"
-#include "util/string.h"
-#include "util/srp.h"
+#include "camera.h"
 #include "filesys.h"
-#include "mapblock_mesh.h"
-#include "mapblock.h"
-#include "mapsector.h"
-#include "minimap.h"
-#include "modchannels.h"
-#include "content/mods.h"
-#include "profiler.h"
-#include "shader.h"
+#include "game.h"
 #include "gettext.h"
 #include "gettime.h"
-#include "clientdynamicinfo.h"
-#include "clientmap.h"
-#include "clientmedia.h"
+#include "guiscalingfilter.h"
+#include "item_visuals_manager.h"
+#include "itemdef.h"
+#include "mapblock.h"
+#include "mapblock_mesh.h"
+#include "mapnode.h"
+#include "mapsector.h"
+#include "minimap.h"
+#include "node_visuals.h"
+#include "profiler.h"
+#include "shader.h"
+#include "translation.h"
+#include "util/auth.h"
+#include "util/pointedthing.h"
+#include "util/screenshot.h"
+#include "util/serialize.h"
+#include "util/srp.h"
+#include "util/string.h"
 #include "version.h"
+
+// CPCSM
+#include "content/mod_configuration.h"
+#include "content/mods.h"
+#include "modchannels.h"
+#include "script/common/c_types.h" // LuaError
+#include "script/scripting_client.h"
+
+// SSCSM
+#include "client/mod_vfs.h"
+#include "script/sscsm/sscsm_controller.h"
+#include "script/sscsm/sscsm_events.h"
+
+// Network
+#include "network/clientopcodes.h"
+#include "network/connection.h"
+#include "network/networkexceptions.h"
+#include "network/networkpacket.h"
+#include "serialization.h"
+
+// Database
 #include "database/database-files.h"
 #include "database/database-sqlite3.h"
-#include "serialization.h"
-#include "guiscalingfilter.h"
-#include "script/scripting_client.h"
-#include "game.h"
-#include "chatmessage.h"
-#include "translation.h"
-#include "content/mod_configuration.h"
-#include "mapnode.h"
-#include "item_visuals_manager.h"
+
+#include <IAnimatedMesh.h>
+#include <IFileSystem.h>
+#include <IReadFile.h>
+#include <json/json.h>
+
+#include <iostream>
+#include <algorithm>
+#include <sstream>
+#include <cmath>
 
 extern gui::IGUIEnvironment* guienv;
 
@@ -79,6 +99,25 @@ void PacketCounter::print(std::ostream &o) const
 		o << "cmd " << it.first << " (" << name << ") count "
 			<< it.second << std::endl;
 	}
+}
+
+[[maybe_unused]]
+static void enrich_exception(BaseException &e, const NetworkPacket &pkt, bool include_pos)
+{
+	const u16 cmd = pkt.getCommand();
+	std::ostringstream oss;
+	if (cmd < TOCLIENT_NUM_MSG_TYPES)
+		oss << " name=" << toClientCommandTable[cmd].name;
+
+	if (include_pos) {
+		// (not necessary for PacketError: already in e.what())
+
+		oss << " cmd=" << cmd
+			<< " offset=" << pkt.getOffset()
+			<< " size=" << pkt.getSize();
+	}
+
+	e.append(" @").append(oss.str());
 }
 
 /*
@@ -136,6 +175,62 @@ Client::Client(
 
 	m_cache_save_interval = g_settings->getU16("server_map_save_interval");
 	m_mesh_grid = { g_settings->getU16("client_mesh_chunk") };
+
+	m_sscsm_controller = SSCSMController::create();
+
+	{
+		auto event1 = std::make_unique<SSCSMEventUpdateVFSFiles>();
+
+		ModVFS tmp_mod_vfs;
+		// FIXME: only read files that are relevant to sscsm, and compute sha2 digests
+		tmp_mod_vfs.scanModIntoMemory("*client_builtin*", getBuiltinLuaPath());
+
+		for (auto &p : tmp_mod_vfs.m_vfs) {
+			event1->files.emplace_back(p.first, std::move(p.second));
+		}
+
+		m_sscsm_controller->runEvent(this, std::move(event1));
+
+		// load client builtin immediately
+		auto event2 = std::make_unique<SSCSMEventLoadMods>();
+		event2->mods.emplace_back("*client_builtin*", "*client_builtin*:init.lua");
+		m_sscsm_controller->runEvent(this, std::move(event2));
+	}
+
+	{
+		//FIXME: network packets
+		//FIXME: check that *client_builtin* is not overridden
+
+		std::string enable_sscsm = g_settings->get("enable_sscsm");
+		if (enable_sscsm == "singleplayer") { //FIXME: enum
+			auto event1 = std::make_unique<SSCSMEventUpdateVFSFiles>();
+
+			// some simple test code
+			event1->files.emplace_back("sscsm_test0:init.lua",
+					R"=+=(
+print("sscsm_test0: loading")
+
+--print(dump(_G))
+--print(debug.traceback())
+
+do
+	local pos = vector.zero()
+	local function print_nodes()
+		print(string.format("node at %s: %s", pos, dump(core.get_node_or_nil(pos))))
+		pos = pos:offset(1, 0, 0)
+		core.after(1, print_nodes)
+	end
+	core.after(0, print_nodes)
+end
+					)=+=");
+
+			m_sscsm_controller->runEvent(this, std::move(event1));
+
+			auto event2 = std::make_unique<SSCSMEventLoadMods>();
+			event2->mods.emplace_back("sscsm_test0", "sscsm_test0:init.lua");
+			m_sscsm_controller->runEvent(this, std::move(event2));
+		}
+	}
 }
 
 void Client::migrateModStorage()
@@ -183,12 +278,14 @@ void Client::loadMods()
 		return;
 	}
 
+	m_mod_vfs = std::make_unique<ModVFS>();
+
 	m_script = new ClientScripting(this);
 	m_env.setScript(m_script);
 	m_script->setEnv(&m_env);
 
 	// Load builtin
-	scanModIntoMemory(BUILTIN_MOD_NAME, getBuiltinLuaPath());
+	m_mod_vfs->scanModIntoMemory(BUILTIN_MOD_NAME, getBuiltinLuaPath());
 	m_script->loadModFromMemory(BUILTIN_MOD_NAME);
 	m_script->checkSetByBuiltin();
 
@@ -227,7 +324,7 @@ void Client::loadMods()
 	// Load "mod" scripts
 	for (const ModSpec &mod : m_mods) {
 		mod.checkAndLog();
-		scanModIntoMemory(mod.name, mod.path);
+		m_mod_vfs->scanModIntoMemory(mod.name, mod.path);
 	}
 
 	// Run them
@@ -247,35 +344,6 @@ void Client::loadMods()
 		m_script->on_camera_ready(m_camera);
 	if (m_minimap)
 		m_script->on_minimap_ready(m_minimap.get());
-}
-
-void Client::scanModSubfolder(const std::string &mod_name, const std::string &mod_path,
-			std::string mod_subpath)
-{
-	std::string full_path = mod_path + DIR_DELIM + mod_subpath;
-	std::vector<fs::DirListNode> mod = fs::GetDirListing(full_path);
-	for (const fs::DirListNode &j : mod) {
-		if (j.name[0] == '.')
-			continue;
-
-		if (j.dir) {
-			scanModSubfolder(mod_name, mod_path, mod_subpath + j.name + DIR_DELIM);
-			continue;
-		}
-		std::replace(mod_subpath.begin(), mod_subpath.end(), DIR_DELIM_CHAR, '/');
-
-		std::string real_path = full_path + j.name;
-		std::string vfs_path = mod_name + ":" + mod_subpath + j.name;
-		infostream << "Client::scanModSubfolder(): Loading \"" << real_path
-				<< "\" as \"" << vfs_path << "\"." << std::endl;
-
-		std::string contents;
-		if (!fs::ReadFile(real_path, contents, true)) {
-			continue;
-		}
-
-		m_mod_vfs.emplace(vfs_path, contents);
-	}
 }
 
 const std::string &Client::getBuiltinLuaPath()
@@ -334,14 +402,7 @@ Client::~Client()
 
 	m_mesh_update_manager->stop();
 	m_mesh_update_manager->wait();
-
-	MeshUpdateResult r;
-	while (m_mesh_update_manager->getNextResult(r)) {
-		for (auto block : r.map_blocks)
-			if (block)
-				block->refDrop();
-		delete r.mesh;
-	}
+	m_mesh_update_manager->clearAllQueues(true);
 
 	// Delete detached inventories
 	for (auto &m_detached_inventorie : m_detached_inventories) {
@@ -523,6 +584,12 @@ void Client::step(float dtime)
 	*/
 	LocalPlayer *player = m_env.getLocalPlayer();
 
+	{
+		auto event = std::make_unique<SSCSMEventOnStep>();
+		event->dtime = dtime;
+		m_sscsm_controller->runEvent(this, std::move(event));
+	}
+
 	// Step environment (also handles player controls)
 	m_env.step(dtime);
 	m_sound->step(dtime);
@@ -566,9 +633,8 @@ void Client::step(float dtime)
 	{
 		float &counter = m_playerpos_send_timer;
 		counter += dtime;
-		if((m_state == LC_Ready) && (counter >= m_recommended_send_interval))
-		{
-			counter = 0.0;
+		if (m_state == LC_Ready && counter >= m_recommended_send_interval) {
+			counter = 0;
 			sendPlayerPos();
 		}
 	}
@@ -612,17 +678,13 @@ void Client::step(float dtime)
 					if (minimap_mapblocks.empty())
 						do_mapper_update = false;
 
-					if (r.mesh->isEmpty()) {
-						delete r.mesh;
-					} else {
+					if (!r.mesh->isEmpty()) {
 						// Replace with the new mesh
-						block->mesh = r.mesh;
+						block->mesh = r.mesh.release();
 						if (r.urgent)
 							force_update_shadows = true;
 					}
 				}
-			} else {
-				delete r.mesh;
 			}
 
 			if (m_minimap && do_mapper_update) {
@@ -680,23 +742,25 @@ void Client::step(float dtime)
 		std::vector<u32> done;
 		for (auto it = m_pending_media_downloads.begin();
 				it != m_pending_media_downloads.end();) {
-			assert(it->second->isStarted());
-			it->second->step(this);
-			if (it->second->isDone()) {
-				done.emplace_back(it->first);
+			assert(it->d->isStarted());
+			it->d->step(this);
+			if (it->d->isDone()) {
+				done.insert(done.end(), it->tokens.begin(), it->tokens.end());
 
 				it = m_pending_media_downloads.erase(it);
 			} else {
 				it++;
 			}
-
-			if (done.size() == 255) { // maximum in one packet
-				sendHaveMedia(done);
-				done.clear();
-			}
 		}
-		if (!done.empty())
-			sendHaveMedia(done);
+		while (!done.empty()) {
+			// this looks stupid, but is a simple and correct way to chunk them
+			std::vector<u32> part;
+			while (!done.empty() && part.size() < 255) {
+				part.push_back(done.back());
+				done.pop_back();
+			}
+			sendHaveMedia(part);
+		}
 	}
 
 	/*
@@ -970,6 +1034,14 @@ void Client::ReceiveAll()
 			infostream << "Client::ReceiveAll(): "
 					"InvalidIncomingDataException: what()="
 					 << e.what() << std::endl;
+#ifdef NDEBUG
+		} catch (SerializationError &e) {
+			enrich_exception(e, pkt, true);
+			throw;
+		} catch (PacketError &e) {
+			enrich_exception(e, pkt, false);
+			throw;
+#endif
 		}
 	}
 }
@@ -1403,7 +1475,7 @@ void Client::sendPlayerPos()
 	f32 movement_speed = player->control.movement_speed;
 	f32 movement_dir = player->control.movement_direction;
 
-	if (
+	bool identical = (
 			player->last_position        == player->getPosition() &&
 			player->last_speed           == player->getSpeed()    &&
 			player->last_pitch           == player->getPitch()    &&
@@ -1413,8 +1485,19 @@ void Client::sendPlayerPos()
 			player->last_camera_inverted == camera_inverted       &&
 			player->last_wanted_range    == wanted_range          &&
 			player->last_movement_speed  == movement_speed        &&
-			player->last_movement_dir    == movement_dir)
-		return;
+			player->last_movement_dir    == movement_dir);
+
+	if (identical) {
+		// Since the movement info is sent non-reliable an unfortunate desync might
+		// occur if we stop sending and the last packet gets lost or re-ordered.
+		// To make this situation less likely we stop sending duplicate packets
+		// only after a delay.
+		m_playerpos_repeat_count++;
+		if (m_playerpos_repeat_count >= 5)
+			return;
+	} else {
+		m_playerpos_repeat_count = 0;
+	}
 
 	player->last_position        = player->getPosition();
 	player->last_speed           = player->getSpeed();
@@ -1570,6 +1653,13 @@ bool Client::updateWieldedItem()
 		list->setModified(false);
 
 	return true;
+}
+
+bool Client::consumeSkipNextWieldAnimation()
+{
+	bool v = m_skip_next_wield_animation;
+	m_skip_next_wield_animation = false;
+	return v;
 }
 
 scene::ISceneManager* Client::getSceneManager()
@@ -1765,6 +1855,11 @@ ClientEvent *Client::getClientEvent()
 	return event;
 }
 
+void Client::setFatalError(const LuaError &e)
+{
+	setFatalError(std::string("Lua: ") + e.what());
+}
+
 const Address Client::getServerAddress()
 {
 	return m_con ? m_con->GetPeerAddress(PEER_ID_SERVER) : Address();
@@ -1775,44 +1870,42 @@ float Client::mediaReceiveProgress()
 	if (m_media_downloader)
 		return m_media_downloader->getProgress();
 
-	return 1.0; // downloader only exists when not yet done
+	return 1.0f; // downloader only exists when not yet done
 }
 
-void Client::drawLoadScreen(const std::wstring &text, float dtime, int percent) {
+void Client::drawLoadScreen(const std::wstring &text, float dtime, int percent)
+{
 	m_rendering_engine->run();
 	m_rendering_engine->draw_load_screen(text, guienv, m_tsrc, dtime, percent);
 }
 
 struct TextureUpdateArgs {
-	gui::IGUIEnvironment *guienv;
 	u64 last_time_ms;
-	u16 last_percent;
 	std::wstring text_base;
-	ITextureSource *tsrc;
 };
 
-void Client::showUpdateProgressTexture(void *args, u32 progress, u32 max_progress)
+void Client::showUpdateProgressTexture(void *args, float progress)
 {
-		TextureUpdateArgs* targs = (TextureUpdateArgs*) args;
-		u16 cur_percent = std::ceil(progress / max_progress * 100.f);
+	auto *targs = reinterpret_cast<TextureUpdateArgs*>(args);
+	u16 cur_percent = std::ceil(100 * progress);
 
-		// update the loading menu -- if necessary
-		bool do_draw = false;
-		u64 time_ms = targs->last_time_ms;
-		if (cur_percent != targs->last_percent) {
-			targs->last_percent = cur_percent;
-			time_ms = porting::getTimeMs();
-			// only draw when the user will notice something:
-			do_draw = (time_ms - targs->last_time_ms > 100);
-		}
+	// Throttle menu drawing
+	bool do_draw = false;
+	u64 time_ms = porting::getTimeMs();
+	if (time_ms - targs->last_time_ms > 50) {
+		do_draw = true;
+		targs->last_time_ms = time_ms;
+	}
 
-		if (do_draw) {
-			targs->last_time_ms = time_ms;
-			std::wostringstream strm;
-			strm << targs->text_base << L" " << targs->last_percent << L"%...";
-			m_rendering_engine->draw_load_screen(strm.str(), targs->guienv, targs->tsrc, 0,
-				72 + (u16) ((18. / 100.) * (double) targs->last_percent));
-		}
+	if (!do_draw)
+		return;
+
+	std::wostringstream strm;
+	strm << targs->text_base << L" " << cur_percent << L"%...";
+	// 70% -> 99%
+	int shown_progress = 70 + std::ceil(0.29f * cur_percent);
+	m_rendering_engine->draw_load_screen(strm.str(), guienv, m_tsrc,
+		0, shown_progress);
 }
 
 void Client::afterContentReceived()
@@ -1830,19 +1923,19 @@ void Client::afterContentReceived()
 	// Rebuild inherited images and recreate textures
 	infostream<<"- Rebuilding images and textures"<<std::endl;
 	m_rendering_engine->draw_load_screen(wstrgettext("Loading textures..."),
-			guienv, m_tsrc, 0, 70);
+			guienv, m_tsrc, 0, 66);
 	m_tsrc->rebuildImagesAndTextures();
 
 	// Rebuild shaders
 	infostream<<"- Rebuilding shaders"<<std::endl;
 	m_rendering_engine->draw_load_screen(wstrgettext("Rebuilding shaders..."),
-			guienv, m_tsrc, 0, 71);
+			guienv, m_tsrc, 0, 68);
 	m_shsrc->rebuildShaders();
 
 	// Update node aliases
 	infostream<<"- Updating node aliases"<<std::endl;
 	m_rendering_engine->draw_load_screen(wstrgettext("Initializing nodes..."),
-			guienv, m_tsrc, 0, 72);
+			guienv, m_tsrc, 0, 70);
 	m_nodedef->updateAliases(m_itemdef);
 	for (const auto &path : getTextureDirs()) {
 		TextureOverrideSource override_source(path + DIR_DELIM + "override.txt");
@@ -1855,12 +1948,9 @@ void Client::afterContentReceived()
 	// Update node textures and assign shaders to each tile
 	infostream<<"- Updating node textures"<<std::endl;
 	TextureUpdateArgs tu_args;
-	tu_args.guienv = guienv;
 	tu_args.last_time_ms = porting::getTimeMs();
-	tu_args.last_percent = 0;
 	tu_args.text_base = wstrgettext("Initializing nodes");
-	tu_args.tsrc = m_tsrc;
-	m_nodedef->updateTextures(this, &tu_args);
+	NodeVisuals::fillNodeVisuals(m_nodedef, this, &tu_args);
 
 	// Start mesh update thread after setting up content definitions
 	infostream<<"- Starting mesh update thread"<<std::endl;
@@ -1892,69 +1982,12 @@ float Client::getCurRate()
 void Client::makeScreenshot()
 {
 	video::IVideoDriver *driver = m_rendering_engine->get_video_driver();
-	video::IImage* const raw_image = driver->createScreenShot();
-
-	if (!raw_image) {
-		errorstream << "Could not take screenshot" << std::endl;
-		return;
-	}
-
-	const struct tm tm = mt_localtime();
-
-	char timestamp_c[64];
-	strftime(timestamp_c, sizeof(timestamp_c), "%Y%m%d_%H%M%S", &tm);
-
-	std::string screenshot_dir = g_settings->get("screenshot_path");
-	if (!fs::IsPathAbsolute(screenshot_dir))
-		screenshot_dir = porting::path_user + DIR_DELIM + screenshot_dir;
-
-	std::string filename_base = screenshot_dir
-			+ DIR_DELIM
-			+ std::string("screenshot_")
-			+ timestamp_c;
-	std::string filename_ext = "." + g_settings->get("screenshot_format");
-
-	// Create the directory if it doesn't already exist.
-	// Otherwise, saving the screenshot would fail.
-	fs::CreateAllDirs(screenshot_dir);
-
-	u32 quality = (u32)g_settings->getS32("screenshot_quality");
-	quality = rangelim(quality, 0, 100) / 100.0f * 255;
-
-	// Try to find a unique filename
 	std::string filename;
-	unsigned serial = 0;
-
-	while (serial < SCREENSHOT_MAX_SERIAL_TRIES) {
-		filename = filename_base + (serial > 0 ? ("_" + itos(serial)) : "") + filename_ext;
-		if (!fs::PathExists(filename))
-			break;	// File did not apparently exist, we'll go with it
-		serial++;
+	if (takeScreenshot(driver, filename)) {
+		std::string msg = fmtgettext("Saved screenshot to \"%s\"", filename.c_str());
+		pushToChatQueue(new ChatMessage(CHATMESSAGE_TYPE_SYSTEM,
+				utf8_to_wide(msg)));
 	}
-
-	if (serial == SCREENSHOT_MAX_SERIAL_TRIES) {
-		errorstream << "Could not find suitable filename for screenshot" << std::endl;
-	} else {
-		video::IImage* const image =
-				driver->createImage(video::ECF_R8G8B8, raw_image->getDimension());
-
-		if (image) {
-			raw_image->copyTo(image);
-
-			std::string msg;
-			if (driver->writeImageToFile(image, filename.c_str(), quality)) {
-				msg = fmtgettext("Saved screenshot to \"%s\"", filename.c_str());
-			} else {
-				msg = fmtgettext("Failed to save screenshot to \"%s\"", filename.c_str());
-			}
-			pushToChatQueue(new ChatMessage(CHATMESSAGE_TYPE_SYSTEM,
-					utf8_to_wide(msg)));
-			infostream << msg << std::endl;
-			image->drop();
-		}
-	}
-
-	raw_image->drop();
 }
 
 void Client::pushToEventQueue(ClientEvent *event)
@@ -2032,23 +2065,6 @@ scene::IAnimatedMesh* Client::getMesh(const std::string &filename, bool cache)
 	if (!cache)
 		m_rendering_engine->removeMesh(mesh);
 	return mesh;
-}
-
-const std::string* Client::getModFile(std::string filename)
-{
-	// strip dir delimiter from beginning of path
-	auto pos = filename.find_first_of(':');
-	if (pos == std::string::npos)
-		return nullptr;
-	pos++;
-	auto pos2 = filename.find_first_not_of('/', pos);
-	if (pos2 > pos)
-		filename.erase(pos, pos2 - pos);
-
-	StringMap::const_iterator it = m_mod_vfs.find(filename);
-	if (it == m_mod_vfs.end())
-		return nullptr;
-	return &it->second;
 }
 
 /*

@@ -67,15 +67,18 @@ set(client_SRCS
 	${CMAKE_CURRENT_SOURCE_DIR}/mesh.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/mesh_generator_thread.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/minimap.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/node_visuals.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/particles.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/renderingengine.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/shader.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/sky.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/sound_maker.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/tile.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/texturepaths.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/texturesource.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/imagesource.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/wieldmesh.cpp
+	${CMAKE_CURRENT_SOURCE_DIR}/mod_vfs.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/shadows/dynamicshadows.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/shadows/dynamicshadowsrender.cpp
 	${CMAKE_CURRENT_SOURCE_DIR}/shadows/shadowsshadercallbacks.cpp

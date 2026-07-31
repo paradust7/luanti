@@ -6,13 +6,13 @@
 
 #pragma once
 
+#include "HWBuffer.h"
 #include "SIrrCreationParameters.h"
 #include "Common.h"
-#include "VBO.h"
+#include "BufferObject.h"
 #include "CNullDriver.h"
 #include "IMaterialRendererServices.h"
 #include "EDriverFeatures.h"
-#include "fast_atof.h"
 #include "ExtensionHandler.h"
 #include "IContextManager.h"
 
@@ -44,23 +44,21 @@ public:
 
 	struct SHWBufferLink_opengl : public SHWBufferLink
 	{
-		SHWBufferLink_opengl(const scene::IVertexBuffer *vb) : SHWBufferLink(vb), Vbo(GL_ARRAY_BUFFER) {}
-		SHWBufferLink_opengl(const scene::IIndexBuffer *ib) : SHWBufferLink(ib), Vbo(GL_ELEMENT_ARRAY_BUFFER) {}
+		SHWBufferLink_opengl(const scene::HWBuffer *buf) : SHWBufferLink(buf),
+		Vbo(buf->getBufferType() == scene::HWBuffer::Type::INDEX ?
+			OGLBufferObject::TARGET_IBO :
+			OGLBufferObject::TARGET_VBO)
+		{}
 
-		OpenGLVBO Vbo;
+		OGLBufferObject Vbo;
 	};
 
-	bool updateVertexHardwareBuffer(SHWBufferLink_opengl *HWBuffer);
-	bool updateIndexHardwareBuffer(SHWBufferLink_opengl *HWBuffer);
+	bool _updateHardwareBuffer(SHWBufferLink_opengl *HWBuffer);
 
 	//! updates hardware buffer if needed
 	bool updateHardwareBuffer(SHWBufferLink *HWBuffer) override;
 
-	//! Create hardware buffer from vertex buffer
-	SHWBufferLink *createHardwareBuffer(const scene::IVertexBuffer *vb) override;
-
-	//! Create hardware buffer from index buffer
-	SHWBufferLink *createHardwareBuffer(const scene::IIndexBuffer *ib) override;
+	SHWBufferLink *createHardwareBuffer(const scene::HWBuffer *buf) override;
 
 	//! Delete hardware buffer (only some drivers can)
 	void deleteHardwareBuffer(SHWBufferLink *HWBuffer) override;
@@ -135,9 +133,6 @@ public:
 	//! Returns the name of the video driver.
 	const char *getName() const override;
 
-	//! Returns the maximum texture size supported.
-	core::dimension2du getMaxTextureSize() const override;
-
 	//! sets a viewport
 	void setViewPort(const core::rect<s32> &area) override;
 
@@ -146,9 +141,6 @@ public:
 
 	//! Returns type of video driver
 	E_DRIVER_TYPE getDriverType() const override;
-
-	//! get color format of the current color buffer
-	ECOLOR_FORMAT getColorFormat() const override;
 
 	//! Returns the transformation set by setTransform
 	const core::matrix4 &getTransform(E_TRANSFORMATION_STATE state) const override;
@@ -202,8 +194,7 @@ public:
 	//! Returns a pointer to the IVideoDriver interface.
 	IVideoDriver *getVideoDriver() override;
 
-	//! Returns the maximum amount of primitives
-	u32 getMaximalPrimitiveCount() const override;
+	SDriverLimits getLimits() const override;
 
 	virtual ITexture *addRenderTargetTexture(const core::dimension2d<u32> &size,
 			const io::path &name, const ECOLOR_FORMAT format = ECF_UNKNOWN) override;
@@ -291,7 +282,7 @@ protected:
 		LockRenderStateMode = false;
 	}
 
-	bool uploadHardwareBuffer(OpenGLVBO &vbo, const void *buffer, size_t bufferSize, scene::E_HARDWARE_MAPPING hint);
+	bool uploadHardwareBuffer(OGLBufferObject &vbo, const void *buffer, size_t bufferSize, scene::E_HARDWARE_MAPPING hint);
 
 	void createMaterialRenderers();
 
@@ -302,10 +293,15 @@ protected:
 	//! Same as `CacheHandler->setViewport`, but also sets `ViewPort`
 	virtual void setViewPortRaw(u32 width, u32 height);
 
+	virtual u16 getMaxJointTransforms() const override
+	{
+		return MaxJointTransforms;
+	}
+	virtual void setJointTransforms(const std::vector<core::matrix4> &jointMatrices) override;
+
 	void drawQuad(const VertexType &vertexType, const S3DVertex (&vertices)[4]);
 	void drawArrays(GLenum primitiveType, const VertexType &vertexType, const void *vertices, int vertexCount);
 	void drawElements(GLenum primitiveType, const VertexType &vertexType, const void *vertices, int vertexCount, const u16 *indices, int indexCount);
-	void drawElements(GLenum primitiveType, const VertexType &vertexType, uintptr_t vertices, uintptr_t indices, int indexCount);
 
 	void drawGeneric(const void *vertices, int vertexCount, const void *indexList, u32 primitiveCount,
 		E_VERTEX_TYPE vType, scene::E_PRIMITIVE_TYPE pType, E_INDEX_TYPE iType);
@@ -313,11 +309,11 @@ protected:
 	void beginDraw(const VertexType &vertexType, uintptr_t verticesBase, int vertexCount);
 	void endDraw(const VertexType &vertexType);
 
-	std::vector<OpenGLVBO> tempVBO;
+	std::vector<OGLBufferObject> tempVBO;
 	size_t tempVBOIndex;
 	bool tempVBOBound;
 
-	std::vector<OpenGLVBO> tempIBO;
+	std::vector<OGLBufferObject> tempIBO;
 	size_t tempIBOIndex;
 	bool tempIBOBound;
 
@@ -363,17 +359,18 @@ private:
 
 	SMaterial Material, LastMaterial;
 
-	//! Color buffer format
-	ECOLOR_FORMAT ColorFormat;
-
 	IContextManager *ContextManager;
 
 	void printTextureFormats();
 
 	bool EnableErrorTest;
 
-	OpenGLVBO QuadIndexVBO;
+	OGLBufferObject QuadIndexVBO = OGLBufferObject(OGLBufferObject::TARGET_IBO);
 	void initQuadsIndices(u32 max_vertex_count = 65536);
+
+	u16 MaxJointTransforms = 0;
+	void initMaxJointTransforms();
+	OGLBufferObject JointTransformsUBO = OGLBufferObject(OGLBufferObject::TARGET_UBO);
 
 	void debugCb(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar *message);
 	static void APIENTRY debugCb(GLenum source, GLenum type, GLuint id, GLenum severity, GLsizei length, const GLchar *message, const void *userParam);

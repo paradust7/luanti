@@ -51,6 +51,10 @@ core.features = {
 	on_timer_four_args = true,
 	particlespawner_exclude_player = true,
 	generate_decorations_biomes = true,
+	chunksize_vector = true,
+	item_inventory_image_animation = true,
+	get_modnames_load_order = true,
+	set_camera_resettable = true,
 }
 
 function core.has_feature(arg)

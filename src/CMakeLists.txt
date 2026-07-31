@@ -3,6 +3,7 @@ project(luanti)
 INCLUDE(CheckTypeSize)
 INCLUDE(CheckIncludeFiles)
 INCLUDE(CheckLibraryExists)
+INCLUDE(CheckCXXCompilerFlag)
 
 check_type_size(int SIZEOF_INT BUILTIN_TYPES_ONLY LANGUAGE CXX)
 if(SIZEOF_INT LESS 4)
@@ -67,7 +68,7 @@ if(PRECOMPILE_HEADERS)
 endif()
 
 
-option(ENABLE_CURL "Enable cURL support for fetching media" TRUE)
+option(ENABLE_CURL "Enable cURL support" TRUE)
 set(USE_CURL FALSE)
 
 if(ENABLE_CURL)
@@ -82,10 +83,10 @@ endif()
 
 if(NOT USE_CURL)
 	if(BUILD_CLIENT)
-		message(WARNING "cURL is required to load the server list")
+		message(WARNING "cURL is required to use the server list, content browser or update checker")
 	endif()
 	if(BUILD_SERVER)
-		message(WARNING "cURL is required to announce to the server list")
+		message(WARNING "cURL is required to announce to the server list or use the HTTP API")
 	endif()
 endif()
 
@@ -137,7 +138,7 @@ if(BUILD_CLIENT)
 	find_package(Freetype REQUIRED)
 endif()
 
-option(ENABLE_CURSES "Enable ncurses console" TRUE)
+option(ENABLE_CURSES "Enable ncurses console" ${BUILD_SERVER})
 set(USE_CURSES FALSE)
 
 if(ENABLE_CURSES)
@@ -404,6 +405,14 @@ add_subdirectory(script)
 add_subdirectory(util)
 add_subdirectory(server)
 
+if(BUILD_UNITTESTS)
+	add_subdirectory(test)
+	add_subdirectory(unittest)
+endif()
+if(BUILD_BENCHMARKS)
+	add_subdirectory(benchmark)
+endif()
+
 # Source files that are identical between server & client builds.
 # This means they don't use or include anything that depends on the
 # CHECK_CLIENT_BUILD() macro. If you wrongly add something here there will be
@@ -417,7 +426,7 @@ set(independent_SRCS
 	face_position_cache.cpp
 	gettext_plural_form.cpp
 	httpfetch.cpp
-	hud.cpp
+	hud_element.cpp
 	inventory.cpp
 	itemstackmetadata.cpp
 	log.cpp
@@ -433,6 +442,7 @@ set(independent_SRCS
 	profiler.cpp
 	serialization.cpp
 	settings.cpp
+	sound_spec.cpp
 	staticobject.cpp
 	terminal_chat_console.cpp
 	texture_override.cpp
@@ -483,24 +493,17 @@ set(common_SRCS
 	version.cpp
 	voxel.cpp
 	voxelalgorithms.cpp
+	${benchmark_SRCS}
 	${common_SCRIPT_SRCS}
 	${common_server_SRCS}
 	${mapgen_SRCS}
 	${server_network_SRCS}
+	${test_SRCS}
+	${unittest_SRCS}
 )
 
 if(ANDROID)
 	list(APPEND common_SRCS porting_android.cpp)
-endif()
-
-if(BUILD_UNITTESTS)
-	add_subdirectory(unittest)
-	list(APPEND common_SRCS ${UNITTEST_SRCS})
-endif()
-
-if(BUILD_BENCHMARKS)
-	add_subdirectory(benchmark)
-	list(APPEND common_SRCS ${BENCHMARK_SRCS})
 endif()
 
 if(BUILD_UNITTESTS OR BUILD_BENCHMARKS)
@@ -536,20 +539,15 @@ if (BUILD_CLIENT)
 endif(BUILD_CLIENT)
 
 list(APPEND client_SRCS
+	${benchmark_client_SRCS}
 	${common_SRCS}
 	${gui_SRCS}
 	${client_network_SRCS}
 	${client_irrlicht_changes_SRCS}
 	${client_SCRIPT_SRCS}
+	${test_client_SRCS}
+	${unittest_client_SRCS}
 )
-
-if(BUILD_UNITTESTS)
-	list(APPEND client_SRCS ${UNITTEST_CLIENT_SRCS})
-endif()
-
-if(BUILD_BENCHMARKS)
-	list(APPEND client_SRCS ${BENCHMARK_CLIENT_SRCS})
-endif()
 
 # Server sources
 # (nothing here because a client always comes with a server)
@@ -699,6 +697,7 @@ if(BUILD_CLIENT)
 		${GMP_LIBRARY}
 		${JSON_LIBRARY}
 		${LUA_BIT_LIBRARY}
+		lstrpack
 		sha256
 		${FREETYPE_LIBRARY}
 		${PLATFORM_LIBS}
@@ -789,6 +788,7 @@ if(BUILD_SERVER)
 		${JSON_LIBRARY}
 		${LUA_LIBRARY}
 		${LUA_BIT_LIBRARY}
+		lstrpack
 		sha256
 		${GMP_LIBRARY}
 		${PLATFORM_LIBS}
@@ -938,6 +938,13 @@ if(MSVC)
 else()
 	# GCC or compatible compilers such as Clang
 	set(WARNING_FLAGS "-Wall -Wextra -Wno-unused-parameter -Werror=vla")
+
+	# if possible, error on struct/class keyword missmatch
+	check_cxx_compiler_flag("-Werror=mismatched-tags" SUPPORTS_W_MISMATCHED_TAGS)
+	if(SUPPORTS_W_MISMATCHED_TAGS)
+		set(WARNING_FLAGS "${WARNING_FLAGS} -Werror=mismatched-tags")
+	endif()
+
 	if(WARN_ALL)
 		set(RELEASE_WARNING_FLAGS "${WARNING_FLAGS}")
 	else()
@@ -979,8 +986,8 @@ else()
 	set(CMAKE_CXX_FLAGS_DEBUG "-g2 -O0 ${WARNING_FLAGS} ${OTHER_FLAGS}")
 
 	if(UNIX)
-		# enable assertions for libstdc++ or libc++
-		set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Wp,-D_GLIBCXX_ASSERTIONS -Wp,-D_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE")
+		# enable assertions for libstdc++
+		set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -Wp,-D_GLIBCXX_ASSERTIONS")
 	endif()
 	if(USE_GPROF)
 		set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -pg")

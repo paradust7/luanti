@@ -13,12 +13,15 @@
 #include "gettext.h"
 #include "inputhandler.h"
 #include "profiler.h"
+#include "exceptions.h"
 #include "gui/guiEngine.h"
 #include "fontengine.h"
 #include "clientlauncher.h"
 #include "version.h"
 #include "renderingengine.h"
 #include "settings.h"
+#include "gettime.h"
+#include "util/numeric.h"
 #include "util/tracy_wrapper.h"
 #include <IGUISpriteBank.h>
 #include <ICameraSceneNode.h>
@@ -58,16 +61,30 @@ ClientLauncher::~ClientLauncher()
 
 	g_settings->deregisterAllChangedCallbacks(this);
 
+	if (g_menucloudsmgr) {
+		assert(g_menucloudsmgr->getReferenceCount() == 1);
+		g_menucloudsmgr->drop();
+		g_menucloudsmgr = nullptr;
+	}
+
+	if (g_menuclouds) {
+		assert(g_menuclouds->getReferenceCount() == 1);
+		g_menuclouds->drop();
+		g_menuclouds = nullptr;
+	}
+
 	delete g_fontengine;
 	g_fontengine = nullptr;
 	delete g_gamecallback;
 	g_gamecallback = nullptr;
 
-	guiroot = nullptr;
-	guienv = nullptr;
 	assert(g_menumgr.menuCount() == 0);
 
 	delete m_rendering_engine;
+
+	// CGUIEnvironment causes calls to `deletingMenu`, which needs `guienv != nullptr`.
+	guiroot = nullptr;
+	guienv = nullptr;
 
 	// delete event receiver only after all Irrlicht stuff is gone
 	delete receiver;
@@ -80,26 +97,17 @@ ClientLauncher::~ClientLauncher()
 
 bool ClientLauncher::run(GameStartData &start_data, const Settings &cmd_args)
 {
-	/* This function is called when a client must be started.
-	 * Covered cases:
-	 *   - Singleplayer (address but map provided)
-	 *   - Join server (no map but address provided)
-	 *   - Local server (for main menu only)
-	*/
-
 	init_args(start_data, cmd_args);
 
-#if USE_SOUND
-	g_sound_manager_singleton = createSoundManagerSingleton();
-#endif
-
-	if (!init_engine())
-		return false;
-
-	if (!m_rendering_engine->get_video_driver()) {
-		errorstream << "Could not initialize video driver." << std::endl;
+	try {
+		init_engine();
+	} catch (BaseException &e) {
+		errorstream << e.what() << std::endl;
+		RenderingEngine::showErrorMessageBox(e.what());
 		return false;
 	}
+
+	sanity_check(m_rendering_engine->get_video_driver() != nullptr);
 
 	m_rendering_engine->setupTopLevelWindow();
 
@@ -108,6 +116,10 @@ bool ClientLauncher::run(GameStartData &start_data, const Settings &cmd_args)
 
 	m_rendering_engine->setResizable(true);
 
+#if USE_SOUND
+	g_sound_manager_singleton = createSoundManagerSingleton();
+#endif
+
 	init_input();
 
 	guienv = m_rendering_engine->get_gui_env();
@@ -115,18 +127,36 @@ bool ClientLauncher::run(GameStartData &start_data, const Settings &cmd_args)
 	g_settings->registerChangedCallback("dpi_change_notifier", setting_changed_callback, this);
 	g_settings->registerChangedCallback("display_density_factor", setting_changed_callback, this);
 	g_settings->registerChangedCallback("gui_scaling", setting_changed_callback, this);
+	g_settings->registerChangedCallback("smooth_scrolling", setting_changed_callback, this);
 
-	g_fontengine = new FontEngine(guienv);
+	try {
+		g_fontengine = new FontEngine(guienv);
+	} catch (BaseException &e) {
+		errorstream << e.what() << std::endl;
+		RenderingEngine::showErrorMessageBox(e.what());
+		return false;
+	}
 
 	// Create the menu clouds
 	// This is only global so it can be used by RenderingEngine::draw_load_screen().
 	assert(!g_menucloudsmgr && !g_menuclouds);
-	std::unique_ptr<IWritableShaderSource> ssrc(createShaderSource());
-	ssrc->addShaderUniformSetterFactory(std::make_unique<FogShaderUniformSetterFactory>());
-	g_menucloudsmgr = m_rendering_engine->get_scene_manager()->createNewSceneManager();
-	g_menuclouds = new Clouds(g_menucloudsmgr, ssrc.get(), -1, rand());
+	std::unique_ptr<IWritableShaderSource> ssrc;
+	try {
+		ssrc.reset(createShaderSource());
+		ssrc->addShaderUniformSetterFactory(std::make_unique<FogShaderUniformSetterFactory>());
+
+		g_menucloudsmgr = m_rendering_engine->get_scene_manager()->createNewSceneManager();
+
+		auto tm = mt_localtime();
+		u32 seed = (tm.tm_year << 16) | tm.tm_yday; // unique clouds every day
+		g_menuclouds = new Clouds(g_menucloudsmgr, ssrc.get(), -1, seed);
+	} catch (BaseException &e) {
+		errorstream << e.what() << std::endl;
+		RenderingEngine::showErrorMessageBox(e.what());
+		return false;
+	}
 	g_menuclouds->setHeight(100.0f);
-	g_menuclouds->update(v3f(0, 0, 0), video::SColor(255, 240, 240, 255));
+	g_menuclouds->update(v3f(0, 0, 0), m_rendering_engine->m_menu_clouds_color);
 	scene::ICameraSceneNode* camera;
 	camera = g_menucloudsmgr->addCameraSceneNode(NULL, v3f(0, 0, 0), v3f(0, 60, 100));
 	camera->setFarValue(10000);
@@ -165,14 +195,14 @@ bool ClientLauncher::run(GameStartData &start_data, const Settings &cmd_args)
 #ifdef NDEBUG
 		try {
 #endif
-			m_rendering_engine->get_gui_env()->clear();
+			guienv->clear();
 
 			/*
 				We need some kind of a root node to be able to add
 				custom gui elements directly on the screen.
 				Otherwise they won't be automatically drawn.
 			*/
-			guiroot = m_rendering_engine->get_gui_env()->addStaticText(L"",
+			guiroot = guienv->addStaticText(L"",
 				core::rect<s32>(0, 0, 10000, 10000));
 
 			bool should_run_game = launch_game(error_message, reconnect_requested,
@@ -215,10 +245,8 @@ bool ClientLauncher::run(GameStartData &start_data, const Settings &cmd_args)
 
 		m_rendering_engine->get_scene_manager()->clear();
 
-		if (g_touchcontrols) {
-			delete g_touchcontrols;
-			g_touchcontrols = NULL;
-		}
+		delete g_touchcontrols;
+		g_touchcontrols = nullptr;
 
 		/* Save the settings when leaving the game.
 		 * This makes sure that setting changes made in-game are persisted even
@@ -245,13 +273,6 @@ bool ClientLauncher::run(GameStartData &start_data, const Settings &cmd_args)
 		g_profiler->clear();
 	}
 
-	assert(g_menucloudsmgr->getReferenceCount() == 1);
-	g_menucloudsmgr->drop();
-	g_menucloudsmgr = nullptr;
-	assert(g_menuclouds->getReferenceCount() == 1);
-	g_menuclouds->drop();
-	g_menuclouds = nullptr;
-
 	return retval;
 }
 
@@ -274,19 +295,24 @@ void ClientLauncher::init_args(GameStartData &start_data, const Settings &cmd_ar
 	if (cmd_args.exists("name"))
 		start_data.name = cmd_args.get("name");
 
+	// If a world was commanded, select it
+	if (!start_data.world_path.empty()) {
+		auto &spec = start_data.world_spec;
+
+		spec.path = start_data.world_path;
+		spec.gameid = getWorldGameId(spec.path, true);
+		spec.name = _("[--world parameter]");
+	}
+
 	random_input = g_settings->getBool("random_input")
 			|| cmd_args.getFlag("random-input");
 }
 
-bool ClientLauncher::init_engine()
+void ClientLauncher::init_engine()
 {
 	receiver = new MyEventReceiver();
-	try {
-		m_rendering_engine = new RenderingEngine(receiver);
-	} catch (std::exception &e) {
-		errorstream << e.what() << std::endl;
-	}
-	return !!m_rendering_engine;
+	// Note: this can throw
+	m_rendering_engine = new RenderingEngine(receiver);
 }
 
 void ClientLauncher::init_input()
@@ -359,6 +385,9 @@ void ClientLauncher::config_guienv()
 	skin->setSize(gui::EGDS_SCROLLBAR_SIZE, (s32)(21.0f * density));
 	skin->setSize(gui::EGDS_WINDOW_BUTTON_WIDTH, (s32)(15.0f * density));
 
+	skin->setBehavior(gui::EGDB_SMOOTH_SCROLL, g_settings->getBool("smooth_scrolling"));
+	skin->setBehavior(gui::EGDB_SCOLLBAR_JUMP_TO_CLICKED, true);
+
 	static u32 orig_sprite_id = skin->getIcon(gui::EGDI_CHECK_BOX_CHECKED);
 	static std::unordered_map<std::string, u32> sprite_ids;
 
@@ -413,17 +442,8 @@ bool ClientLauncher::launch_game(std::string &error_message,
 		}
 	}
 
-	// If a world was commanded, append and select it
-	// This is provieded by "get_world_from_cmdline()", main.cpp
-	if (!start_data.world_path.empty()) {
-		auto &spec = start_data.world_spec;
-
-		spec.path = start_data.world_path;
-		spec.gameid = getWorldGameId(spec.path, true);
-		spec.name = _("[--world parameter]");
-	}
-
-	/* Show the GUI menu
+	/*
+	 * Show the GUI menu
 	 */
 	std::string server_name, server_description;
 	if (!skip_main_menu) {
@@ -440,7 +460,7 @@ bool ClientLauncher::launch_game(std::string &error_message,
 		main_menu(&menudata);
 
 		// Skip further loading if there was an exit signal.
-		if (*porting::signal_handler_killstatus())
+		if (!m_rendering_engine->run() || *porting::signal_handler_killstatus())
 			return false;
 
 		if (!menudata.script_data.errormessage.empty()) {
@@ -461,6 +481,7 @@ bool ClientLauncher::launch_game(std::string &error_message,
 		int world_index = menudata.selected_world;
 		if (world_index >= 0 && world_index < (int)worldspecs.size()) {
 			start_data.world_spec = worldspecs[world_index];
+			start_data.world_path = start_data.world_spec.path;
 		}
 
 		start_data.name = menudata.name;
@@ -476,9 +497,6 @@ bool ClientLauncher::launch_game(std::string &error_message,
 		start_data.local_server = !start_data.world_path.empty() &&
 			start_data.address.empty() && !start_data.name.empty();
 	}
-
-	if (!m_rendering_engine->run())
-		return false;
 
 	if (!start_data.isSinglePlayer() && start_data.name.empty()) {
 		error_message = gettext("Please choose a name!");
@@ -502,12 +520,9 @@ bool ClientLauncher::launch_game(std::string &error_message,
 		return false;
 	}
 
-	auto &worldspec = start_data.world_spec;
-	infostream << "Selected world: " << worldspec.name
-	           << " [" << worldspec.path << "]" << std::endl;
-
+	// For singleplayer and local server
 	if (start_data.address.empty()) {
-		// For singleplayer and local server
+		auto &worldspec = start_data.world_spec;
 		if (worldspec.path.empty()) {
 			error_message = gettext("No world selected and no address "
 					"provided. Nothing to do.");
@@ -515,26 +530,30 @@ bool ClientLauncher::launch_game(std::string &error_message,
 			return false;
 		}
 
-		if (!fs::PathExists(worldspec.path)) {
-			error_message = gettext("Provided world path doesn't exist: ")
-					+ worldspec.path;
-			errorstream << error_message << std::endl;
-			return false;
+		infostream << "Selected world: " << worldspec.name
+			<< " [" << worldspec.path << "]" << std::endl;
+
+		// Figure out which game we'll be using
+		// Note that start_data.game_spec contains the gameid from the command line
+		bool world_exists = getWorldExists(worldspec.path);
+		if (world_exists) {
+			auto world_game = findWorldSubgame(worldspec.path);
+			if (world_game.isValid())
+				start_data.game_spec = world_game;
 		}
 
-		// Load gamespec for required game
-		start_data.game_spec = findWorldSubgame(worldspec.path);
 		if (!start_data.game_spec.isValid()) {
-			error_message = gettext("Could not find or load game: ")
+			if (world_exists) {
+				error_message = gettext("Could not find or load game: ")
 					+ worldspec.gameid;
+			} else {
+				error_message = gettext("World does not exist and no game selected to create one.");
+			}
 			errorstream << error_message << std::endl;
 			return false;
 		}
-
-		return true;
 	}
 
-	start_data.world_path = start_data.world_spec.path;
 	return true;
 }
 
@@ -569,11 +588,10 @@ void ClientLauncher::main_menu(MainMenuData *menudata)
 	framemarker.end();
 	infostream << "Waited for other menus" << std::endl;
 
+	// Make sure normal mouse cursor is restored
 	auto *cur_control = device->getCursorControl();
 	if (cur_control) {
-		// Cursor can be non-visible when coming from the game
 		cur_control->setVisible(true);
-		// Set absolute mouse mode
 		cur_control->setRelativeMode(false);
 	}
 
@@ -588,7 +606,7 @@ void ClientLauncher::main_menu(MainMenuData *menudata)
 	 * even in case of a later unclean exit from the game.
 	 * This is especially useful on Android because closing the app from the
 	 * "Recents screen" results in an unclean exit.
-	 * Caveat: This means that the settings are saved twice when exiting Minetest.
+	 * Caveat: This means that the settings are saved twice when exiting Luanti.
 	 */
 	if (!g_settings_path.empty())
 		g_settings->updateConfigFile(g_settings_path.c_str());

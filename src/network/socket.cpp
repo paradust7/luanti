@@ -4,21 +4,19 @@
 
 #include "socket.h"
 
-#include <cstdio>
 #include <iostream>
-#include <cstdlib>
 #include <cstring>
-#include <iomanip>
-#include "util/string.h"
 #include "util/numeric.h"
+#include "address.h"
 #include "constants.h"
-#include "debug.h"
 #include "log.h"
+#include "networkexceptions.h"
 
 #ifdef _WIN32
 #include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include "util/string.h"
 #define LAST_SOCKET_ERR() WSAGetLastError()
 #define SOCKET_ERR_STR(e) itos(e)
 typedef int socklen_t;
@@ -231,9 +229,9 @@ int UDPSocket::Receive(Address &sender, void *data, int size)
 			return -1;
 
 		u16 address_port = ntohs(address.sin6_port);
-		const auto *bytes = reinterpret_cast<IPv6AddressBytes*>
-			(address.sin6_addr.s6_addr);
-		sender = Address(bytes, address_port);
+		IPv6AddressBytes bytes;
+		memcpy(bytes.bytes, address.sin6_addr.s6_addr, sizeof(address.sin6_addr.s6_addr));
+		sender = Address(&bytes, address_port);
 	} else {
 		struct sockaddr_in address;
 		memset(&address, 0, sizeof(address));

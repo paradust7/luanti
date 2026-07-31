@@ -7,10 +7,14 @@
 
 #include "gamedef.h"
 #include "itemdef.h"
+#include <memory>
 #include "nodedef.h"
 #include "craftdef.h"
 #include "content/mods.h"
 #include "database/database-dummy.h"
+#if CHECK_CLIENT_BUILD()
+#include "client/node_visuals.h"
+#endif
 
 class DummyGameDef : public IGameDef {
 public:
@@ -62,4 +66,18 @@ protected:
 	NodeDefManager *m_nodedef = nullptr;
 	ICraftDefManager *m_craftdef = nullptr;
 	ModStorageDatabase *m_mod_storage_database = nullptr;
+
+#if CHECK_CLIENT_BUILD()
+	static std::unique_ptr<NodeVisuals> constructNodeVisuals(ContentFeatures *f)
+	{
+		return std::unique_ptr<NodeVisuals>(new NodeVisuals(f));
+	}
+	static void setNodeVisuals(ContentFeatures &f, std::unique_ptr<NodeVisuals> v = nullptr)
+	{
+		if (v == nullptr)
+			v = constructNodeVisuals(&f);
+		v->f = &f;
+		f.visuals = v.release(); // Destructed by ~ContentFeatures
+	}
+#endif
 };

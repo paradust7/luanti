@@ -27,6 +27,14 @@ const struct EnumString es_ObjectVisual[] =
 	{0, nullptr},
 };
 
+const struct EnumString es_StepUpMode[] =
+{
+	{static_cast<u8>(StepUpMode::LEGACY), "legacy"},
+	{static_cast<u8>(StepUpMode::FLOATY), "floaty"},
+	{static_cast<u8>(StepUpMode::RIGID), "rigid"},
+	{0, nullptr},
+};
+
 ObjectProperties::ObjectProperties()
 {
 	textures.emplace_back("no_texture.png");
@@ -90,6 +98,7 @@ std::string ObjectProperties::dump() const
 	os << ", shaded=" << shaded;
 	os << ", show_on_minimap=" << show_on_minimap;
 	os << ", nametag_scale_z=" << nametag_scale_z;
+	os << ", step_up_mode=" << enum_to_string(es_StepUpMode, step_up_mode);
 	return os.str();
 }
 
@@ -106,7 +115,7 @@ static inline auto tie(const ObjectProperties &o)
 	o.node, o.hp_max, o.breath_max, o.glow, o.pointable, o.physical,
 	o.collideWithObjects, o.rotate_selectionbox, o.is_visible, o.makes_footstep_sound,
 	o.automatic_face_movement_dir, o.backface_culling, o.static_save, o.use_texture_alpha,
-	o.shaded, o.show_on_minimap, o.nametag_scale_z
+	o.shaded, o.show_on_minimap, o.nametag_scale_z, o.step_up_mode
 	);
 }
 
@@ -216,28 +225,10 @@ void ObjectProperties::serialize(std::ostream &os) const
 		writeU32(os, nametag_fontsize.value());
 
 	writeU8(os, nametag_scale_z);
+	writeU8(os, static_cast<u8>(step_up_mode));
 
 	// Add stuff only at the bottom.
 	// Never remove anything, because we don't want new versions of this!
-}
-
-namespace {
-	// Type-safe wrapper for bools as u8
-	inline bool readBool(std::istream &is)
-	{
-		return readU8(is) != 0;
-	}
-
-	// Wrapper for primitive reading functions that don't throw (awful)
-	template <typename T, T (reader)(std::istream& is)>
-	bool tryRead(T& val, std::istream& is)
-	{
-		T tmp = reader(is);
-		if (is.eof())
-			return false;
-		val = tmp;
-		return true;
-	}
 }
 
 void ObjectProperties::deSerialize(std::istream &is)
@@ -295,40 +286,56 @@ void ObjectProperties::deSerialize(std::istream &is)
 	zoom_fov = readF32(is);
 	use_texture_alpha = readU8(is);
 
-	try {
-		damage_texture_modifier = deSerializeString16(is);
-	} catch (SerializationError &e) {
+	if (!canRead(is))
 		return;
-	}
+	// >= 5.3.0-dev
 
-	if (!tryRead<bool, readBool>(shaded, is))
+	damage_texture_modifier = deSerializeString16(is);
+	shaded = readU8(is);
+
+	if (!canRead(is))
 		return;
+	// >= 5.4.0-dev
 
-	if (!tryRead<bool, readBool>(show_on_minimap, is))
-		return;
-
+	show_on_minimap = readU8(is);
 	auto bgcolor = readARGB8(is);
 	if (bgcolor != NULL_BGCOLOR)
 		nametag_bgcolor = bgcolor;
 	else
 		nametag_bgcolor = std::nullopt;
 
-	if (!tryRead<bool, readBool>(rotate_selectionbox, is))
+	if (!canRead(is))
 		return;
+	// >= 5.7.0-dev
 
-	if (!tryRead<content_t, readU16>(node.param0, is))
+	rotate_selectionbox = readU8(is);
+
+	if (!canRead(is))
 		return;
+	// >= 5.12.0-dev
+
+	node.param0 = readU16(is);
 	node.param1 = readU8(is);
 	node.param2 = readU8(is);
 
-	u32 fontsize;
-	if (!tryRead<u32, readU32>(fontsize, is))
+	if (!canRead(is))
 		return;
+	// >= 5.14.0-dev
+
+	const u32 fontsize = readU32(is);
 	if (fontsize != U32_MAX)
 		nametag_fontsize = fontsize;
 	else
 		nametag_fontsize = std::nullopt;
 	nametag_scale_z = readU8(is);
 
-	// Add new properties down here and remember to use either tryRead<> or a try-catch.
+	if (!canRead(is))
+		return;
+	// >= 5.16.0-dev
+
+	step_up_mode = static_cast<StepUpMode>(readU8(is));
+
+	//if (!canRead(is))
+	//	return;
+	// Add new code here
 }

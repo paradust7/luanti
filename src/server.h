@@ -6,67 +6,73 @@
 
 #include "irr_v3d.h"
 #include "map.h"
-#include "hud.h"
+#include "hud_element.h" // HudElementStat
 #include "gamedef.h"
-#include "content/mods.h"
-#include "inventorymanager.h"
 #include "content/subgames.h"
 #include "network/peerhandler.h"
-#include "network/connection.h"
-#include "util/numeric.h"
 #include "util/thread.h"
 #include "util/basic_macros.h"
 #include "util/metricsbackend.h"
-#include "serverenvironment.h"
 #include "server/clientiface.h"
 #include "threading/ordered_mutex.h"
-#include "chatmessage.h"
-#include "sound.h"
 #include "translation.h"
-#include "script/common/c_types.h" // LuaError
+#include "sound_spec.h"
 #include <atomic>
 #include <csignal>
 #include <string>
 #include <list>
-#include <map>
 #include <vector>
+#include <unordered_map>
 #include <unordered_set>
 #include <optional>
 #include <string_view>
 #include <shared_mutex>
 #include <condition_variable>
 
-class ChatEvent;
-struct ChatEventChat;
-struct ChatInterface;
-class IWritableItemDefManager;
-class NodeDefManager;
-class IWritableCraftDefManager;
 class BanManager;
+class ChatEvent;
+class EmergeManager;
 class Inventory;
+class IRollbackManager;
+class IWritableCraftDefManager;
+class IWritableItemDefManager;
+class LuaError;
+class MetricsBackend;
 class ModChannelMgr;
-class RemotePlayer;
+class NodeDefManager;
 class Player;
 class PlayerSAO;
-struct PlayerHPChangeReason;
-class IRollbackManager;
-struct RollbackAction;
-class EmergeManager;
-class ServerScripting;
+class RemotePlayer;
 class ServerEnvironment;
-struct SoundSpec;
-struct CloudParams;
-struct SkyboxParams;
-struct SunParams;
-struct MoonParams;
-struct StarParams;
-struct Lighting;
-class ServerThread;
-class ServerModManager;
 class ServerInventoryManager;
+class ServerModManager;
+class ServerScripting;
+class ServerThread;
+class Settings;
+
+struct ChatEventChat;
+struct ChatInterface;
+struct ChatMessage;
+struct CloudParams;
+struct GameParams;
+struct Lighting;
+struct MoonParams;
 struct PackedValue;
 struct ParticleParameters;
 struct ParticleSpawnerParameters;
+struct PlayerHPChangeReason;
+struct RollbackAction;
+struct SkyboxParams;
+struct SoundSpec;
+struct StarParams;
+struct SunParams;
+
+namespace con {
+	class IConnection;
+	class IPeer;
+
+	enum rtt_stat_type : int;
+}
 
 // Anticheat flags
 enum {
@@ -99,8 +105,8 @@ struct MediaInfo
 	// does what it says. used by some cases of dynamic media.
 	bool delete_at_shutdown;
 
-	MediaInfo(std::string_view path_ = "",
-	          std::string_view sha1_digest_ = ""):
+	MediaInfo(std::string_view path_,
+	          std::string_view sha1_digest_):
 		path(path_),
 		sha1_digest(sha1_digest_),
 		no_announce(false),
@@ -359,16 +365,13 @@ public:
 	StepSettings getStepSettings() { return m_step_settings.load(); }
 
 	void setAsyncFatalError(const std::string &error);
-	inline void setAsyncFatalError(const LuaError &e)
-	{
-		setAsyncFatalError(std::string("Lua: ") + e.what());
-	}
+	void setAsyncFatalError(const LuaError &e);
 
 	// Not thread-safe.
 	void addShutdownError(const ModError &e);
 
 	bool showFormspec(const char *name, const std::string &formspec, const std::string &formname);
-	Map & getMap() { return m_env->getMap(); }
+	Map &getMap();
 	ServerEnvironment & getEnv() { return *m_env; }
 	v3f findSpawnPos();
 
@@ -418,7 +421,7 @@ public:
 	void HandlePlayerHPChange(PlayerSAO *sao, const PlayerHPChangeReason &reason);
 	void SendPlayerHP(PlayerSAO *sao, bool effect);
 	void SendPlayerBreath(PlayerSAO *sao);
-	void SendInventory(RemotePlayer *player, bool incremental);
+	void SendInventory(RemotePlayer *player, bool incremental, bool skip_wield_anim = false);
 	void SendMovePlayer(PlayerSAO *sao);
 	void SendMovePlayerRel(session_t peer_id, const v3f &added_pos);
 	void SendPlayerSpeed(session_t peer_id, const v3f &added_vel);
@@ -440,6 +443,7 @@ public:
 	bool SendBlock(session_t peer_id, const v3s16 &blockpos);
 
 	// Get or load translations for a language
+	// Note: don't store returned pointer.
 	Translations *getTranslationLanguage(const std::string &lang_code);
 
 	// Returns all media files the server knows about
@@ -476,7 +480,7 @@ public:
 		EnvAutoLock(Server *server): m_lock(server->m_env_mutex) {}
 
 	private:
-		std::lock_guard<ordered_mutex> m_lock;
+		std::lock_guard<std::mutex> m_lock;
 	};
 
 protected:
@@ -664,7 +668,7 @@ private:
 	*/
 
 	// Environment mutex (envlock)
-	ordered_mutex m_env_mutex;
+	std::mutex m_env_mutex;
 
 	// World directory
 	std::string m_path_world;
@@ -718,6 +722,9 @@ private:
 	// Craft definition manager
 	IWritableCraftDefManager *m_craftdef;
 
+	// NOTE: Cannot use forward declaration of 'Translations'. Whereas most
+	// modern compilers support incomplete types here, it's not in the C++ spec.
+	// key = lang_code
 	std::unordered_map<std::string, Translations> server_translations;
 
 	ModIPCStore m_ipcstore;

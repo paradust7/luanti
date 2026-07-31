@@ -25,7 +25,7 @@ void GUIButtonKey::setKey(KeyPress kp)
 {
 	key_value = kp;
 	keysym = utf8_to_wide(kp.sym());
-	super::setText(wstrgettext(kp.name()).c_str());
+	super::setText(utf8_to_wide(kp.name()).c_str());
 }
 
 void GUIButtonKey::sendKey()
@@ -81,8 +81,9 @@ bool GUIButtonKey::OnEvent(const SEvent & event)
 				return true;
 			}
 			[[fallthrough]];
-		case EMIE_MMOUSE_LEFT_UP: [[fallthrough]];
+		case EMIE_MMOUSE_LEFT_UP:
 		case EMIE_RMOUSE_LEFT_UP:
+		case EMIE_XMOUSE_LEFT_UP:
 			setPressed(false);
 			if (capturing) {
 				cancelCapture();
@@ -98,7 +99,7 @@ bool GUIButtonKey::OnEvent(const SEvent & event)
 						return true;
 				} else {
 					setPressed(true);
-					setKey(LMBKey);
+					setKey(KeyPress(event.MouseInput));
 					return true;
 				}
 			} else if (in_rect) {
@@ -108,16 +109,11 @@ bool GUIButtonKey::OnEvent(const SEvent & event)
 			}
 			break;
 		case EMIE_MMOUSE_PRESSED_DOWN:
-			if (capturing) {
-				setPressed(true);
-				setKey(MMBKey);
-				return true;
-			}
-			break;
 		case EMIE_RMOUSE_PRESSED_DOWN:
+		case EMIE_XMOUSE_PRESSED_DOWN:
 			if (capturing) {
 				setPressed(true);
-				setKey(RMBKey);
+				setKey(KeyPress(event.MouseInput));
 				return true;
 			}
 			break;

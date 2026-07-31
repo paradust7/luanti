@@ -9,11 +9,7 @@
 #include "cpp_api/s_security.h"
 #include "util/enum_string.h"
 #include "httpfetch.h"
-#include "settings.h"
-#include "debug.h"
 #include "log.h"
-
-#include <iomanip>
 
 #define HTTP_API(name) \
 	lua_pushstring(L, #name); \
@@ -78,6 +74,8 @@ void ModApiHttp::read_http_fetch_request(lua_State *L, HTTPFetchRequest &req)
 		}
 	}
 	lua_pop(L, 1);
+
+	req.quiet = getboolfield_default(L, 1, "quiet", false);
 }
 
 void ModApiHttp::push_http_fetch_result(lua_State *L, HTTPFetchResult &res, bool completed)

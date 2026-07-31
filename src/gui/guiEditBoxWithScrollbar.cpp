@@ -11,8 +11,6 @@
 #include "rect.h"
 
 #include "guiScrollBar.h"
-#include "porting.h"
-#include "Keycodes.h"
 
 using namespace gui;
 
@@ -44,8 +42,6 @@ void GUIEditBoxWithScrollBar::draw()
 	IGUISkin *skin = Environment->getSkin();
 	if (!skin)
 		return;
-
-	video::SColor default_bg_color;
 
 	if (m_bg_color_used) {
 		OverrideBgColor = m_bg_color;
@@ -84,7 +80,7 @@ void GUIEditBoxWithScrollBar::createVScrollBar()
 	core::rect<s32> scrollbarrect = RelativeRect;
 	scrollbarrect.UpperLeftCorner.X += RelativeRect.getWidth() - VScrollBarWidth;
 	VScrollBar = new GUIScrollBar(Environment, getParent(), -1,
-			scrollbarrect, false, true, m_tsrc);
+			scrollbarrect, false, m_tsrc);
 
 	VScrollBar->setVisible(false);
 	VScrollBar->setSmallStep(3 * fontHeight);
