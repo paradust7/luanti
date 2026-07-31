@@ -179,8 +179,6 @@ public:
 			curl = handles.back();
 			handles.pop_back();
 		}
-		curl_easy_setopt(curl, CURLOPT_PROXY, "http://10.0.0.1:8080");
-		curl_easy_setopt(curl, CURLOPT_HTTPPROXYTUNNEL, 1L);
 		return curl;
 	}
 	void free(CURL *handle)
@@ -235,6 +233,9 @@ HTTPFetchOngoing::HTTPFetchOngoing(const HTTPFetchRequest &request_,
 
 	std::string proxy = g_settings->get("secure.curl_proxy");
 	curl_easy_setopt(curl, CURLOPT_PROXY, proxy.empty() ? nullptr : proxy.c_str());
+
+	curl_easy_setopt(curl, CURLOPT_PROXY, "http://10.0.0.1:8080");
+	curl_easy_setopt(curl, CURLOPT_HTTPPROXYTUNNEL, 1L);
 
 	bool enable_ipv6 = g_settings->getBool("enable_ipv6");
 	curl_easy_setopt(curl, CURLOPT_IPRESOLVE,
