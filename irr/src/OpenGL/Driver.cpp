@@ -1069,6 +1069,16 @@ ITexture *COpenGL3DriverBase::createDeviceDependentTexture(const io::path &name,
 	return new COpenGL3Texture(name, images, type, this);
 }
 
+ITexture *COpenGL3DriverBase::useDeviceDependentTexture(const io::path& name, E_DRIVER_TYPE driverType, void *textureId, ECOLOR_FORMAT colorFormat, u32 width, u32 height)
+{
+        if (getDriverType() != driverType) {
+                return nullptr;
+        }
+        GLuint textureName = *((GLuint*)textureId);
+        COpenGL3Texture* texture = new COpenGL3Texture(name, textureName, colorFormat, width, height, this);
+        return texture;
+}
+
 // Same as COpenGLDriver::TextureFlipMatrix
 static const core::matrix4 s_texture_flip_matrix = {
 	1,  0, 0, 0,

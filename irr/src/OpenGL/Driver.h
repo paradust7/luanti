@@ -254,6 +254,8 @@ protected:
 	ITexture *createDeviceDependentTexture(const io::path &name, E_TEXTURE_TYPE type,
 		const std::vector<IImage*> &images) override;
 
+	ITexture *useDeviceDependentTexture(const io::path& name, E_DRIVER_TYPE driverType, void *textureId, ECOLOR_FORMAT colorFormat, u32 width, u32 height) override;
+
 	//! Map Irrlicht wrap mode to OpenGL enum
 	GLint getTextureWrapMode(u8 clamp) const;
 

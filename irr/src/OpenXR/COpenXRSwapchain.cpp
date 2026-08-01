@@ -132,7 +132,8 @@ bool COpenXRSwapchain::init()
 #ifdef XR_USE_GRAPHICS_API_OPENGL
 	std::vector<XrSwapchainImageOpenGLKHR> images(swapchainLength,
 		XrSwapchainImageOpenGLKHR{ .type = XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR });
-	driverType = video::EDT_OPENGL;
+	driverType = VideoDriver->getDriverType();
+	XR_ASSERT(driverType == video::EDT_OPENGL || driverType == video::EDT_OPENGL3);
 #endif
 #ifdef XR_USE_GRAPHICS_API_OPENGL_ES
 	std::vector<XrSwapchainImageOpenGLESKHR> images(swapchainLength,
