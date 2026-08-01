@@ -1252,7 +1252,6 @@ inline CMatrix4<T> &CMatrix4<T>::buildProjectionMatrixPerspectiveFovLH(
 	// w == 1/tanRight or -1/tanLeft
 	// tanAngleWidth = tanRight - tanLeft
 
-	_IRR_DEBUG_BREAK_IF(zNear == zFar); //divide by zero
 	M[0] = 2 / (tanRight - tanLeft);
 	M[1] = 0;
 	M[2] = 0;

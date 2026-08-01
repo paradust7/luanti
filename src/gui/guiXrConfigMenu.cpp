@@ -17,6 +17,7 @@ ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 */
 
+#include "IVideoDriver.h"
 #include "guiXrConfigMenu.h"
 #include "debug.h"
 #include "guiButton.h"
@@ -124,7 +125,7 @@ void GUIXRConfigMenu::regenerateGui(v2u32 screensize)
 		StaticText::add(Environment, fwgettext("Virtual IPD Scale: %d%%", vipd),
 				textRect, false, true, this, ID_xrConfigVipdText);
 		auto e = make_irr<GUIScrollBar>(Environment, this,
-				ID_xrConfigVipdSlider, sliderRect, true, false, m_tsrc);
+				ID_xrConfigVipdSlider, sliderRect, true, m_tsrc);
 		e->setMax(150);
 		e->setPos(vipd - 50);
 	}

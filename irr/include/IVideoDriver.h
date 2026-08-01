@@ -1082,6 +1082,8 @@ public:
 
 	//! Used by some SceneNodes to check if a material should be rendered in the transparent render pass
 	virtual bool needsTransparentRenderPass(const video::SMaterial &material) const = 0;
+
+	virtual ITexture* useDeviceDependentTexture(const io::path& name, E_DRIVER_TYPE driverType, void *textureId, ECOLOR_FORMAT colorFormat, u32 width, u32 height) = 0;
 };
 
 } // end namespace video

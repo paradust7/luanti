@@ -160,7 +160,7 @@ public:
 	void recenterXR() override {}
 	void xrGetInputState(core::XrInputState* state) override
 	{
-		memset(state, 0, sizeof(*state));
+		*state = core::XrInputState{};
 	}
 	void startXR() override {}
 	bool beginFrame(const core::XrFrameConfig&) override { return false; }

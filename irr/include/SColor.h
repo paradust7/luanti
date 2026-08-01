@@ -115,6 +115,7 @@ const c8 *const ColorFormatNames[] = {
 		"D24",
 		"D32",
 		"D24S8",
+		"D32F",
 		"UNKNOWN",
 		0,
 	};

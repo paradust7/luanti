@@ -9,8 +9,6 @@
 #include <cstdint>
 #include <memory>
 
-namespace irr {
-
 class IOpenXRInstance {
 public:
 	virtual ~IOpenXRInstance() {}
@@ -25,7 +23,5 @@ public:
 std::unique_ptr<IOpenXRInstance> createOpenXRInstance(
 	video::IVideoDriver* driver,
 	XrReferenceSpaceType playSpaceType);
-
-} // end namespace irr
 
 #endif // _IRR_COMPILE_WITH_XR_DEVICE_

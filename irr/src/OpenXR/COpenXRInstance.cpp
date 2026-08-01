@@ -14,8 +14,6 @@
 
 using std::unique_ptr;
 
-namespace irr {
-
 class COpenXRInstance : public IOpenXRInstance {
 public:
 	COpenXRInstance(video::IVideoDriver* driver, XrReferenceSpaceType playSpaceType)
@@ -240,7 +238,7 @@ void COpenXRInstance::getInputState(core::XrInputState* state)
 	if (Session)
 		Session->getInputState(state);
 	else
-		memset(state, 0, sizeof(*state));
+		*state = core::XrInputState{};
 }
 
 bool COpenXRInstance::tryCreateSession()
@@ -289,7 +287,5 @@ unique_ptr<IOpenXRInstance> createOpenXRInstance(
 		return nullptr;
 	return obj;
 }
-
-} // end namespace irr
 
 #endif // _IRR_COMPILE_WITH_XR_DEVICE_

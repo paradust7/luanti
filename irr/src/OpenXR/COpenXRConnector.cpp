@@ -12,9 +12,6 @@
 
 using std::unique_ptr;
 
-namespace irr
-{
-
 class COpenXRConnector : public IOpenXRConnector {
 	public:
 		COpenXRConnector(video::IVideoDriver* driver, uint32_t mode_flags);
@@ -121,7 +118,7 @@ void COpenXRConnector::getInputState(core::XrInputState* state)
 	if (Instance)
 		Instance->getInputState(state);
 	else
-		memset(state, 0, sizeof(*state));
+		*state = core::XrInputState{};
 }
 
 bool COpenXRConnector::tryBeginFrame(const core::XrFrameConfig& config)
@@ -155,7 +152,5 @@ unique_ptr<IOpenXRConnector> createOpenXRConnector(video::IVideoDriver* driver, 
 		return nullptr;
 	return conn;
 }
-
-} // namespace irr
 
 #endif // _IRR_COMPILE_WITH_XR_DEVICE_

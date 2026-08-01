@@ -13,51 +13,45 @@
 
 #include "OpenXR/IOpenXRConnector.h"
 
-namespace irr
+class CIrrDeviceXR : public CIrrDeviceSDL
 {
+public:
 
-	class CIrrDeviceXR : public CIrrDeviceSDL
+	//! constructor
+	CIrrDeviceXR(const SIrrlichtCreationParameters& param);
+
+	//! destructor
+	virtual ~CIrrDeviceXR();
+
+	//! Get the device type
+	E_DEVICE_TYPE getType() const override
 	{
-	public:
+		return EIDT_XR;
+	}
 
-		//! constructor
-		CIrrDeviceXR(const SIrrlichtCreationParameters& param);
+	//! Activate device motion.
+	bool activateDeviceMotion(float updateInterval = 0.016666f) override;
 
-		//! destructor
-		virtual ~CIrrDeviceXR();
+	//! Deactivate device motion.
+	bool deactivateDeviceMotion() override;
 
-		//! Get the device type
-		E_DEVICE_TYPE getType() const override
-		{
-			return EIDT_XR;
-		}
+	//! Is device motion active.
+	bool isDeviceMotionActive() override;
 
-		//! Activate device motion.
-		bool activateDeviceMotion(float updateInterval = 0.016666f) override;
+	//! Is device motion available.
+	bool isDeviceMotionAvailable() override;
 
-		//! Deactivate device motion.
-		bool deactivateDeviceMotion() override;
+	bool hasXR() const override;
+	void recenterXR() override;
+	void startXR() override;
+	void xrGetInputState(core::XrInputState* state) override;
+	bool beginFrame(const core::XrFrameConfig& config) override;
+	bool nextView(core::XrViewInfo* info) override;
+	void stopXR() override;
 
-		//! Is device motion active.
-		bool isDeviceMotionActive() override;
-
-		//! Is device motion available.
-		bool isDeviceMotionAvailable() override;
-
-		bool hasXR() const override;
-		void recenterXR() override;
-		void startXR() override;
-		void xrGetInputState(core::XrInputState* state) override;
-		bool beginFrame(const core::XrFrameConfig& config) override;
-		bool nextView(core::XrViewInfo* info) override;
-		void stopXR() override;
-
-	protected:
-		std::unique_ptr<IOpenXRConnector> Connector;
-		bool DeviceMotionActive;
-	};
-
-} // end namespace irr
+protected:
+	std::unique_ptr<IOpenXRConnector> Connector;
+	bool DeviceMotionActive;
+};
 
 #endif // _IRR_COMPILE_WITH_XR_DEVICE_
-

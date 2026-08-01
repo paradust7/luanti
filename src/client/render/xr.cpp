@@ -18,19 +18,20 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 */
 
+#include "gui/mainmenumanager.h" // for isMenuActive
+
 #include "client/client.h"
 #include "client/camera.h"
 #include "pipeline.h"
 #include "plain.h"
 #include "XrViewInfo.h"
+#include "settings.h"
 #include "SColor.h"
-#include "CImage.h"
+
+#include <ICameraSceneNode.h>
 
 #include <memory>
 #include <iostream>
-
-// Move state to xr controller class
-extern bool isMenuActive();
 
 extern uint64_t XrFrameCounter;
 
@@ -356,7 +357,8 @@ private:
 		size_t cursorWidth = strlen(cursorArt[0]);
 		size_t cursorHeight = sizeof(cursorArt) / sizeof(cursorArt[0]);
 		// The image takes ownership of this
-		u32* imageData = new u32[cursorWidth * cursorHeight];
+		u8* rawImageData = new u8[4 * cursorWidth * cursorHeight];
+		u32* imageData = reinterpret_cast<u32*>(rawImageData);
 		for (size_t y = 0; y < cursorHeight; ++y) {
 			for (size_t x = 0; x < cursorWidth; ++x) {
 				video::SColor color;
@@ -374,11 +376,11 @@ private:
 				imageData[y * cursorWidth + x] = color.color;
 			}
 		}
-		cursorImage = new video::CImage(
+		auto driver = context.device->getVideoDriver();
+		cursorImage = driver->createImageFromData(
 			video::ECF_A8R8G8B8,
 			core::dimension2d<u32>(cursorWidth, cursorHeight),
-			imageData);
-		auto driver = context.device->getVideoDriver();
+			rawImageData, true, true);
 		cursorTexture = driver->addTexture("xr_mouse_cursor", cursorImage);
 	}
 };

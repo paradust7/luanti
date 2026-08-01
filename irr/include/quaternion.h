@@ -719,7 +719,7 @@ inline core::quaternion &quaternion::rotationFromTo(const vector3df &from, const
 
 } // end namespace core
 
-inline std::ostream& operator<<(std::ostream& os, const irr::core::quaternion &q)
+inline std::ostream& operator<<(std::ostream& os, const core::quaternion &q)
 {
 	os << "quaternion("
 		<< q.X << ","

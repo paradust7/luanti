@@ -8,6 +8,7 @@
 #include "inventory.h" // ItemStack
 #include "util/basic_macros.h"
 #include "util/numeric.h"
+#include "quaternion.h"
 #include <plane3d.h>
 #include <array>
 #include <vector>
@@ -161,8 +162,8 @@ public:
 	// Draw the wielded arm/tool as an object in the scene (for XR)
 	void enableSceneHand(
 		bool left,
-		const irr::core::vector3df& position,
-		const irr::core::quaternion& orientation);
+		const core::vector3df& position,
+		const core::quaternion& orientation);
 
 	void disableSceneHands();
 

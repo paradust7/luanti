@@ -5,9 +5,6 @@
 #include "CIrrDeviceXR.h"
 #include "OpenXR/IOpenXRConnector.h"
 
-namespace irr
-{
-
 //! constructor
 CIrrDeviceXR::CIrrDeviceXR(const SIrrlichtCreationParameters& param)
 	: CIrrDeviceSDL(param), Connector(nullptr), DeviceMotionActive(false)
@@ -95,7 +92,5 @@ void CIrrDeviceXR::stopXR()
 {
 	Connector->stopXR();
 }
-
-} // namespace irr
 
 #endif // _IRR_COMPILE_WITH_XR_DEVICE_

@@ -12,8 +12,6 @@
 
 using std::unique_ptr;
 
-namespace irr {
-
 class COpenXRInput : public IOpenXRInput {
 public:
 	COpenXRInput(
@@ -34,7 +32,7 @@ public:
 	}
 
 	bool init() {
-		memset(&State, 0, sizeof(State));
+		State = core::XrInputState{};
 		if (!setupActions()) return false;
 		if (!setupBindings()) return false;
 		if (!attachSet()) return false;
@@ -257,7 +255,7 @@ bool COpenXRInput::updateState(XrSessionState sessionState, XrTime predictedDisp
 	XrResult result = xrSyncActions(Session, &syncInfo);
 	if (result == XR_SESSION_NOT_FOCUSED) {
 		// This can happen if there's a delay receiving the session state update event.
-		memset(&State, 0, sizeof(State));
+		State = core::XrInputState{};
 		return true;
 	}
 	if (!check(result, "xrSyncActions"))
@@ -384,7 +382,7 @@ bool COpenXRInput::updateButton(
 
 void COpenXRInput::getInputState(core::XrInputState* state)
 {
-	memcpy(state, &State, sizeof(core::XrInputState));
+	*state = State;
 }
 
 unique_ptr<IOpenXRInput> createOpenXRInput(
@@ -398,8 +396,6 @@ unique_ptr<IOpenXRInput> createOpenXRInput(
 	}
 	return obj;
 }
-
-} // end namespace irr
 
 #endif // _IRR_COMPILE_WITH_XR_DEVICE_
 

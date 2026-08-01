@@ -3,9 +3,6 @@
 #include "os.h"
 #include "OpenXRHeaders.h"
 
-namespace irr
-{
-
 bool openxr_check(XrInstance instance, XrResult result, const char* func)
 {
 	if (result == XR_SUCCESS)
@@ -34,8 +31,6 @@ bool openxr_check(XrInstance instance, XrResult result, const char* func)
 	os::Printer::log(text.c_str(), ELL_ERROR);
 	return false;
 }
-
-} // end namespace irr
 
 #endif // _IRR_COMPILE_WITH_XR_DEVICE_
 

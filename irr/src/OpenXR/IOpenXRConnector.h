@@ -10,9 +10,6 @@
 #include <unordered_set>
 #include <memory>
 
-namespace irr
-{
-
 enum XR_MODE_FLAGS {
 	XRMF_ROOM_SCALE = 0x1,
 };
@@ -87,7 +84,5 @@ public:
 
 
 std::unique_ptr<IOpenXRConnector> createOpenXRConnector(video::IVideoDriver* driver, uint32_t mode_flags);
-
-} // namespace irr
 
 #endif // _IRR_COMPILE_WITH_XR_DEVICE_

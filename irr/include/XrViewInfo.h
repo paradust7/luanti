@@ -6,8 +6,6 @@
 #include "dimension2d.h"
 #include "IRenderTarget.h"
 
-namespace irr
-{
 namespace core
 {
 
@@ -106,4 +104,3 @@ struct XrViewInfo {
 };
 
 } // end namespace core
-} // end namespace irr

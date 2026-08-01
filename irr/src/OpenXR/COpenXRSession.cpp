@@ -14,8 +14,6 @@ using std::unique_ptr;
 
 uint64_t XrFrameCounter = 0;
 
-namespace irr {
-
 class COpenXRSession : public IOpenXRSession {
 public:
 	COpenXRSession(
@@ -1053,8 +1051,6 @@ unique_ptr<IOpenXRSession> createOpenXRSession(
 	}
 	return obj;
 }
-
-} // end namespace irr
 
 #endif // _IRR_COMPILE_WITH_XR_DEVICE_
 

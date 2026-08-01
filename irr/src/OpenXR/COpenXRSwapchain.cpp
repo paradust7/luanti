@@ -28,8 +28,6 @@
 
 using std::unique_ptr;
 
-namespace irr {
-
 class COpenXRSwapchain : public IOpenXRSwapchain
 {
 public:
@@ -284,7 +282,5 @@ unique_ptr<IOpenXRSwapchain> createOpenXRSwapchain(
 		return nullptr;
 	return obj;
 }
-
-} // end namespace irr
 
 #endif // _IRR_COMPILE_WITH_XR_DEVICE_

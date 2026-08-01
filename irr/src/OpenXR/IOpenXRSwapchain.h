@@ -8,8 +8,6 @@
 
 #include <memory>
 
-namespace irr {
-
 class IOpenXRSwapchain {
 public:
 	virtual ~IOpenXRSwapchain() {}
@@ -47,5 +45,4 @@ std::unique_ptr<IOpenXRSwapchain> createOpenXRSwapchain(
 	uint32_t width,
 	uint32_t height);
 
-} // end namespace irr
 #endif

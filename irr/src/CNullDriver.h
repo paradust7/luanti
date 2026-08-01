@@ -286,7 +286,7 @@ public:
 	ITexture* useDeviceDependentTexture(const io::path& name, E_DRIVER_TYPE driverType, void *textureId, ECOLOR_FORMAT colorFormat, u32 width, u32 height) override;
 
 protected:
-	friend class irr::COpenXRSwapchain;
+	friend class COpenXRSwapchain;
 
 	/// Links a hardware buffer to its software counterpart
 	struct SHWBufferLink

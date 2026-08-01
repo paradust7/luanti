@@ -25,8 +25,6 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "pose.h"
 #include <ostream>
 
-namespace irr
-{
 namespace core
 {
 
@@ -103,9 +101,8 @@ class pose
 };
 
 } // end namespace core
-} // end namespace irr
 
-inline std::ostream& operator<<(std::ostream& os, const irr::core::pose& pose)
+inline std::ostream& operator<<(std::ostream& os, const core::pose& pose)
 {
 	os << "pose(" << pose.Position << "," << pose.Rotation << ")";
 	return os;

@@ -545,7 +545,7 @@ struct hash<core::vector3d<T>>
 
 }
 
-inline std::ostream& operator<<(std::ostream& os, const irr::core::vector3df& v)
+inline std::ostream& operator<<(std::ostream& os, const core::vector3df& v)
 {
 	os << "vector3df(" << v.X << ", " << v.Y << ", " << v.Z << ")";
 	return os;

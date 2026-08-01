@@ -7,8 +7,6 @@
 
 #include "OpenXRHeaders.h"
 
-namespace irr {
-
 class OpenXRException : public std::exception
 {
 public:
@@ -42,7 +40,5 @@ extern bool openxr_check(XrInstance instance, XrResult result, const char* func)
 		abort(); \
 	} \
 } while (0)
-
-} // end namespace irr
 
 #endif

@@ -6,8 +6,6 @@
 
 #include <memory>
 
-namespace irr {
-
 class IOpenXRSession {
 public:
 	virtual ~IOpenXRSession() {}
@@ -24,7 +22,5 @@ std::unique_ptr<IOpenXRSession> createOpenXRSession(
 	XrInstance instance,
 	video::IVideoDriver* driver,
 	XrReferenceSpaceType playSpaceType);
-
-} // end namespace irr
 
 #endif // _IRR_COMPILE_WITH_XR_DEVICE_
