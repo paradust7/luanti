@@ -1,21 +1,6 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "settings.h"
 #include "porting.h"
@@ -25,32 +10,101 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "porting.h"
 #include "mapgen/mapgen.h" // Mapgen::setDefaultSettings
 #include "util/string.h"
+#include "server.h"
+
+
+/*
+ * inspired by https://github.com/systemd/systemd/blob/7aed43437175623e0f3ae8b071bbc500c13ce893/src/hostname/hostnamed.c#L406
+ * this could be done in future with D-Bus using query:
+ * busctl get-property org.freedesktop.hostname1 /org/freedesktop/hostname1 org.freedesktop.hostname1 Chassis
+ */
+static bool detect_touch()
+{
+#if defined(__ANDROID__)
+	return true;
+#elif defined(__linux__)
+	std::string chassis_type;
+
+	// device-tree platforms (non-X86)
+	std::ifstream dtb_file("/proc/device-tree/chassis-type");
+	if (dtb_file.is_open()) {
+		std::getline(dtb_file, chassis_type);
+		chassis_type.pop_back();
+
+		if (chassis_type == "tablet" ||
+		    chassis_type == "handset" ||
+		    chassis_type == "watch")
+			return true;
+
+		if (!chassis_type.empty())
+			return false;
+	}
+	// SMBIOS
+	std::ifstream dmi_file("/sys/class/dmi/id/chassis_type");
+	if (dmi_file.is_open()) {
+		std::getline(dmi_file, chassis_type);
+
+		if (chassis_type == "11" /* Handheld */ ||
+		    chassis_type == "30" /* Tablet */)
+			return true;
+
+		return false;
+	}
+
+	// ACPI-based platforms
+	std::ifstream acpi_file("/sys/firmware/acpi/pm_profile");
+	if (acpi_file.is_open()) {
+		std::getline(acpi_file, chassis_type);
+
+		if (chassis_type == "8" /* Tablet */)
+			return true;
+
+		return false;
+	}
+
+	return false;
+#else
+	// we don't know, return default
+	return false;
+#endif
+}
 
 void set_default_settings()
 {
 	Settings *settings = Settings::createLayer(SL_DEFAULTS);
+	bool has_touch = detect_touch();
 
 	// Client and server
 	settings->setDefault("language", "");
 	settings->setDefault("name", "");
 	settings->setDefault("bind_address", "");
-	settings->setDefault("serverlist_url", "servers.minetest.net");
+	settings->setDefault("serverlist_url", "https://servers.luanti.org");
 
 	// Client
 	settings->setDefault("address", "");
-	settings->setDefault("enable_sound", "true");
-#if ENABLE_TOUCH
-	settings->setDefault("enable_touch", "true");
+	settings->setDefault("remote_port", "30000");
+#if defined(__unix__) && !defined(__APPLE__) && !defined (__ANDROID__)
+	// On Linux+X11 (not Linux+Wayland or Linux+XWayland), I've encountered a bug
+	// where fake mouse events were generated from touch events if in relative
+	// mouse mode, resulting in the touchscreen controls being instantly disabled
+	// again and thus making them unusable.
+	// => We can't switch based on the last input method used.
+	// => Fall back to hardware detection.
+	settings->setDefault("touch_controls", bool_to_cstr(has_touch));
 #else
-	settings->setDefault("enable_touch", "false");
+	settings->setDefault("touch_controls", "auto");
 #endif
+	// Since GUI scaling shouldn't suddenly change during a session, we use
+	// hardware detection for "touch_gui" instead of switching based on the last
+	// input method used.
+	settings->setDefault("touch_gui", bool_to_cstr(has_touch));
 	settings->setDefault("sound_volume", "0.8");
 	settings->setDefault("sound_volume_unfocused", "0.3");
 	settings->setDefault("mute_sound", "false");
 	settings->setDefault("sound_extensions_blacklist", "");
-	settings->setDefault("enable_mesh_cache", "false");
 	settings->setDefault("mesh_generation_interval", "0");
 	settings->setDefault("mesh_generation_threads", "0");
+	settings->setDefault("mesh_buffer_min_vertices", "300");
 	settings->setDefault("free_move", "false");
 	settings->setDefault("pitch_move", "false");
 	settings->setDefault("fast_move", "false");
@@ -59,14 +113,16 @@ void set_default_settings()
 	settings->setDefault("screenshot_format", "png");
 	settings->setDefault("screenshot_quality", "0");
 	settings->setDefault("client_unload_unused_data_timeout", "600");
-	settings->setDefault("client_mapblock_limit", "7500");
+	settings->setDefault("client_mapblock_limit", "7500"); // about 120 MB
 	settings->setDefault("enable_build_where_you_stand", "false");
 	settings->setDefault("curl_timeout", "20000");
+	settings->setDefault("secure.curl_proxy", "");
 	settings->setDefault("curl_parallel_limit", "8");
 	settings->setDefault("curl_file_download_timeout", "300000");
 	settings->setDefault("curl_verify_cert", "true");
 	settings->setDefault("enable_remote_media_server", "true");
 	settings->setDefault("enable_client_modding", "false");
+	settings->setDefault("enable_sscsm", "nowhere");
 	settings->setDefault("max_out_chat_queue_size", "20");
 	settings->setDefault("pause_on_lost_focus", "false");
 	settings->setDefault("enable_split_login_register", "true");
@@ -78,68 +134,71 @@ void set_default_settings()
 
 
 	// Keymap
-	settings->setDefault("remote_port", "30000");
-	settings->setDefault("keymap_forward", "KEY_KEY_W");
+	settings->setDefault("keymap_forward", "SYSTEM_SCANCODE_26"); // KEY_KEY_W
 	settings->setDefault("keymap_autoforward", "");
-	settings->setDefault("keymap_backward", "KEY_KEY_S");
-	settings->setDefault("keymap_left", "KEY_KEY_A");
-	settings->setDefault("keymap_right", "KEY_KEY_D");
-	settings->setDefault("keymap_jump", "KEY_SPACE");
-	settings->setDefault("keymap_sneak", "KEY_LSHIFT");
-	settings->setDefault("keymap_dig", "KEY_LBUTTON");
-	settings->setDefault("keymap_place", "KEY_RBUTTON");
-	settings->setDefault("keymap_drop", "KEY_KEY_Q");
-	settings->setDefault("keymap_zoom", "KEY_KEY_Z");
-	settings->setDefault("keymap_inventory", "KEY_KEY_I");
-	settings->setDefault("keymap_aux1", "KEY_KEY_E");
-	settings->setDefault("keymap_chat", "KEY_KEY_T");
-	settings->setDefault("keymap_xr_recenter", "KEY_KEY_P");
-	settings->setDefault("keymap_xr_switch_hud", "KEY_KEY_O");
-	settings->setDefault("keymap_cmd", "/");
-	settings->setDefault("keymap_cmd_local", ".");
-	settings->setDefault("keymap_minimap", "KEY_KEY_V");
-	settings->setDefault("keymap_console", "KEY_F10");
-#if ENABLE_TOUCH
-	// See https://github.com/minetest/minetest/issues/12792
-	settings->setDefault("keymap_rangeselect", "KEY_KEY_R");
-#else
-	settings->setDefault("keymap_rangeselect", "");
-#endif
-	settings->setDefault("keymap_freemove", "KEY_KEY_K");
+	settings->setDefault("keymap_backward", "SYSTEM_SCANCODE_22"); // KEY_KEY_S
+	settings->setDefault("keymap_left", "SYSTEM_SCANCODE_4"); // KEY_KEY_A
+	settings->setDefault("keymap_right", "SYSTEM_SCANCODE_7"); // KEY_KEY_D
+	settings->setDefault("keymap_jump", "SYSTEM_SCANCODE_44"); // KEY_SPACE
+	settings->setDefault("keymap_sneak", "SYSTEM_SCANCODE_225"); // KEY_LSHIFT
+	settings->setDefault("keymap_dig", "MOUSE_BUTTON_1");
+	settings->setDefault("keymap_place", "MOUSE_BUTTON_3");
+	settings->setDefault("keymap_drop", "SYSTEM_SCANCODE_20"); // KEY_KEY_Q
+	settings->setDefault("keymap_zoom", "SYSTEM_SCANCODE_29"); // KEY_KEY_Z
+	settings->setDefault("keymap_inventory", "SYSTEM_SCANCODE_12"); // KEY_KEY_I
+	settings->setDefault("keymap_aux1", "SYSTEM_SCANCODE_8"); // KEY_KEY_E
+	settings->setDefault("keymap_chat", "SYSTEM_SCANCODE_23"); // KEY_KEY_T
+	settings->setDefault("keymap_cmd", "SYSTEM_SCANCODE_56"); // /
+	settings->setDefault("keymap_cmd_local", "SYSTEM_SCANCODE_55"); // .
+	settings->setDefault("keymap_minimap", "SYSTEM_SCANCODE_25"); // KEY_KEY_V
+	settings->setDefault("keymap_console", "SYSTEM_SCANCODE_67"); // KEY_F10
+	settings->setDefault("keymap_xr_recenter", "SYSTEM_SCANCODE_19"); // KEY_KEY_P
+	settings->setDefault("keymap_xr_switch_hud", "SYSTEM_SCANCODE_18"); // KEY_KEY_O
+
+	// see <https://github.com/luanti-org/luanti/issues/12792>
+	settings->setDefault("keymap_rangeselect", has_touch ? "SYSTEM_SCANCODE_21" : ""); // KEY_KEY_R
+
+	settings->setDefault("keymap_freemove", "SYSTEM_SCANCODE_14"); // KEY_KEY_K
 	settings->setDefault("keymap_pitchmove", "");
-	settings->setDefault("keymap_fastmove", "KEY_KEY_J");
-	settings->setDefault("keymap_noclip", "KEY_KEY_H");
-	settings->setDefault("keymap_hotbar_next", "KEY_KEY_N");
-	settings->setDefault("keymap_hotbar_previous", "KEY_KEY_B");
-	settings->setDefault("keymap_mute", "KEY_KEY_M");
+	settings->setDefault("keymap_fastmove", "SYSTEM_SCANCODE_13"); // KEY_KEY_J
+	settings->setDefault("keymap_noclip", "SYSTEM_SCANCODE_11"); // KEY_KEY_H
+	settings->setDefault("keymap_hotbar_next", "SYSTEM_SCANCODE_17"); // KEY_KEY_N
+	settings->setDefault("keymap_hotbar_previous", "SYSTEM_SCANCODE_5"); // KEY_KEY_B
+	settings->setDefault("keymap_mute", "SYSTEM_SCANCODE_16"); // KEY_KEY_M
 	settings->setDefault("keymap_increase_volume", "");
 	settings->setDefault("keymap_decrease_volume", "");
 	settings->setDefault("keymap_cinematic", "");
 	settings->setDefault("keymap_toggle_block_bounds", "");
-	settings->setDefault("keymap_toggle_hud", "KEY_F1");
-	settings->setDefault("keymap_toggle_chat", "KEY_F2");
-	settings->setDefault("keymap_toggle_fog", "KEY_F3");
-#if DEBUG
-	settings->setDefault("keymap_toggle_update_camera", "KEY_F4");
+	settings->setDefault("keymap_toggle_hud", "SYSTEM_SCANCODE_58"); // KEY_F1
+	settings->setDefault("keymap_toggle_chat", "SYSTEM_SCANCODE_59"); // KEY_F2
+	settings->setDefault("keymap_toggle_fog", "SYSTEM_SCANCODE_60"); // KEY_F3
+#ifndef NDEBUG
+	settings->setDefault("keymap_toggle_update_camera", "SYSTEM_SCANCODE_61"); // KEY_F4
 #else
 	settings->setDefault("keymap_toggle_update_camera", "");
 #endif
-	settings->setDefault("keymap_toggle_debug", "KEY_F5");
-	settings->setDefault("keymap_toggle_profiler", "KEY_F6");
-	settings->setDefault("keymap_camera_mode", "KEY_KEY_C");
-	settings->setDefault("keymap_screenshot", "KEY_F12");
-	settings->setDefault("keymap_increase_viewing_range_min", "+");
-	settings->setDefault("keymap_decrease_viewing_range_min", "-");
-	settings->setDefault("keymap_slot1", "KEY_KEY_1");
-	settings->setDefault("keymap_slot2", "KEY_KEY_2");
-	settings->setDefault("keymap_slot3", "KEY_KEY_3");
-	settings->setDefault("keymap_slot4", "KEY_KEY_4");
-	settings->setDefault("keymap_slot5", "KEY_KEY_5");
-	settings->setDefault("keymap_slot6", "KEY_KEY_6");
-	settings->setDefault("keymap_slot7", "KEY_KEY_7");
-	settings->setDefault("keymap_slot8", "KEY_KEY_8");
-	settings->setDefault("keymap_slot9", "KEY_KEY_9");
-	settings->setDefault("keymap_slot10", "KEY_KEY_0");
+	settings->setDefault("keymap_toggle_debug", "SYSTEM_SCANCODE_62"); // KEY_F5
+	settings->setDefault("keymap_toggle_profiler", "SYSTEM_SCANCODE_63"); // KEY_F6
+	settings->setDefault("keymap_camera_mode", "SYSTEM_SCANCODE_6"); // KEY_KEY_C
+	settings->setDefault("keymap_camera_yaw_left", "");
+	settings->setDefault("keymap_camera_yaw_right", "");
+	settings->setDefault("keymap_camera_pitch_up", "");
+	settings->setDefault("keymap_camera_pitch_down", "");
+	settings->setDefault("keymap_screenshot", "SYSTEM_SCANCODE_69"); // KEY_F12
+	settings->setDefault("keymap_fullscreen", "SYSTEM_SCANCODE_68"); // KEY_F11
+	settings->setDefault("keymap_increase_viewing_range_min", "SYSTEM_SCANCODE_46"); // +
+	settings->setDefault("keymap_decrease_viewing_range_min", "SYSTEM_SCANCODE_45"); // -
+	settings->setDefault("keymap_close_world", "");
+	settings->setDefault("keymap_slot1", "SYSTEM_SCANCODE_30"); // KEY_KEY_1
+	settings->setDefault("keymap_slot2", "SYSTEM_SCANCODE_31"); // KEY_KEY_2
+	settings->setDefault("keymap_slot3", "SYSTEM_SCANCODE_32"); // KEY_KEY_3
+	settings->setDefault("keymap_slot4", "SYSTEM_SCANCODE_33"); // KEY_KEY_4
+	settings->setDefault("keymap_slot5", "SYSTEM_SCANCODE_34"); // KEY_KEY_5
+	settings->setDefault("keymap_slot6", "SYSTEM_SCANCODE_35"); // KEY_KEY_6
+	settings->setDefault("keymap_slot7", "SYSTEM_SCANCODE_36"); // KEY_KEY_7
+	settings->setDefault("keymap_slot8", "SYSTEM_SCANCODE_37"); // KEY_KEY_8
+	settings->setDefault("keymap_slot9", "SYSTEM_SCANCODE_38"); // KEY_KEY_9
+	settings->setDefault("keymap_slot10", "SYSTEM_SCANCODE_39"); // KEY_KEY_0
 	settings->setDefault("keymap_slot11", "");
 	settings->setDefault("keymap_slot12", "");
 	settings->setDefault("keymap_slot13", "");
@@ -165,10 +224,10 @@ void set_default_settings()
 
 #ifndef NDEBUG
 	// Default keybinds for quicktune in debug builds
-	settings->setDefault("keymap_quicktune_prev", "KEY_HOME");
-	settings->setDefault("keymap_quicktune_next", "KEY_END");
-	settings->setDefault("keymap_quicktune_dec", "KEY_NEXT");
-	settings->setDefault("keymap_quicktune_inc", "KEY_PRIOR");
+	settings->setDefault("keymap_quicktune_prev", "SYSTEM_SCANCODE_74"); // KEY_HOME
+	settings->setDefault("keymap_quicktune_next", "SYSTEM_SCANCODE_77"); // KEY_END
+	settings->setDefault("keymap_quicktune_dec", "SYSTEM_SCANCODE_81"); // KEY_NEXT
+	settings->setDefault("keymap_quicktune_inc", "SYSTEM_SCANCODE_82"); // KEY_PRIOR
 #else
 	settings->setDefault("keymap_quicktune_prev", "");
 	settings->setDefault("keymap_quicktune_next", "");
@@ -179,14 +238,16 @@ void set_default_settings()
 	// Visuals
 #ifdef NDEBUG
 	settings->setDefault("show_debug", "false");
+	settings->setDefault("opengl_debug", "false");
 #else
 	settings->setDefault("show_debug", "true");
+	settings->setDefault("opengl_debug", "true");
 #endif
 	settings->setDefault("fsaa", "2");
 	settings->setDefault("undersampling", "1");
 	settings->setDefault("world_aligned_mode", "enable");
 	settings->setDefault("autoscale_mode", "disable");
-	settings->setDefault("texture_min_size", "64");
+	settings->setDefault("texture_min_size", std::to_string(TEXTURE_FILTER_MIN_SIZE));
 	settings->setDefault("enable_fog", "true");
 	settings->setDefault("fog_start", "0.4");
 	settings->setDefault("3d_mode", "xr");
@@ -201,17 +262,14 @@ void set_default_settings()
 	settings->setDefault("screen_h", "600");
 	settings->setDefault("window_maximized", "false");
 	settings->setDefault("autosave_screensize", "true");
-#ifdef ENABLE_TOUCH
-	settings->setDefault("fullscreen", "true");
-#else
-	settings->setDefault("fullscreen", "false");
-#endif
+	settings->setDefault("fullscreen", bool_to_cstr(has_touch));
 	settings->setDefault("vsync", "false");
 	settings->setDefault("fov", "72");
 	settings->setDefault("leaves_style", "fancy");
 	settings->setDefault("connected_glass", "false");
 	settings->setDefault("smooth_lighting", "true");
 	settings->setDefault("performance_tradeoffs", "false");
+	settings->setDefault("array_texture_max", "1000");
 	settings->setDefault("lighting_alpha", "0.0");
 	settings->setDefault("lighting_beta", "1.5");
 	settings->setDefault("display_gamma", "1.0");
@@ -223,14 +281,14 @@ void set_default_settings()
 	settings->setDefault("video_driver", "");
 	settings->setDefault("cinematic", "false");
 	settings->setDefault("camera_smoothing", "0.0");
-	settings->setDefault("cinematic_camera_smoothing", "0.7");
-	settings->setDefault("enable_clouds", "true");
+	settings->setDefault("cinematic_camera_smoothing", "0.05");
 	settings->setDefault("view_bobbing_amount", "1.0");
-	settings->setDefault("fall_bobbing_amount", "0.03");
 	settings->setDefault("enable_3d_clouds", "true");
+	settings->setDefault("soft_clouds", "false");
 	settings->setDefault("cloud_radius", "12");
 	settings->setDefault("menu_clouds", "true");
-	settings->setDefault("opaque_water", "false");
+	settings->setDefault("menu_theme", "light");
+	settings->setDefault("translucent_liquids", "true");
 	settings->setDefault("console_height", "0.6");
 	settings->setDefault("console_color", "(0,0,0)");
 	settings->setDefault("console_alpha", "200");
@@ -245,16 +303,16 @@ void set_default_settings()
 	settings->setDefault("hud_scaling", "1.0");
 	settings->setDefault("gui_scaling", "1.0");
 	settings->setDefault("gui_scaling_filter", "false");
-	settings->setDefault("gui_scaling_filter_txr2img", "true");
-	settings->setDefault("desynchronize_mapblock_texture_animation", "false");
+	settings->setDefault("smooth_scrolling", "true");
 	settings->setDefault("hud_hotbar_max_width", "1.0");
 	settings->setDefault("enable_local_map_saving", "false");
 	settings->setDefault("show_entity_selectionbox", "false");
 	settings->setDefault("ambient_occlusion_gamma", "1.8");
-	settings->setDefault("enable_shaders", "true");
-	settings->setDefault("enable_particles", "true");
 	settings->setDefault("arm_inertia", "true");
+	settings->setDefault("hurt_flash_enabled", "true");
 	settings->setDefault("show_nametag_backgrounds", "true");
+	settings->setDefault("show_block_bounds_radius_near", "4");
+	settings->setDefault("transparency_sorting_group_by_buffers", "true");
 	settings->setDefault("transparency_sorting_distance", "16");
 
 	settings->setDefault("enable_minimap", "true");
@@ -263,6 +321,7 @@ void set_default_settings()
 
 	// Effects
 	settings->setDefault("enable_post_processing", "true");
+	settings->setDefault("post_processing_texture_bits", "10");
 	settings->setDefault("directional_colored_fog", "true");
 	settings->setDefault("inventory_items_animations", "false");
 	settings->setDefault("mip_map", "false");
@@ -280,43 +339,52 @@ void set_default_settings()
 	settings->setDefault("enable_auto_exposure", "false");
 	settings->setDefault("debanding", "true");
 	settings->setDefault("antialiasing", "none");
+	settings->setDefault("fxaa", "false");
 	settings->setDefault("enable_bloom", "false");
 	settings->setDefault("enable_bloom_debug", "false");
-	settings->setDefault("bloom_strength_factor", "1.0");
-	settings->setDefault("bloom_intensity", "0.05");
-	settings->setDefault("bloom_radius", "1");
 	settings->setDefault("enable_volumetric_lighting", "false");
+	settings->setDefault("enable_water_reflections", "false");
+	settings->setDefault("enable_translucent_foliage", "false");
 
 	// Effects Shadows
 	settings->setDefault("enable_dynamic_shadows", "false");
 	settings->setDefault("shadow_strength_gamma", "1.0");
-	settings->setDefault("shadow_map_max_distance", "140.0");
-	settings->setDefault("shadow_map_texture_size", "2048");
-	settings->setDefault("shadow_map_texture_32bit", "true");
-	settings->setDefault("shadow_map_color", "false");
-	settings->setDefault("shadow_filters", "1");
 	settings->setDefault("shadow_poisson_filter", "true");
-	settings->setDefault("shadow_update_frames", "8");
+	settings->setDefault("shadow_update_frames", "16");
 	settings->setDefault("shadow_soft_radius", "5.0");
 	settings->setDefault("shadow_sky_body_orbit_tilt", "0.0");
+#ifndef __ANDROID__
+	// equivalent to "Medium" preset
+	// see "shadows_component.lua"
+	settings->setDefault("shadow_map_max_distance", "140.0");
+	settings->setDefault("shadow_map_texture_size", "2048");
+	settings->setDefault("shadow_filters", "1");
+#else
+	// equivalent to "Low" preset
+	settings->setDefault("shadow_map_max_distance", "93.0");
+	settings->setDefault("shadow_map_texture_size", "1024");
+	settings->setDefault("shadow_filters", "0");
+#endif
+	settings->setDefault("shadow_map_texture_32bit", "true");
+	settings->setDefault("shadow_map_color", "false");
 
 	// Input
 	settings->setDefault("invert_mouse", "false");
 	settings->setDefault("enable_hotbar_mouse_wheel", "true");
 	settings->setDefault("invert_hotbar_mouse_wheel", "false");
 	settings->setDefault("mouse_sensitivity", "0.2");
+	settings->setDefault("keyboard_camera_speed", "170.0");
 	settings->setDefault("repeat_place_time", "0.25");
-	settings->setDefault("repeat_dig_time", "0.15");
+	settings->setDefault("repeat_dig_time", "0.0");
 	settings->setDefault("safe_dig_and_place", "false");
 	settings->setDefault("random_input", "false");
 	settings->setDefault("aux1_descends", "false");
 	settings->setDefault("doubletap_jump", "false");
 	settings->setDefault("always_fly_fast", "true");
-#ifdef ENABLE_TOUCH
-	settings->setDefault("autojump", "true");
-#else
-	settings->setDefault("autojump", "false");
-#endif
+	settings->setDefault("toggle_sneak_key", "false");
+	settings->setDefault("toggle_aux1_key", "false");
+	settings->setDefault("autojump", bool_to_cstr(has_touch));
+	settings->setDefault("enable_esc_dialog", "true");
 	settings->setDefault("continuous_forward", "false");
 	settings->setDefault("enable_joysticks", "false");
 	settings->setDefault("joystick_id", "0");
@@ -352,7 +420,8 @@ void set_default_settings()
 	settings->setDefault("chat_font_size", "0"); // Default "font_size"
 
 	// ContentDB
-	settings->setDefault("contentdb_url", "https://content.minetest.net");
+	settings->setDefault("contentdb_url", "https://content.luanti.org");
+	settings->setDefault("contentdb_enable_updates_indicator", "true");
 	settings->setDefault("contentdb_max_concurrent_downloads", "3");
 
 #ifdef __ANDROID__
@@ -362,28 +431,31 @@ void set_default_settings()
 #endif
 
 #if ENABLE_UPDATE_CHECKER
-	settings->setDefault("update_information_url", "https://www.minetest.net/release_info.json");
+	settings->setDefault("update_information_url", "https://www.luanti.org/release_info.json");
 #else
 	settings->setDefault("update_information_url", "");
 #endif
 
 	// Server
-	settings->setDefault("disable_escape_sequences", "false");
-	settings->setDefault("strip_color_codes", "false");
+	settings->setDefault("strip_color_codes", "true");
+#ifndef NDEBUG
+	settings->setDefault("random_mod_load_order", "true");
+#else
+	settings->setDefault("random_mod_load_order", "false");
+#endif
 #if USE_PROMETHEUS
 	settings->setDefault("prometheus_listener_address", "127.0.0.1:30000");
 #endif
 
 	// Network
 	settings->setDefault("enable_ipv6", "true");
-	settings->setDefault("ipv6_server", "false");
+	settings->setDefault("ipv6_server", "true");
 	settings->setDefault("max_packets_per_iteration", "1024");
 	settings->setDefault("port", "30000");
 	settings->setDefault("strict_protocol_version_checking", "false");
 	settings->setDefault("protocol_version_min", "1");
 	settings->setDefault("player_transfer_distance", "0");
 	settings->setDefault("max_simultaneous_block_sends_per_client", "40");
-	settings->setDefault("time_send_interval", "5");
 
 	settings->setDefault("motd", "");
 	settings->setDefault("max_users", "15");
@@ -394,7 +466,9 @@ void set_default_settings()
 	settings->setDefault("enable_pvp", "true");
 	settings->setDefault("enable_mod_channels", "false");
 	settings->setDefault("disallow_empty_password", "false");
-	settings->setDefault("disable_anticheat", "false");
+	settings->setDefault("anticheat_flags", flagdesc_anticheat,
+		AC_DIGGING | AC_INTERACTION | AC_MOVEMENT);
+	settings->setDefault("anticheat_movement_tolerance", "1.0");
 	settings->setDefault("enable_rollback_recording", "false");
 	settings->setDefault("deprecated_lua_api_handling", "log");
 
@@ -440,7 +514,7 @@ void set_default_settings()
 	settings->setDefault("emergequeue_limit_total", "1024");
 	settings->setDefault("emergequeue_limit_diskonly", "128");
 	settings->setDefault("emergequeue_limit_generate", "128");
-	settings->setDefault("num_emerge_threads", "1");
+	settings->setDefault("num_emerge_threads", "0");
 	settings->setDefault("secure.enable_security", "true");
 	settings->setDefault("secure.trusted_mods", "");
 	settings->setDefault("secure.http_mods", "");
@@ -480,28 +554,22 @@ void set_default_settings()
 	settings->setDefault("server_address", "");
 	settings->setDefault("server_name", "");
 	settings->setDefault("server_description", "");
+	settings->setDefault("server_announce_send_players", "true");
 
 	settings->setDefault("enable_console", "false");
-	settings->setDefault("screen_dpi", "72");
 	settings->setDefault("display_density_factor", "1");
+	settings->setDefault("dpi_change_notifier", "0");
 
-	// Altered settings for macOS
-#if defined(__MACH__) && defined(__APPLE__)
-	settings->setDefault("keymap_sneak", "KEY_SHIFT");
-#endif
-
+	settings->setDefault("touch_layout", "");
 	settings->setDefault("touchscreen_sensitivity", "0.2");
 	settings->setDefault("touchscreen_threshold", "20");
 	settings->setDefault("touch_long_tap_delay", "400");
-	settings->setDefault("touch_use_crosshair", "false");
 	settings->setDefault("fixed_virtual_joystick", "false");
 	settings->setDefault("virtual_joystick_triggers_aux1", "false");
+	settings->setDefault("touch_interaction_style", "tap");
 	settings->setDefault("touch_punch_gesture", "short_tap");
-#ifdef ENABLE_TOUCH
-	settings->setDefault("clickable_chat_weblinks", "false");
-#else
 	settings->setDefault("clickable_chat_weblinks", "true");
-#endif
+
 	// Altered settings for Android
 #ifdef __ANDROID__
 	settings->setDefault("screen_w", "0");
@@ -513,12 +581,17 @@ void set_default_settings()
 	settings->setDefault("max_block_generate_distance", "5");
 	settings->setDefault("sqlite_synchronous", "1");
 	settings->setDefault("server_map_save_interval", "15");
-	settings->setDefault("client_mapblock_limit", "1000");
+	settings->setDefault("client_mapblock_limit", "1500");
 	settings->setDefault("active_block_range", "2");
-	settings->setDefault("viewing_range", "50");
+	settings->setDefault("viewing_range", "70");
 	settings->setDefault("leaves_style", "simple");
+	// Note: OpenGL ES 2.0 is not guaranteed to provide depth textures,
+	// which we would need for PP.
 	settings->setDefault("enable_post_processing", "false");
+	// still set these two settings in case someone wants to enable it
 	settings->setDefault("debanding", "false");
+	settings->setDefault("post_processing_texture_bits", "8");
+	// We don't have working certificate verification...
 	settings->setDefault("curl_verify_cert", "false");
 
 	// Apply settings according to screen size

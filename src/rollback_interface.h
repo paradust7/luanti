@@ -1,34 +1,16 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
 #include "irr_v3d.h"
 #include <string>
-#include <iostream>
 #include <list>
-#include "exceptions.h"
 #include "inventory.h"
 
 class Map;
 class IGameDef;
-struct MapNode;
 class InventoryManager;
 
 struct RollbackNode
@@ -38,12 +20,15 @@ struct RollbackNode
 	int param2 = 0;
 	std::string meta;
 
-	bool operator == (const RollbackNode &other)
+	bool operator == (const RollbackNode &other) const
 	{
 		return (name == other.name && param1 == other.param1 &&
 				param2 == other.param2 && meta == other.meta);
 	}
-	bool operator != (const RollbackNode &other) { return !(*this == other); }
+	bool operator != (const RollbackNode &other) const
+	{
+		return !(*this == other);
+	}
 
 	RollbackNode() = default;
 
@@ -53,15 +38,16 @@ struct RollbackNode
 
 struct RollbackAction
 {
-	enum Type{
+	enum Type : u8 {
 		TYPE_NOTHING,
 		TYPE_SET_NODE,
 		TYPE_MODIFY_INVENTORY_STACK,
-	} type = TYPE_NOTHING;
+	};
 
 	time_t unix_time = 0;
 	std::string actor;
 	bool actor_is_guess = false;
+	Type type = TYPE_NOTHING;
 
 	v3s16 p;
 	RollbackNode n_old;

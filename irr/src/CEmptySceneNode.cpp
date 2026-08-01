@@ -5,8 +5,6 @@
 #include "CEmptySceneNode.h"
 #include "ISceneManager.h"
 
-namespace irr
-{
 namespace scene
 {
 
@@ -14,10 +12,6 @@ namespace scene
 CEmptySceneNode::CEmptySceneNode(ISceneNode *parent, ISceneManager *mgr, s32 id) :
 		ISceneNode(parent, mgr, id)
 {
-#ifdef _DEBUG
-	setDebugName("CEmptySceneNode");
-#endif
-
 	setAutomaticCulling(scene::EAC_OFF);
 }
 
@@ -62,4 +56,3 @@ ISceneNode *CEmptySceneNode::clone(ISceneNode *newParent, ISceneManager *newMana
 }
 
 } // end namespace scene
-} // end namespace irr

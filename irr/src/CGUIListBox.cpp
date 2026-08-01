@@ -13,8 +13,6 @@
 #include "CGUIScrollBar.h"
 #include "os.h"
 
-namespace irr
-{
 namespace gui
 {
 
@@ -29,15 +27,10 @@ CGUIListBox::CGUIListBox(IGUIEnvironment *environment, IGUIElement *parent,
 		ScrollBar(0), selectTime(0), LastKeyTime(0), Selecting(false), DrawBack(drawBack),
 		MoveOverSelect(moveOverSelect), AutoScroll(true), HighlightWhenNotFocused(true)
 {
-#ifdef _DEBUG
-	setDebugName("CGUIListBox");
-#endif
-
 	IGUISkin *skin = Environment->getSkin();
 
-	ScrollBar = new CGUIScrollBar(false, Environment, this, -1,
-			core::recti(0, 0, 1, 1),
-			!clip);
+	ScrollBar = new CGUIScrollBar(Environment, this, -1,
+			core::recti(0, 0, 1, 1), false, !clip);
 	ScrollBar->setSubElement(true);
 	ScrollBar->setTabStop(false);
 	ScrollBar->setAlignment(EGUIA_LOWERRIGHT, EGUIA_LOWERRIGHT, EGUIA_UPPERLEFT, EGUIA_LOWERRIGHT);
@@ -742,4 +735,3 @@ IGUIScrollBar *CGUIListBox::getVerticalScrollBar() const
 }
 
 } // end namespace gui
-} // end namespace irr

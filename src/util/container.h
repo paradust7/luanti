@@ -1,21 +1,6 @@
-/*
-Minetest
-Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
@@ -27,7 +12,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include <list>
 #include <vector>
 #include <map>
-#include <set>
+#include <unordered_set>
 #include <queue>
 #include <cassert>
 #include <limits>
@@ -47,7 +32,7 @@ public:
 	true: value added
 	false: value already exists
 	*/
-	bool push_back(const Value& value)
+	bool push_back(const Value &value)
 	{
 		if (m_set.insert(value).second)
 		{
@@ -63,18 +48,23 @@ public:
 		m_queue.pop();
 	}
 
-	const Value& front() const
+	const Value &front() const
 	{
 		return m_queue.front();
 	}
 
-	u32 size() const
+	size_t size() const
 	{
 		return m_queue.size();
 	}
 
+	bool empty() const
+	{
+		return m_queue.empty();
+	}
+
 private:
-	std::set<Value> m_set;
+	std::unordered_set<Value> m_set;
 	std::queue<Value> m_queue;
 };
 
@@ -115,7 +105,11 @@ public:
 		return result;
 	}
 
-	void clear() { m_values.clear(); }
+	void clear()
+	{
+		MutexAutoLock lock(m_mutex);
+		m_values.clear();
+	}
 
 private:
 	std::map<Key, Value> m_values;
@@ -236,8 +230,37 @@ public:
 		return t;
 	}
 
+	auto iterLocked()
+	{
+		return IterationHelper(this);
+	}
+
 protected:
+	// Helper class that allows direct access to the queue with locking
+	struct IterationHelper {
+		friend class MutexedQueue<T>;
+		~IterationHelper() {
+			q->getMutex().unlock();
+			q->getSignal().post(); // assume modified
+		}
+
+		auto begin() { return q->getQueue().begin(); }
+		auto end() { return q->getQueue().end(); }
+
+		auto erase(typename std::deque<T>::iterator it) {
+			return q->getQueue().erase(it);
+		}
+
+	private:
+		IterationHelper(MutexedQueue<T> *parent) : q(parent) {
+			q->getMutex().lock();
+		}
+
+		MutexedQueue<T> *q;
+	};
+
 	std::mutex &getMutex() { return m_mutex; }
+	Semaphore &getSignal() { return m_signal; }
 
 	std::deque<T> &getQueue() { return m_queue; }
 
@@ -369,7 +392,13 @@ public:
 				return it->second;
 		}
 		auto it = m_values.find(key);
-		return it == m_values.end() ? null_value : it->second;
+		// This conditional block was converted from a ternary to ensure no
+		// temporary values are created in evaluating the return expression,
+		// which could cause a dangling reference.
+		if (it != m_values.end())
+			return it->second;
+		else
+			return null_value;
 	}
 
 	void put(const K &key, const V &value) {
@@ -433,7 +462,7 @@ public:
 		return !!take(key);
 	}
 
-	// Warning: not constant-time!
+	/// @warning not constant-time!
 	size_t size() const {
 		if (m_iterating) {
 			// This is by no means impossible to determine, it's just annoying
@@ -449,7 +478,7 @@ public:
 		return n;
 	}
 
-	// Warning: not constant-time!
+	/// @warning not constant-time!
 	bool empty() const {
 		if (m_iterating)
 			return false; // maybe

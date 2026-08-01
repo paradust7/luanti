@@ -8,8 +8,6 @@
 #include "ICameraSceneNode.h"
 #include "os.h"
 
-namespace irr
-{
 namespace scene
 {
 
@@ -20,33 +18,32 @@ CBillboardSceneNode::CBillboardSceneNode(ISceneNode *parent, ISceneManager *mgr,
 		IBillboardSceneNode(parent, mgr, id, position),
 		Buffer(new SMeshBuffer())
 {
-#ifdef _DEBUG
-	setDebugName("CBillboardSceneNode");
-#endif
-
 	setSize(size);
 
-	Buffer->Vertices.set_used(4);
-	Buffer->Indices.set_used(6);
+	auto &Vertices = Buffer->Vertices->Data;
+	auto &Indices = Buffer->Indices->Data;
 
-	Buffer->Indices[0] = 0;
-	Buffer->Indices[1] = 2;
-	Buffer->Indices[2] = 1;
-	Buffer->Indices[3] = 0;
-	Buffer->Indices[4] = 3;
-	Buffer->Indices[5] = 2;
+	Vertices.resize(4);
+	Indices.resize(6);
 
-	Buffer->Vertices[0].TCoords.set(1.0f, 1.0f);
-	Buffer->Vertices[0].Color = colorBottom;
+	Indices[0] = 0;
+	Indices[1] = 2;
+	Indices[2] = 1;
+	Indices[3] = 0;
+	Indices[4] = 3;
+	Indices[5] = 2;
 
-	Buffer->Vertices[1].TCoords.set(1.0f, 0.0f);
-	Buffer->Vertices[1].Color = colorTop;
+	Vertices[0].TCoords.set(1.0f, 1.0f);
+	Vertices[0].Color = colorBottom;
 
-	Buffer->Vertices[2].TCoords.set(0.0f, 0.0f);
-	Buffer->Vertices[2].Color = colorTop;
+	Vertices[1].TCoords.set(1.0f, 0.0f);
+	Vertices[1].Color = colorTop;
 
-	Buffer->Vertices[3].TCoords.set(0.0f, 1.0f);
-	Buffer->Vertices[3].Color = colorBottom;
+	Vertices[2].TCoords.set(0.0f, 0.0f);
+	Vertices[2].Color = colorTop;
+
+	Vertices[3].TCoords.set(0.0f, 1.0f);
+	Vertices[3].Color = colorBottom;
 }
 
 CBillboardSceneNode::~CBillboardSceneNode()
@@ -82,13 +79,12 @@ void CBillboardSceneNode::render()
 	if (DebugDataVisible & scene::EDS_BBOX) {
 		driver->setTransform(video::ETS_WORLD, AbsoluteTransformation);
 		video::SMaterial m;
-		m.Lighting = false;
 		driver->setMaterial(m);
 		driver->draw3DBox(BBoxSafe, video::SColor(0, 208, 195, 152));
 	}
 }
 
-void CBillboardSceneNode::updateMesh(const irr::scene::ICameraSceneNode *camera)
+void CBillboardSceneNode::updateMesh(const scene::ICameraSceneNode *camera)
 {
 	// billboard looks toward camera
 	core::vector3df pos = getAbsolutePosition();
@@ -114,7 +110,7 @@ void CBillboardSceneNode::updateMesh(const irr::scene::ICameraSceneNode *camera)
 
 	view *= -1.0f;
 
-	core::array<video::S3DVertex> &vertices = Buffer->Vertices;
+	auto &vertices = Buffer->Vertices->Data;
 
 	for (s32 i = 0; i < 4; ++i)
 		vertices[i].Normal = view;
@@ -141,7 +137,7 @@ const core::aabbox3d<f32> &CBillboardSceneNode::getBoundingBox() const
 	return BBoxSafe;
 }
 
-const core::aabbox3d<f32> &CBillboardSceneNode::getTransformedBillboardBoundingBox(const irr::scene::ICameraSceneNode *camera)
+const core::aabbox3d<f32> &CBillboardSceneNode::getTransformedBillboardBoundingBox(const scene::ICameraSceneNode *camera)
 {
 	updateMesh(camera);
 	return Buffer->BoundingBox;
@@ -211,8 +207,9 @@ void CBillboardSceneNode::getSize(f32 &height, f32 &bottomEdgeWidth,
 //! \param overallColor: the color to set
 void CBillboardSceneNode::setColor(const video::SColor &overallColor)
 {
+	auto &vertices = Buffer->Vertices->Data;
 	for (u32 vertex = 0; vertex < 4; ++vertex)
-		Buffer->Vertices[vertex].Color = overallColor;
+		vertices[vertex].Color = overallColor;
 }
 
 //! Set the color of the top and bottom vertices of the billboard
@@ -221,10 +218,11 @@ void CBillboardSceneNode::setColor(const video::SColor &overallColor)
 void CBillboardSceneNode::setColor(const video::SColor &topColor,
 		const video::SColor &bottomColor)
 {
-	Buffer->Vertices[0].Color = bottomColor;
-	Buffer->Vertices[1].Color = topColor;
-	Buffer->Vertices[2].Color = topColor;
-	Buffer->Vertices[3].Color = bottomColor;
+	auto &vertices = Buffer->Vertices->Data;
+	vertices[0].Color = bottomColor;
+	vertices[1].Color = topColor;
+	vertices[2].Color = topColor;
+	vertices[3].Color = bottomColor;
 }
 
 //! Gets the color of the top and bottom vertices of the billboard
@@ -233,8 +231,9 @@ void CBillboardSceneNode::setColor(const video::SColor &topColor,
 void CBillboardSceneNode::getColor(video::SColor &topColor,
 		video::SColor &bottomColor) const
 {
-	bottomColor = Buffer->Vertices[0].Color;
-	topColor = Buffer->Vertices[1].Color;
+	auto &vertices = Buffer->Vertices->Data;
+	bottomColor = vertices[0].Color;
+	topColor = vertices[1].Color;
 }
 
 //! Creates a clone of this scene node and its children.
@@ -263,4 +262,3 @@ ISceneNode *CBillboardSceneNode::clone(ISceneNode *newParent, ISceneManager *new
 }
 
 } // end namespace scene
-} // end namespace irr

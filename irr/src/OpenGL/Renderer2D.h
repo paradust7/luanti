@@ -6,8 +6,6 @@
 
 #include "MaterialRenderer.h"
 
-namespace irr
-{
 namespace video
 {
 
@@ -24,9 +22,9 @@ public:
 
 protected:
 	bool WithTexture;
+	s32 ProjectionID;
 	s32 ThicknessID;
 	s32 TextureUsageID;
 };
 
-}
 }

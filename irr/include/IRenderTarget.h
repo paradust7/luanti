@@ -8,8 +8,6 @@
 #include "EDriverTypes.h"
 #include "irrArray.h"
 
-namespace irr
-{
 namespace video
 {
 class ITexture;
@@ -26,6 +24,7 @@ enum E_CUBE_SURFACE
 };
 
 //! Interface of a Render Target.
+/** This is a framebuffer object (FBO) in OpenGL. */
 class IRenderTarget : public virtual IReferenceCounted
 {
 public:
@@ -108,12 +107,6 @@ protected:
 
 	//! Driver type of render target.
 	E_DRIVER_TYPE DriverType;
-
-private:
-	// no copying (IReferenceCounted still allows that for reasons which take some time to work around)
-	IRenderTarget(const IRenderTarget &);
-	IRenderTarget &operator=(const IRenderTarget &);
 };
 
-}
 }

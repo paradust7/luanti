@@ -1,19 +1,6 @@
---Minetest
---Copyright (C) 2014 sapier
---
---This program is free software; you can redistribute it and/or modify
---it under the terms of the GNU Lesser General Public License as published by
---the Free Software Foundation; either version 2.1 of the License, or
---(at your option) any later version.
---
---This program is distributed in the hope that it will be useful,
---but WITHOUT ANY WARRANTY; without even the implied warranty of
---MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
---GNU Lesser General Public License for more details.
---
---You should have received a copy of the GNU Lesser General Public License along
---with this program; if not, write to the Free Software Foundation, Inc.,
---51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+-- Luanti
+-- Copyright (C) 2014 sapier
+-- SPDX-License-Identifier: LGPL-2.1-or-later
 
 
 local current_game, singleplayer_refresh_gamebar
@@ -92,10 +79,16 @@ function singleplayer_refresh_gamebar()
 		end
 	end
 
+	local TOUCH_GUI = core.settings:get_bool("touch_gui")
+
+	local gamebar_pos_y = MAIN_TAB_H
+		+ TABHEADER_H -- tabheader included in formspec size
+		+ (TOUCH_GUI and GAMEBAR_OFFSET_TOUCH or GAMEBAR_OFFSET_DESKTOP)
+
 	local btnbar = buttonbar_create(
 			"game_button_bar",
-			core.settings:get_bool("enable_touch") and {x = 0, y = 7.25} or {x = 0, y = 7.475},
-			{x = 15.5, y = 1.25},
+			{x = 0, y = gamebar_pos_y},
+			{x = MAIN_TAB_W, y = GAMEBAR_H},
 			"#000000",
 			game_buttonbar_button_handler)
 
@@ -156,19 +149,31 @@ local function get_formspec(tabview, name, tabdata)
 
 	-- Point the player to ContentDB when no games are found
 	if #pkgmgr.games == 0 then
+		local W = tabview.width
+		local H = tabview.height
+
+		local hypertext = "<global valign=middle halign=center size=18>" ..
+				fgettext_ne("Luanti is a game-creation platform that allows you to play many different games.") .. "\n" ..
+				fgettext_ne("Luanti doesn't come with a game by default.") .. " " ..
+				fgettext_ne("You need to install a game before you can create a world.")
+
+		local button_y = H * 2/3 - 0.6
 		return table.concat({
-			"style[label_button;border=false]",
-			"button[2.75,1.5;10,1;label_button;", fgettext("You have no games installed."), "]",
-			"button[5.25,3.5;5,1.2;game_open_cdb;", fgettext("Install a game"), "]"})
+			"hypertext[0.375,0;", W - 2*0.375, ",", button_y, ";ht;", core.formspec_escape(hypertext), "]",
+			"button[5.25,", button_y, ";5,1.2;game_open_cdb;", fgettext("Install a game"), "]"})
 	end
 
 	local retval = ""
 
-	local index = filterlist.get_current_index(menudata.worldlist,
-				tonumber(core.settings:get("mainmenu_last_selected_world")))
+	local index = core.get_textlist_index("sp_worlds") or filterlist.get_current_index(menudata.worldlist,
+				tonumber(core.settings:get("mainmenu_last_selected_world"))) or 0
+
 	local list = menudata.worldlist:get_list()
-	local world = list and index and list[index]
+	-- When changing tabs to a world list with fewer entries, the last index is selected (visually).
+	-- However, the formspec fields lag behind, thus 'index > #list' can be a valid choice.
+	local world = list and list[math.min(index, #list)]
 	local game
+
 	if world then
 		game = pkgmgr.find_by_gameid(world.gameid)
 	else
@@ -182,26 +187,31 @@ local function get_formspec(tabview, name, tabdata)
 	local y = 0.2
 	local yo = 0.5625
 
-	if disabled_settings["creative_mode"] == nil then
-		creative = "checkbox[0,"..y..";cb_creative_mode;".. fgettext("Creative Mode") .. ";" ..
-			dump(core.settings:get_bool("creative_mode")) .. "]"
-		y = y + yo
-	end
-	if disabled_settings["enable_damage"] == nil then
-		damage = "checkbox[0,"..y..";cb_enable_damage;".. fgettext("Enable Damage") .. ";" ..
-			dump(core.settings:get_bool("enable_damage")) .. "]"
-		y = y + yo
-	end
-	if disabled_settings["enable_server"] == nil then
-		host = "checkbox[0,"..y..";cb_server;".. fgettext("Host Server") ..";" ..
-			dump(core.settings:get_bool("enable_server")) .. "]"
-		y = y + yo
+	if world then
+		if disabled_settings["creative_mode"] == nil then
+			creative = "checkbox[0,"..y..";cb_creative_mode;".. fgettext("Creative Mode") .. ";" ..
+				dump(core.settings:get_bool("creative_mode")) .. "]"
+			y = y + yo
+		end
+		if disabled_settings["enable_damage"] == nil then
+			damage = "checkbox[0,"..y..";cb_enable_damage;".. fgettext("Enable Damage") .. ";" ..
+				dump(core.settings:get_bool("enable_damage")) .. "]"
+			y = y + yo
+		end
+		if disabled_settings["enable_server"] == nil then
+			host = "checkbox[0,"..y..";cb_server;".. fgettext("Host Server") ..";" ..
+				dump(core.settings:get_bool("enable_server")) .. "]"
+			y = y + yo
+		end
 	end
 
+	retval = retval .. "container[5.25,4.875]"
+	if world then
+		retval = retval ..
+				"button[0,0;3.225,0.8;world_delete;".. fgettext("Delete") .. "]" ..
+				"button[3.325,0;3.225,0.8;world_configure;".. fgettext("Select Mods") .. "]"
+	end
 	retval = retval ..
-			"container[5.25,4.875]" ..
-			"button[0,0;3.225,0.8;world_delete;".. fgettext("Delete") .. "]" ..
-			"button[3.325,0;3.225,0.8;world_configure;".. fgettext("Select Mods") .. "]" ..
 			"button[6.65,0;3.225,0.8;world_create;".. fgettext("New") .. "]" ..
 			"container_end[]" ..
 			"container[0.375,0.375]" ..
@@ -241,6 +251,7 @@ local function get_formspec(tabview, name, tabdata)
 			retval = retval ..
 				"field[0," .. y .. ";3,0.75;te_serveraddr;" .. fgettext("Bind Address") .. ";" ..
 				core.formspec_escape(core.settings:get("bind_address")) .. "]" ..
+				-- TRANSLATORS: Network port
 				"field[3.25," .. y .. ";1.25,0.75;te_serverport;" .. fgettext("Port") .. ";" ..
 				core.formspec_escape(current_port) .. "]"
 		else
@@ -250,7 +261,7 @@ local function get_formspec(tabview, name, tabdata)
 		end
 
 		retval = retval .. "container_end[]"
-	else
+	elseif world then
 		retval = retval ..
 				"button[10.1875,5.925;4.9375,0.8;play;" .. fgettext("Play Game") .. "]"
 	end
@@ -347,8 +358,6 @@ local function main_button_handler(this, fields, name, tabdata)
 		gamedata.selected_world = menudata.worldlist:get_raw_index(selected)
 
 		if selected == nil or gamedata.selected_world == 0 then
-			gamedata.errormessage =
-					fgettext_ne("No world created or selected!")
 			return true
 		end
 

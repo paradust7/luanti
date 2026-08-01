@@ -5,8 +5,6 @@
 #include "CDummyTransformationSceneNode.h"
 #include "os.h"
 
-namespace irr
-{
 namespace scene
 {
 
@@ -15,10 +13,6 @@ CDummyTransformationSceneNode::CDummyTransformationSceneNode(
 		ISceneNode *parent, ISceneManager *mgr, s32 id) :
 		IDummyTransformationSceneNode(parent, mgr, id)
 {
-#ifdef _DEBUG
-	setDebugName("CDummyTransformationSceneNode");
-#endif
-
 	setAutomaticCulling(scene::EAC_OFF);
 }
 
@@ -74,7 +68,7 @@ void CDummyTransformationSceneNode::setScale(const core::vector3df &scale)
 	RelativeScale = scale;
 }
 
-const core::vector3df &CDummyTransformationSceneNode::getRotation() const
+core::vector3df CDummyTransformationSceneNode::getRotation() const
 {
 	os::Printer::log("CDummyTransformationSceneNode::getRotation() does not contain the relative transformation.", ELL_DEBUG);
 	return RelativeRotation;
@@ -99,4 +93,3 @@ void CDummyTransformationSceneNode::setPosition(const core::vector3df &newpos)
 }
 
 } // end namespace scene
-} // end namespace irr

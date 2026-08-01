@@ -21,14 +21,10 @@ uniform ExposureParams exposureParams;
 uniform lowp float bloomIntensity;
 uniform lowp float saturation;
 
-#ifdef GL_ES
-varying mediump vec2 varTexCoord;
-#else
-centroid varying vec2 varTexCoord;
-#endif
+CENTROID_ VARYING_ mediump vec2 varTexCoord;
 
 #ifdef ENABLE_AUTO_EXPOSURE
-varying float exposure; // linear exposure factor, see vertex shader
+VARYING_ float exposure; // linear exposure factor, see vertex shader
 #endif
 
 #ifdef ENABLE_BLOOM
@@ -61,7 +57,8 @@ vec4 applyBloom(vec4 color, vec2 uv)
 	equation used:  ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F
 */
 
-vec3 uncharted2Tonemap(vec3 x)
+// highp for GLES, see <https://github.com/luanti-org/luanti/pull/14688>
+highp vec3 uncharted2Tonemap(highp vec3 x)
 {
 	return ((x * (0.22 * x + 0.03) + 0.002) / (x * (0.22 * x + 0.3) + 0.06)) - 0.03333;
 }

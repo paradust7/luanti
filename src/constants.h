@@ -1,21 +1,6 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
@@ -28,7 +13,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 */
 
 /*
-    Connection
+    Network Protocol
 */
 
 #define PEER_ID_INEXISTENT 0
@@ -46,10 +31,10 @@ with this program; if not, write to the Free Software Foundation, Inc.,
     Server
 */
 
-// This many blocks are sent when player is building
-#define LIMITED_MAX_SIMULTANEOUS_BLOCK_SENDS 0
-// Override for the previous one when distance of block is very low
-#define BLOCK_SEND_DISABLE_LIMITS_MAX_D 1
+// Reduces block send rate while player is building
+#define LIMITED_BLOCK_SENDS_FACTOR 0.33f
+// Override for the previous one for blocks that are close by
+#define BLOCK_ALWAYS_SEND_MAX_D 1
 
 /*
     Client/Server
@@ -75,14 +60,15 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 // Use floatToInt(p, BS) and intToFloat(p, BS).
 #define BS 10.0f
 
-// Dimension of a MapBlock
+// Dimension of a MapBlock in nodes
 #define MAP_BLOCKSIZE 16
-// This makes mesh updates too slow, as many meshes are updated during
-// the main loop (related to TempMods and day/night)
-//#define MAP_BLOCKSIZE 32
 
 // Player step height in nodes
 #define PLAYER_DEFAULT_STEPHEIGHT 0.6f
+
+// Arbitrary volume limit for working with contiguous areas (in nodes)
+// needs to safely fit in the VoxelArea class; used by e.g. VManips
+#define MAX_WORKING_VOLUME 150000000UL
 
 /*
     Old stuff that shouldn't be hardcoded
@@ -97,6 +83,10 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 // Default maximal breath of a player
 #define PLAYER_MAX_BREATH_DEFAULT 10
 
+/*
+    Misc
+*/
+
 // Number of different files to try to save a player to if the first fails
 // (because of a case-insensitive filesystem)
 // TODO: Use case-insensitive player names instead of this hack.
@@ -108,8 +98,14 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 // the file attempting to ensure a unique filename
 #define SCREENSHOT_MAX_SERIAL_TRIES 1000
 
-/*
-    GUI related things
-*/
-
 #define TTF_DEFAULT_FONT_SIZE (16)
+
+// Minimum texture size enforced/checked for enabling linear filtering
+// This serves as the minimum for `texture_min_size`.
+// The intent is to ensure that the rendering doesn't turn terribly blurry
+// when filtering is enabled.
+#define TEXTURE_FILTER_MIN_SIZE 192U
+
+// Resolution of clocks that SSCSM has access to, in us.
+// Used as countermeasure against side-channel attacks.
+#define SSCSM_CLOCK_RESOLUTION_US 20

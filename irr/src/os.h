@@ -10,9 +10,6 @@
 #include "ILogger.h"
 #include "ITimer.h"
 
-namespace irr
-{
-
 namespace os
 {
 class Byteswap
@@ -36,7 +33,6 @@ public:
 	// prints out a string to the console out stdout or debug log or whatever
 	static void print(const c8 *message, ELOG_LEVEL ll = ELL_INFORMATION);
 	static void log(const c8 *message, ELOG_LEVEL ll = ELL_INFORMATION);
-	static void log(const wchar_t *message, ELOG_LEVEL ll = ELL_INFORMATION);
 
 	// The string ": " is added between message and hint
 	static void log(const c8 *message, const c8 *hint, ELOG_LEVEL ll = ELL_INFORMATION);
@@ -88,4 +84,3 @@ private:
 };
 
 } // end namespace os
-} // end namespace irr

@@ -9,8 +9,8 @@
 
 #include "mt_opengl.h"
 
-namespace irr
-{
+#include <cassert>
+
 namespace video
 {
 
@@ -84,23 +84,31 @@ class COpenGLCoreCacheHandler
 							if (curTextureType != prevTextureType) {
 								GL.BindTexture(prevTextureType, 0);
 
-#if (defined(IRR_COMPILE_GL_COMMON) || defined(IRR_COMPILE_GLES_COMMON))
-								GL.Disable(prevTextureType);
-								GL.Enable(curTextureType);
+#if defined(IRR_COMPILE_GL_COMMON)
+								// The "enable/disable texture" stuff is so legacy that
+								// it's not even allowed for multisample textures.
+								// (IRR_COMPILE_GL_COMMON is for the legacy driver.)
+								if (prevTextureType != GL_TEXTURE_2D_MULTISAMPLE)
+									GL.Disable(prevTextureType);
+								if (curTextureType != GL_TEXTURE_2D_MULTISAMPLE)
+									GL.Enable(curTextureType);
 #endif
 							}
-#if (defined(IRR_COMPILE_GL_COMMON) || defined(IRR_COMPILE_GLES_COMMON))
+#if defined(IRR_COMPILE_GL_COMMON)
 							else if (!prevTexture)
-								GL.Enable(curTextureType);
+								if (curTextureType != GL_TEXTURE_2D_MULTISAMPLE)
+									GL.Enable(curTextureType);
 #endif
 
-							GL.BindTexture(curTextureType, static_cast<const TOpenGLTexture *>(texture)->getOpenGLTextureName());
+							auto name = static_cast<const TOpenGLTexture *>(texture)->getOpenGLTextureName();
+							assert(name != 0);
+							GL.BindTexture(curTextureType, name);
 						} else {
 							texture = 0;
 
 							os::Printer::log("Fatal Error: Tried to set a texture not owned by this driver.", ELL_ERROR);
-							os::Printer::log("Texture type", irr::core::stringc((int)type), ELL_ERROR);
-							os::Printer::log("Driver (or cache handler) type", irr::core::stringc((int)DriverType), ELL_ERROR);
+							os::Printer::log("Texture type", core::stringc((int)type), ELL_ERROR);
+							os::Printer::log("Driver (or cache handler) type", core::stringc((int)DriverType), ELL_ERROR);
 						}
 					}
 
@@ -109,8 +117,9 @@ class COpenGLCoreCacheHandler
 
 						GL.BindTexture(prevTextureType, 0);
 
-#if (defined(IRR_COMPILE_GL_COMMON) || defined(IRR_COMPILE_GLES_COMMON))
-						GL.Disable(prevTextureType);
+#if defined(IRR_COMPILE_GL_COMMON)
+						if (prevTextureType != GL_TEXTURE_2D_MULTISAMPLE)
+							GL.Disable(prevTextureType);
 #endif
 					}
 
@@ -222,7 +231,7 @@ public:
 
 		Driver->irrGlActiveTexture(ActiveTexture);
 
-#if (defined(IRR_COMPILE_GL_COMMON) || defined(IRR_COMPILE_GLES_COMMON))
+#if defined(IRR_COMPILE_GL_COMMON)
 		GL.Disable(GL_TEXTURE_2D);
 #endif
 
@@ -542,7 +551,7 @@ public:
 	//! Compare material to current cache and update it when there are differences
 	// Some material renderers do change the cache beyond the original material settings
 	// This corrects the material to represent the current cache state again.
-	void correctCacheMaterial(irr::video::SMaterial &material)
+	void correctCacheMaterial(video::SMaterial &material)
 	{
 		// Fix textures which got removed
 		for (u32 i = 0; i < MATERIAL_MAX_TEXTURES; ++i) {
@@ -591,5 +600,4 @@ protected:
 	GLsizei ViewportHeight;
 };
 
-}
 }

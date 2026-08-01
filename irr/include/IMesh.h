@@ -8,8 +8,6 @@
 #include "SMaterial.h"
 #include "EHardwareBufferFlags.h"
 
-namespace irr
-{
 namespace scene
 {
 //! Possible types of meshes.
@@ -19,38 +17,6 @@ enum E_ANIMATED_MESH_TYPE
 {
 	//! Unknown animated mesh type.
 	EAMT_UNKNOWN = 0,
-
-	//! Quake 2 MD2 model file
-	EAMT_MD2,
-
-	//! Quake 3 MD3 model file
-	EAMT_MD3,
-
-	//! Maya .obj static model
-	EAMT_OBJ,
-
-	//! Quake 3 .bsp static Map
-	EAMT_BSP,
-
-	//! 3D Studio .3ds file
-	EAMT_3DS,
-
-	//! My3D Mesh, the file format by Zhuck Dimitry
-	EAMT_MY3D,
-
-	//! Pulsar LMTools .lmts file. This Irrlicht loader was written by Jonas Petersen
-	EAMT_LMTS,
-
-	//! Cartography Shop .csm file. This loader was created by Saurav Mohapatra.
-	EAMT_CSM,
-
-	//! .oct file for Paul Nette's FSRad or from Murphy McCauley's Blender .oct exporter.
-	/** The oct file format contains 3D geometry and lightmaps and
-	can be loaded directly by Irrlicht */
-	EAMT_OCT,
-
-	//! Halflife MDL model file
-	EAMT_MDL_HALFLIFE,
 
 	//! generic skinned mesh
 	EAMT_SKINNED,
@@ -86,6 +52,17 @@ public:
 	mesh buffer. */
 	virtual IMeshBuffer *getMeshBuffer(const video::SMaterial &material) const = 0;
 
+	//! Minetest binds textures (node tiles, object textures) to models.
+	// glTF allows multiple primitives (mesh buffers) to reference the same texture.
+	// This is reflected here: This function gets the texture slot for a mesh buffer.
+	/** \param meshbufNr: Zero based index of the mesh buffer. The maximum value is
+	getMeshBufferCount() - 1;
+	\return number of texture slot to bind to the given mesh buffer */
+	virtual u32 getTextureSlot(u32 meshbufNr) const
+	{
+		return meshbufNr;
+	}
+
 	//! Get an axis aligned bounding box of the mesh.
 	/** \return Bounding box of this mesh. */
 	virtual const core::aabbox3d<f32> &getBoundingBox() const = 0;
@@ -108,9 +85,7 @@ public:
 	virtual void setDirty(E_BUFFER_TYPE buffer = EBT_VERTEX_AND_INDEX) = 0;
 
 	//! Returns the type of the meshes.
-	/** This is useful for making a safe downcast. For example,
-	if getMeshType() returns EAMT_MD2 it's safe to cast the
-	IMesh to IAnimatedMeshMD2.
+	/** This is useful for making a safe downcast.
 	Note: It's no longer just about animated meshes, that name has just historical reasons.
 	\returns Type of the mesh  */
 	virtual E_ANIMATED_MESH_TYPE getMeshType() const
@@ -120,4 +95,3 @@ public:
 };
 
 } // end namespace scene
-} // end namespace irr

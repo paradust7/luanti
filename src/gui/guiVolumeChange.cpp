@@ -18,15 +18,14 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 */
 
 #include "guiVolumeChange.h"
-#include "debug.h"
 #include "guiButton.h"
 #include "guiScrollBar.h"
-#include "serialization.h"
 #include <string>
 #include <IGUICheckBox.h>
 #include <IGUIButton.h>
 #include <IGUIStaticText.h>
 #include <IGUIFont.h>
+#include <IVideoDriver.h>
 #include "settings.h"
 
 #include "gettext.h"
@@ -54,13 +53,9 @@ void GUIVolumeChange::regenerateGui(v2u32 screensize)
 	/*
 		Calculate new sizes and positions
 	*/
-	const float s = m_gui_scale;
-	DesiredRect = core::rect<s32>(
-		screensize.X / 2 - 380 * s / 2,
-		screensize.Y / 2 - 200 * s / 2,
-		screensize.X / 2 + 380 * s / 2,
-		screensize.Y / 2 + 200 * s / 2
-	);
+	ScalingInfo info = getScalingInfo(screensize, v2u32(380, 200));
+	const float s = info.scale;
+	DesiredRect = info.rect;
 	recalculateAbsolutePosition(false);
 
 	v2s32 size = DesiredRect.getSize();
@@ -80,13 +75,13 @@ void GUIVolumeChange::regenerateGui(v2u32 screensize)
 		core::rect<s32> rect(0, 0, 100 * s, 30 * s);
 		rect = rect + v2s32(size.X / 2 - 100 * s / 2, size.Y / 2 + 55 * s);
 		GUIButton::addButton(Environment, rect, m_tsrc, this, ID_soundExitButton,
-				wstrgettext("Exit").c_str());
+				wstrgettext("Back").c_str());
 	}
 	{
 		core::rect<s32> rect(0, 0, 300 * s, 20 * s);
 		rect = rect + v2s32(size.X / 2 - 150 * s, size.Y / 2);
 		auto e = make_irr<GUIScrollBar>(Environment, this,
-				ID_soundSlider, rect, true, false, m_tsrc);
+				ID_soundSlider, rect, true, m_tsrc);
 		e->setMax(100);
 		e->setPos(volume);
 	}

@@ -1,94 +1,50 @@
-/*
-Minetest
-Copyright (C) 2018 numzero, Lobachevskiy Vitaliy <numzer0@yandex.ru>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2018 numzero, Lobachevskiy Vitaliy <numzer0@yandex.ru>
 
 #include "collector.h"
 #include <stdexcept>
-#include "log.h"
-#include "client/mesh.h"
+#include <cassert>
+
+bool PreMeshBuffer::append(const PreMeshBuffer &other)
+{
+	const size_t nv = vertices.size();
+	const size_t ni = indices.size();
+	if (nv + other.vertices.size() > U16_MAX)
+		return false;
+
+	vertices.insert(vertices.end(), other.vertices.begin(), other.vertices.end());
+	indices.insert(indices.end(), other.indices.begin(), other.indices.end());
+	for (size_t i = ni; i < indices.size(); i++)
+		indices[i] += nv;
+	return true;
+}
 
 void MeshCollector::append(const TileSpec &tile, const video::S3DVertex *vertices,
 		u32 numVertices, const u16 *indices, u32 numIndices)
 {
 	for (int layernum = 0; layernum < MAX_TILE_LAYERS; layernum++) {
-		const TileLayer *layer = &tile.layers[layernum];
-		if (layer->texture_id == 0)
+		const TileLayer &layer = tile.layers[layernum];
+		if (layer.empty())
 			continue;
-		append(*layer, vertices, numVertices, indices, numIndices, layernum,
-				tile.world_aligned);
+		append(layer, vertices, numVertices, indices, numIndices, layernum);
 	}
 }
 
 void MeshCollector::append(const TileLayer &layer, const video::S3DVertex *vertices,
-		u32 numVertices, const u16 *indices, u32 numIndices, u8 layernum,
-		bool use_scale)
+		u32 numVertices, const u16 *indices, u32 numIndices, u8 layernum)
 {
 	PreMeshBuffer &p = findBuffer(layer, layernum, numVertices);
 
-	f32 scale = 1.0f;
-	if (use_scale)
-		scale = 1.0f / layer.scale;
+	const u16 aux = layer.texture_layer_idx;
 
 	u32 vertex_count = p.vertices.size();
+	assert(vertex_count + numVertices <= U16_MAX);
 	for (u32 i = 0; i < numVertices; i++) {
 		p.vertices.emplace_back(vertices[i].Pos + offset, vertices[i].Normal,
-				vertices[i].Color, scale * vertices[i].TCoords);
+				vertices[i].Color, vertices[i].TCoords, aux);
 		m_bounding_radius_sq = std::max(m_bounding_radius_sq,
 				(vertices[i].Pos - m_center_pos).getLengthSQ());
-	}
-
-	for (u32 i = 0; i < numIndices; i++)
-		p.indices.push_back(indices[i] + vertex_count);
-}
-
-void MeshCollector::append(const TileSpec &tile, const video::S3DVertex *vertices,
-		u32 numVertices, const u16 *indices, u32 numIndices, v3f pos,
-		video::SColor c, u8 light_source)
-{
-	for (int layernum = 0; layernum < MAX_TILE_LAYERS; layernum++) {
-		const TileLayer *layer = &tile.layers[layernum];
-		if (layer->texture_id == 0)
-			continue;
-		append(*layer, vertices, numVertices, indices, numIndices, pos, c,
-				light_source, layernum, tile.world_aligned);
-	}
-}
-
-void MeshCollector::append(const TileLayer &layer, const video::S3DVertex *vertices,
-		u32 numVertices, const u16 *indices, u32 numIndices, v3f pos,
-		video::SColor c, u8 light_source, u8 layernum, bool use_scale)
-{
-	PreMeshBuffer &p = findBuffer(layer, layernum, numVertices);
-
-	f32 scale = 1.0f;
-	if (use_scale)
-		scale = 1.0f / layer.scale;
-
-	u32 vertex_count = p.vertices.size();
-	for (u32 i = 0; i < numVertices; i++) {
-		video::SColor color = c;
-		if (!light_source)
-			applyFacesShading(color, vertices[i].Normal);
-		auto vpos = vertices[i].Pos + pos + offset;
-		p.vertices.emplace_back(vpos, vertices[i].Normal, color,
-				scale * vertices[i].TCoords);
-		m_bounding_radius_sq = std::max(m_bounding_radius_sq,
-				(vpos - m_center_pos).getLengthSQ());
 	}
 
 	for (u32 i = 0; i < numIndices; i++)

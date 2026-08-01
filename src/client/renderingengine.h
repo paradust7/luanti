@@ -1,36 +1,23 @@
-/*
-Minetest
-Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-Copyright (C) 2017 nerzhul, Loic Blot <loic.blot@unix-experience.fr>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
+// Copyright (C) 2017 nerzhul, Loic Blot <loic.blot@unix-experience.fr>
 
 #pragma once
 
 #include <vector>
 #include <memory>
 #include <string>
-#include "irrlichttypes_extrabloated.h"
+#include "client/inputhandler.h"
 #include "debug.h"
+#include "config.h"
 #include "client/shader.h"
 #include "client/render/core.h"
 // include the shadow mapper classes too
 #include "client/shadows/dynamicshadowsrender.h"
+#include <IVideoDriver.h>
 
-#ifdef SERVER
+#if !IS_CLIENT_BUILD
 #error Do not include in server builds
 #endif
 
@@ -40,11 +27,8 @@ struct VideoDriverInfo {
 };
 
 class ITextureSource;
-class Camera;
 class Client;
-class LocalPlayer;
 class Hud;
-class Minimap;
 
 class RenderingCore;
 
@@ -58,7 +42,7 @@ struct FpsControl {
 
 	void reset();
 
-	void limit(IrrlichtDevice *device, f32 *dtime, bool assume_paused = false);
+	void limit(IrrlichtDevice *device, f32 *dtime);
 
 	u32 getBusyMs() const { return busy_time / 1000; }
 
@@ -67,11 +51,11 @@ struct FpsControl {
 };
 
 // Populates fogColor, fogDistance, fogShadingParameter with values from Irrlicht
-class FogShaderConstantSetterFactory : public IShaderConstantSetterFactory
+class FogShaderUniformSetterFactory : public IShaderUniformSetterFactory
 {
 public:
-	FogShaderConstantSetterFactory() {};
-	virtual IShaderConstantSetter *create();
+	FogShaderUniformSetterFactory() {};
+	virtual IShaderUniformSetter *create(const std::string &name);
 };
 
 /* Rendering engine class */
@@ -79,18 +63,20 @@ public:
 class RenderingEngine
 {
 public:
-	static const video::SColor MENU_SKY_COLOR;
-	static const float BASE_BLOOM_STRENGTH;
-
-	RenderingEngine(IEventReceiver *eventReceiver);
+	RenderingEngine(MyEventReceiver *eventReceiver);
 	~RenderingEngine();
 
 	void setResizable(bool resize);
 
 	video::IVideoDriver *getVideoDriver() { return driver; }
 
-	static const VideoDriverInfo &getVideoDriverInfo(irr::video::E_DRIVER_TYPE type);
+	static const VideoDriverInfo &getVideoDriverInfo(video::E_DRIVER_TYPE type);
 	static float getDisplayDensity();
+
+	// Show error message box to user. Intended for situations where graphics
+	// output might not even be working.
+	// Will block.
+	static void showErrorMessageBox(const std::string &message);
 
 	bool setupTopLevelWindow();
 	bool setWindowIcon();
@@ -126,7 +112,7 @@ public:
 		return m_device->getSceneManager();
 	}
 
-	static irr::IrrlichtDevice *get_raw_device()
+	static IrrlichtDevice *get_raw_device()
 	{
 		sanity_check(s_singleton && s_singleton->m_device);
 		return s_singleton->m_device;
@@ -137,9 +123,11 @@ public:
 		return m_device->getGUIEnvironment();
 	}
 
+	// If "indef_pos" is given, the value of "percent" is ignored and an indefinite
+	// progress bar is drawn.
 	void draw_load_screen(const std::wstring &text,
 			gui::IGUIEnvironment *guienv, ITextureSource *tsrc,
-			float dtime = 0, int percent = 0, bool sky = true);
+			float dtime = 0, int percent = 0, float *indef_pos = nullptr);
 
 	void draw_scene(video::SColor skycolor, bool show_hud,
 			bool draw_wield_tool, bool draw_crosshair);
@@ -159,17 +147,28 @@ public:
 			return s_singleton->core->get_shadow_renderer();
 		return nullptr;
 	}
-	static std::vector<irr::video::E_DRIVER_TYPE> getSupportedVideoDrivers();
+	static std::vector<video::E_DRIVER_TYPE> getSupportedVideoDrivers();
 
 	static void autosaveScreensizeAndCo(
-			const irr::core::dimension2d<u32> initial_screen_size,
+			const core::dimension2d<u32> initial_screen_size,
 			const bool initial_window_maximized);
 
+	static PointerType getLastPointerType()
+	{
+		sanity_check(s_singleton && s_singleton->m_receiver);
+		return s_singleton->m_receiver->getLastPointerType();
+	}
+
+	video::SColor m_menu_sky_color = video::SColor(255, 140, 186, 250);
+	video::SColor m_menu_clouds_color = video::SColor(255, 240, 240, 255);
+
 private:
+	static void settingChangedCallback(const std::string &name, void *data);
 	v2u32 _getWindowSize() const;
 
 	std::unique_ptr<RenderingCore> core;
-	irr::IrrlichtDevice *m_device = nullptr;
-	irr::video::IVideoDriver *driver;
+	IrrlichtDevice *m_device = nullptr;
+	video::IVideoDriver *driver;
+	MyEventReceiver *m_receiver = nullptr;
 	static RenderingEngine *s_singleton;
 };

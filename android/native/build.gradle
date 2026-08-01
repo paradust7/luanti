@@ -2,17 +2,16 @@ apply plugin: 'com.android.library'
 apply plugin: 'de.undercouch.download'
 
 android {
-	compileSdkVersion 33
-	buildToolsVersion '33.0.2'
 	ndkVersion "$ndk_version"
 	defaultConfig {
 		minSdkVersion 21
-		targetSdkVersion 33
+		compileSdk 34
+		targetSdkVersion 34
 		externalNativeBuild {
-            cmake {
+			cmake {
 				arguments "-DANDROID_STL=c++_shared",
 					"-DENABLE_CURL=1", "-DENABLE_SOUND=1",
-					"-DENABLE_TOUCH=1", "-DENABLE_GETTEXT=1",
+					"-DENABLE_GETTEXT=1",
 					"-DBUILD_UNITTESTS=0", "-DENABLE_UPDATE_CHECKER=0"
 			}
 		}
@@ -36,10 +35,11 @@ android {
 	buildTypes {
 		release {
 			ndk {
-				debugSymbolLevel 'SYMBOL_TABLE'
+				debugSymbolLevel 'FULL'
 			}
 		}
 	}
+	namespace 'net.minetest'
 }
 
 // get precompiled deps
@@ -52,7 +52,7 @@ if (new File(depsDir, 'armeabi-v7a').exists()) {
 	task downloadDeps(type: Download) {
 		def depsZip = new File(buildDir, 'deps.zip')
 
-		src 'https://github.com/minetest/minetest_android_deps/releases/download/latest/deps-lite.zip'
+		src 'https://github.com/luanti-org/luanti_android_deps/releases/download/latest/deps-lite.zip'
 		dest depsZip
 		overwrite false
 
@@ -68,5 +68,5 @@ if (new File(depsDir, 'armeabi-v7a').exists()) {
 preBuild.dependsOn getDeps
 
 clean {
-	delete new File(buildDir.parent, 'deps')
+	delete depsDir
 }

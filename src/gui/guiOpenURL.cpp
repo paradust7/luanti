@@ -20,6 +20,7 @@ OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 #include "guiEditBoxWithScrollbar.h"
 #include <IGUIEditBox.h>
 #include <IGUIFont.h>
+#include <IVideoDriver.h>
 #include "client/renderingengine.h"
 #include "porting.h"
 #include "gettext.h"
@@ -42,6 +43,19 @@ GUIOpenURLMenu::GUIOpenURLMenu(gui::IGUIEnvironment* env,
 {
 }
 
+static std::string maybe_colorize_url(const std::string &url)
+{
+	// Forbid escape codes in URL
+	if (url.find('\x1b') != std::string::npos) {
+		throw std::runtime_error("URL contains escape codes");
+	}
+
+#ifdef HAVE_COLORIZE_URL
+	return colorize_url(url);
+#else
+	return url;
+#endif
+}
 
 void GUIOpenURLMenu::regenerateGui(v2u32 screensize)
 {
@@ -53,13 +67,9 @@ void GUIOpenURLMenu::regenerateGui(v2u32 screensize)
 	/*
 		Calculate new sizes and positions
 	*/
-	const float s = m_gui_scale;
-	DesiredRect = core::rect<s32>(
-		screensize.X / 2 - 580 * s / 2,
-		screensize.Y / 2 - 250 * s / 2,
-		screensize.X / 2 + 580 * s / 2,
-		screensize.Y / 2 + 250 * s / 2
-	);
+	ScalingInfo info = getScalingInfo(screensize, v2u32(580, 250));
+	const float s = info.scale;
+	DesiredRect = info.rect;
 	recalculateAbsolutePosition(false);
 
 	v2s32 size = DesiredRect.getSize();
@@ -70,16 +80,18 @@ void GUIOpenURLMenu::regenerateGui(v2u32 screensize)
 	*/
 	bool ok = true;
 	std::string text;
-#ifdef USE_CURL
 	try {
-		text = colorize_url(url);
+		text = maybe_colorize_url(url);
 	} catch (const std::exception &e) {
 		text = std::string(e.what()) + " (url = " + url + ")";
 		ok = false;
 	}
-#else
-	text = url;
-#endif
+
+	std::array<StyleSpec, StyleSpec::NUM_STATES> styles {};
+	for (auto &style : styles)
+		style.set(StyleSpec::Property::FONT, "_no_server_media");
+
+	auto font_standard = styles[0].getFont();
 
 	/*
 		Add stuff
@@ -93,8 +105,9 @@ void GUIOpenURLMenu::regenerateGui(v2u32 screensize)
 		std::wstring title = ok
 				? wstrgettext("Open URL?")
 				: wstrgettext("Unable to open URL");
-		gui::StaticText::add(Environment, title, rect,
+		auto *e = gui::StaticText::add(Environment, title, rect,
 				false, true, this, -1);
+		e->setOverrideFont(font_standard);
 	}
 
 	ypos += 50 * s;
@@ -102,15 +115,18 @@ void GUIOpenURLMenu::regenerateGui(v2u32 screensize)
 	{
 		core::rect<s32> rect(0, 0, 440 * s, 60 * s);
 
-		auto font = g_fontengine->getFont(FONT_SIZE_UNSPECIFIED,
-				ok ? FM_Mono : FM_Standard);
+		FontSpec fontspec(FONT_SIZE_UNSPECIFIED, FM_Mono, false, false);
+		fontspec.allow_server_media = false;
+
+		auto font = ok ? g_fontengine->getFont(fontspec) : font_standard;
+
 		int scrollbar_width = Environment->getSkin()->getSize(gui::EGDS_SCROLLBAR_SIZE);
 		int max_cols = (rect.getWidth() - scrollbar_width - 10) / font->getDimension(L"x").Width;
 
 		text = wrap_rows(text, max_cols, true);
 
 		rect += topleft_client + v2s32(20 * s, ypos);
-		IGUIEditBox *e = new GUIEditBoxWithScrollBar(utf8_to_wide(text).c_str(), true, Environment,
+		gui::IGUIEditBox *e = new GUIEditBoxWithScrollBar(utf8_to_wide(text).c_str(), true, Environment,
 				this, ID_url, rect, m_tsrc, false, true);
 		e->setMultiLine(true);
 		e->setWordWrap(true);
@@ -125,14 +141,16 @@ void GUIOpenURLMenu::regenerateGui(v2u32 screensize)
 	if (ok) {
 		core::rect<s32> rect(0, 0, 100 * s, 40 * s);
 		rect = rect + v2s32(size.X / 2 - 150 * s, ypos);
-		GUIButton::addButton(Environment, rect, m_tsrc, this, ID_open,
+		auto *e = GUIButton::addButton(Environment, rect, m_tsrc, this, ID_open,
 				wstrgettext("Open").c_str());
+		e->setStyles(styles);
 	}
 	{
 		core::rect<s32> rect(0, 0, 100 * s, 40 * s);
 		rect = rect + v2s32(size.X / 2 + 50 * s, ypos);
-		GUIButton::addButton(Environment, rect, m_tsrc, this, ID_cancel,
+		auto *e = GUIButton::addButton(Environment, rect, m_tsrc, this, ID_cancel,
 				wstrgettext("Cancel").c_str());
+		e->setStyles(styles);
 	}
 }
 
@@ -155,9 +173,7 @@ void GUIOpenURLMenu::drawMenu()
 bool GUIOpenURLMenu::OnEvent(const SEvent &event)
 {
 	if (event.EventType == EET_KEY_INPUT_EVENT) {
-		if ((event.KeyInput.Key == KEY_ESCAPE ||
-				event.KeyInput.Key == KEY_CANCEL) &&
-				event.KeyInput.PressedDown) {
+		if (event.KeyInput.Key == KEY_ESCAPE && event.KeyInput.PressedDown) {
 			quitMenu();
 			return true;
 		}

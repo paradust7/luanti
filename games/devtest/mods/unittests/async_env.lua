@@ -167,18 +167,18 @@ local function test_userdata_passing2(cb, _, pos)
 end
 unittests.register("test_userdata_passing2", test_userdata_passing2, {map=true, async=true})
 
-local function test_async_metatable_override()
-	assert(pcall(core.register_async_metatable, "__builtin:vector", vector.metatable),
+local function test_portable_metatable_override()
+	assert(pcall(core.register_portable_metatable, "__builtin:vector", vector.metatable),
 			"Metatable name aliasing throws an error when it should be allowed")
 
-	assert(not pcall(core.register_async_metatable, "__builtin:vector", {}),
+	assert(not pcall(core.register_portable_metatable, "__builtin:vector", {}),
 			"Illegal metatable overriding allowed")
 end
-unittests.register("test_async_metatable_override", test_async_metatable_override)
+unittests.register("test_portable_metatable_override", test_portable_metatable_override)
 
-local function test_async_metatable_registration(cb)
+local function test_portable_metatable_registration(cb)
 	local custom_metatable = {}
-	core.register_async_metatable("unittests:custom_metatable", custom_metatable)
+	core.register_portable_metatable("unittests:custom_metatable", custom_metatable)
 
 	core.handle_async(function(x)
 		-- unittests.custom_metatable is registered in inside_async_env.lua
@@ -193,7 +193,7 @@ local function test_async_metatable_registration(cb)
 		cb()
 	end, setmetatable({}, custom_metatable))
 end
-unittests.register("test_async_metatable_registration", test_async_metatable_registration, {async=true})
+unittests.register("test_portable_metatable_registration", test_portable_metatable_registration, {async=true})
 
 local function test_vector_preserve(cb)
 	local vec = vector.new(1, 2, 3)
@@ -207,3 +207,32 @@ local function test_vector_preserve(cb)
 	end, {vec})
 end
 unittests.register("test_async_vector", test_vector_preserve, {async=true})
+
+local function test_async_job_replacement(cb)
+	core.ipc_set("unittests:end_blocking", nil)
+	local capacity = core.get_async_threading_capacity()
+	for _ = 1, capacity do
+		core.handle_async(function()
+			core.ipc_poll("unittests:end_blocking", 1000)
+		end, function() end)
+	end
+	local job = core.handle_async(function()
+	end, function()
+		return cb("Canceled async job ran")
+	end)
+	if not job:cancel() then
+		return cb("AsyncJob:cancel sanity check failed")
+	end
+	core.ipc_set("unittests:end_blocking", true)
+
+	-- Try to cancel a job that is already run.
+	job = core.handle_async(function(x)
+		return x
+	end, function(ret)
+		if job:cancel() then
+			return cb("AsyncJob:cancel canceled a completed job")
+		end
+		cb()
+	end, 1)
+end
+unittests.register("test_async_job_replacement", test_async_job_replacement, {async=true})

@@ -1,28 +1,14 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
-#include <set>
+#include "config.h"
 #include <string>
 #include <string_view>
 #include <vector>
+#include <fstream>
 
 #ifdef _WIN32
 #define DIR_DELIM "\\"
@@ -36,7 +22,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #define PATH_DELIM ":"
 #endif
 
-namespace irr::io {
+namespace io {
 class IFileSystem;
 }
 
@@ -49,65 +35,62 @@ struct DirListNode
 	bool dir;
 };
 
+[[nodiscard]]
 std::vector<DirListNode> GetDirListing(const std::string &path);
 
 // Returns true if already exists
 bool CreateDir(const std::string &path);
 
-bool PathExists(const std::string &path);
+[[nodiscard]] bool PathExists(const std::string &path);
 
-bool IsPathAbsolute(const std::string &path);
+[[nodiscard]] bool IsPathAbsolute(const std::string &path);
 
-bool IsDir(const std::string &path);
+[[nodiscard]] bool IsDir(const std::string &path);
 
-bool IsExecutable(const std::string &path);
+[[nodiscard]] bool IsExecutable(const std::string &path);
 
-inline bool IsFile(const std::string &path)
+[[nodiscard]] bool IsFile(const std::string &path);
+
+[[nodiscard]] inline bool IsDirDelimiter(char c)
 {
-	return PathExists(path) && !IsDir(path);
+	return c == '/' || c == DIR_DELIM_CHAR;
 }
 
-bool IsDirDelimiter(char c);
-
-// Only pass full paths to this one. True on success.
-// NOTE: The WIN32 version returns always true.
+// Only pass full paths to this one. returns true on success.
 bool RecursiveDelete(const std::string &path);
 
-bool DeleteSingleFileOrEmptyDirectory(const std::string &path);
+bool DeleteSingleFileOrEmptyDirectory(const std::string &path, bool log_error = false);
 
 /// Returns path to temp directory.
 /// You probably don't want to use this directly, see `CreateTempFile` or `CreateTempDir`.
 /// @return path or "" on error
-std::string TempPath();
+[[nodiscard]] std::string TempPath();
 
 /// Returns path to securely-created temporary file (will already exist when this function returns).
 /// @return path or "" on error
-std::string CreateTempFile();
+[[nodiscard]] std::string CreateTempFile();
 
 /// Returns path to securely-created temporary directory (will already exist when this function returns).
 /// @return path or "" on error
-std::string CreateTempDir();
+[[nodiscard]] std::string CreateTempDir();
 
 /* Returns a list of subdirectories, including the path itself, but excluding
        hidden directories (whose names start with . or _)
 */
 void GetRecursiveDirs(std::vector<std::string> &dirs, const std::string &dir);
-std::vector<std::string> GetRecursiveDirs(const std::string &dir);
 
-/* Multiplatform */
+[[nodiscard]]
+std::vector<std::string> GetRecursiveDirs(const std::string &dir);
 
 /* The path itself not included, returns a list of all subpaths.
    dst - vector that contains all the subpaths.
    list files - include files in the list of subpaths.
-   ignore - paths that start with these charcters will not be listed.
+   ignore - paths that start with one of these charcters will not be listed.
 */
 void GetRecursiveSubPaths(const std::string &path,
-		  std::vector<std::string> &dst,
-		  bool list_files,
-		  const std::set<char> &ignore = {});
-
-// Only pass full paths to this one. True on success.
-bool RecursiveDeleteContent(const std::string &path);
+		std::vector<std::string> &dst,
+		bool list_files,
+		std::string_view ignore = {});
 
 // Create all directories on the given path that don't already exist.
 bool CreateAllDirs(const std::string &path);
@@ -128,12 +111,13 @@ bool MoveDir(const std::string &source, const std::string &target);
 // Ignores case differences and '/' vs. '\\' on Windows
 bool PathStartsWith(const std::string &path, const std::string &prefix);
 
-// Remove last path component and the dir delimiter before and/or after it,
-// returns "" if there is only one path component.
-// removed: If non-NULL, receives the removed component(s).
+// Remove last path component and the dir delimiter before and/or after it.
+// If there's only one path component it will refuse to remove it (if absolute)
+// or return "" (if relative).
+// removed: If non-NULL, receives the removed components
 // count: Number of components to remove
 std::string RemoveLastPathComponent(const std::string &path,
-		std::string *removed = NULL, int count = 1);
+		std::string *removed = nullptr, int count = 1);
 
 // Remove "." and ".." path components and for every ".." removed, remove
 // the last normal path component before it. Unlike AbsolutePath,
@@ -142,20 +126,91 @@ std::string RemoveRelativePathComponents(std::string path);
 
 // Returns the absolute path for the passed path, with "." and ".." path
 // components and symlinks removed.  Returns "" on error.
+[[nodiscard]]
 std::string AbsolutePath(const std::string &path);
+
+// This is a combination of RemoveRelativePathComponents() and AbsolutePath()
+// It will resolve symlinks for the leading path components that exist and
+// still remove "." and ".." in the rest of the path.
+// Returns "" on error.
+[[nodiscard]]
+std::string AbsolutePathPartial(const std::string &path);
 
 // Returns the filename from a path or the entire path if no directory
 // delimiter is found.
+[[nodiscard]]
 const char *GetFilenameFromPath(const char *path);
 
+// Replace the content of a file on disk in a way that is safe from
+// corruption/truncation on a crash.
+// logs and returns false on error
 bool safeWriteToFile(const std::string &path, std::string_view content);
 
-#ifndef SERVER
-bool extractZipFile(irr::io::IFileSystem *fs, const char *filename, const std::string &destination);
+#if IS_CLIENT_BUILD
+bool extractZipFile(io::IFileSystem *fs, const char *filename, const std::string &destination);
 #endif
 
-bool ReadFile(const std::string &path, std::string &out);
+bool ReadFile(const std::string &path, std::string &out, bool log_error = false);
 
 bool Rename(const std::string &from, const std::string &to);
 
+/**
+ * Open a file buffer with error handling, commonly used with `std::fstream.rdbuf()`.
+ *
+ * @param stream stream references, must not already be open
+ * @param filename filename to open
+ * @param mode mode bits (used as-is)
+ * @param log_error log failure to errorstream?
+ * @param log_warn log failure to warningstream?
+ * @return true if success
+*/
+bool OpenStream(std::filebuf &stream, const char *filename,
+	std::ios::openmode mode, bool log_error, bool log_warn);
+
 } // namespace fs
+
+// outside of namespace for convenience:
+
+/**
+ * Helper function to open an output file stream (= writing).
+ *
+ * For compatibility with fopen() binary mode and truncate are always set.
+ * Use `fs::OpenStream` for more control.
+ * @param name file name
+ * @param log if true, failure to open the file will be logged to errorstream
+ * @param mode additional mode bits (e.g. std::ios::app)
+ * @return file stream, will be !good in case of error
+*/
+[[nodiscard]]
+inline std::ofstream open_ofstream(const char *name, bool log,
+	std::ios::openmode mode = std::ios::openmode())
+{
+	mode |= std::ios::out | std::ios::binary;
+	if (!(mode & std::ios::app))
+		mode |= std::ios::trunc;
+	std::ofstream ofs;
+	if (!fs::OpenStream(*ofs.rdbuf(), name, mode, log, false))
+		ofs.setstate(std::ios::failbit);
+	return ofs;
+}
+
+/**
+ * Helper function to open an input file stream (= reading).
+ *
+ * For compatibility with fopen() binary mode is always set.
+ * Use `fs::OpenStream` for more control.
+ * @param name file name
+ * @param log if true, failure to open the file will be logged to errorstream
+ * @param mode additional mode bits (e.g. std::ios::ate)
+ * @return file stream, will be !good in case of error
+*/
+[[nodiscard]]
+inline std::ifstream open_ifstream(const char *name, bool log,
+	std::ios::openmode mode = std::ios::openmode())
+{
+	mode |= std::ios::in | std::ios::binary;
+	std::ifstream ifs;
+	if (!fs::OpenStream(*ifs.rdbuf(), name, mode, log, false))
+		ifs.setstate(std::ios::failbit);
+	return ifs;
+}

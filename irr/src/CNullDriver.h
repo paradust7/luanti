@@ -4,24 +4,23 @@
 
 #pragma once
 
+#include "HWBuffer.h"
+#include "IIndexBuffer.h"
+#include "IVertexBuffer.h"
 #include "IVideoDriver.h"
 #include "IFileSystem.h"
 #include "IGPUProgrammingServices.h"
 #include "irrArray.h"
 #include "irrString.h"
-#include "IAttributes.h"
 #include "IMesh.h"
 #include "IMeshBuffer.h"
 #include "IMeshSceneNode.h"
-#include "CFPSCounter.h"
 #include "S3DVertex.h"
 #include "SVertexIndex.h"
 #include "SExposedVideoData.h"
-#include <list>
 
-namespace irr
-{
-	class COpenXRSwapchain;
+class COpenXRSwapchain;
+
 namespace io
 {
 class IWriteFile;
@@ -52,11 +51,20 @@ public:
 	//! queries the features of the driver, returns true if feature is available
 	bool queryFeature(E_VIDEO_DRIVER_FEATURE feature) const override;
 
-	//! Get attributes of the actual video driver
-	const io::IAttributes &getDriverAttributes() const override;
-
 	//! sets transformation
 	void setTransform(E_TRANSFORMATION_STATE state, const core::matrix4 &mat) override;
+
+	//! Returns the maximum number of joint transformation matrices the hardware and driver support.
+	virtual u16 getMaxJointTransforms() const override
+	{
+		return 0;
+	}
+
+	//! Sets joint transformation matrices for skinned meshes.
+	virtual void setJointTransforms(const std::vector<core::matrix4> &jointMatrices) override
+	{
+		assert(jointMatrices.size() <= getMaxJointTransforms());
+	};
 
 	//! Retrieve the number of image loaders
 	u32 getImageLoaderCount() const override;
@@ -86,10 +94,12 @@ public:
 
 	ITexture *addTexture(const io::path &name, IImage *image) override;
 
+	ITexture *addArrayTexture(const io::path &name, IImage **images, u32 count) override;
+
 	virtual ITexture *addTextureCubemap(const io::path &name, IImage *imagePosX, IImage *imageNegX, IImage *imagePosY,
 			IImage *imageNegY, IImage *imagePosZ, IImage *imageNegZ) override;
 
-	ITexture *addTextureCubemap(const irr::u32 sideLen, const io::path &name, ECOLOR_FORMAT format = ECF_A8R8G8B8) override;
+	ITexture *addTextureCubemap(const u32 sideLen, const io::path &name, ECOLOR_FORMAT format = ECF_A8R8G8B8) override;
 
 	virtual bool setRenderTargetEx(IRenderTarget *target, u16 clearFlag, SColor clearColor = SColor(255, 0, 0, 0),
 			f32 clearDepth = 1.f, u8 clearStencil = 0) override;
@@ -181,9 +191,6 @@ public:
 			f32 &start, f32 &end, f32 &density,
 			bool &pixelFog, bool &rangeFog) override;
 
-	//! get color format of the current color buffer
-	ECOLOR_FORMAT getColorFormat() const override;
-
 	//! get screen size
 	const core::dimension2d<u32> &getScreenSize() const override;
 
@@ -193,24 +200,11 @@ public:
 	//! get render target size
 	const core::dimension2d<u32> &getCurrentRenderTargetSize() const override;
 
-	// get current frames per second value
-	s32 getFPS() const override;
-
-	//! returns amount of primitives (mostly triangles) were drawn in the last frame.
-	//! very useful method for statistics.
-	u32 getPrimitiveCountDrawn(u32 param = 0) const override;
+	SFrameStats &getFrameStats() override;
 
 	//! \return Returns the name of the video driver. Example: In case of the DIRECT3D8
 	//! driver, it would return "Direct3D8.1".
 	const char *getName() const override;
-
-	//! Sets the dynamic ambient light color. The default color is
-	//! (0,0,0,0) which means it is dark.
-	//! \param color: New color of the ambient light.
-	void setAmbientLight(const SColorf &color) override;
-
-	//! Get the global ambient light currently used by the driver
-	const SColorf &getAmbientLight() const override;
 
 	//! Adds an external image loader to the engine.
 	void addExternalImageLoader(IImageLoader *loader) override;
@@ -230,21 +224,15 @@ public:
 	virtual ITexture *addRenderTargetTexture(const core::dimension2d<u32> &size,
 			const io::path &name, const ECOLOR_FORMAT format = ECF_UNKNOWN) override;
 
+	//! Creates a multisampled render target texture.
+	virtual ITexture *addRenderTargetTextureMs(const core::dimension2d<u32> &size, u8 msaa,
+			const io::path &name, const ECOLOR_FORMAT format = ECF_UNKNOWN) override;
+
 	//! Creates a render target texture for a cubemap
-	ITexture *addRenderTargetTextureCubemap(const irr::u32 sideLen,
+	ITexture *addRenderTargetTextureCubemap(const u32 sideLen,
 			const io::path &name, const ECOLOR_FORMAT format) override;
 
-	//! Creates an 1bit alpha channel of the texture based of an color key.
-	void makeColorKeyTexture(video::ITexture *texture, video::SColor color) const override;
-
-	//! Creates an 1bit alpha channel of the texture based of an color key position.
-	virtual void makeColorKeyTexture(video::ITexture *texture,
-			core::position2d<s32> colorKeyPixelPos) const override;
-
-	//! Returns the maximum amount of primitives (mostly vertices) which
-	//! the device is able to render with one drawIndexedTriangleList
-	//! call.
-	u32 getMaximalPrimitiveCount() const override;
+	SDriverLimits getLimits() const override;
 
 	//! Enables or disables a texture creation flag.
 	void setTextureCreationFlag(E_TEXTURE_CREATION_FLAG flag, bool enabled) override;
@@ -272,8 +260,18 @@ public:
 			const core::position2d<s32> &pos,
 			const core::dimension2d<u32> &size) override;
 
-	//! Draws a mesh buffer
-	void drawMeshBuffer(const scene::IMeshBuffer *mb) override;
+	void drawMeshBuffer(const scene::IMeshBuffer *mb) override
+	{
+		if (!mb)
+			return;
+		drawBuffers(mb->getVertexBuffer(), mb->getIndexBuffer(),
+			mb->getPrimitiveCount(), mb->getPrimitiveType());
+	}
+
+	// Note: this should handle hw buffers
+	virtual void drawBuffers(const scene::IVertexBuffer *vb,
+		const scene::IIndexBuffer *ib, u32 primCount,
+		scene::E_PRIMITIVE_TYPE pType = scene::EPT_TRIANGLES) override;
 
 	//! Draws the normals of a mesh buffer
 	virtual void drawMeshBufferNormals(const scene::IMeshBuffer *mb, f32 length = 10.f,
@@ -282,69 +280,64 @@ public:
 	//! Check if the driver supports creating textures with the given color format
 	bool queryTextureFormat(ECOLOR_FORMAT format) const override
 	{
-		return false;
+		return format == video::ECF_A8R8G8B8;
 	}
 
 	ITexture* useDeviceDependentTexture(const io::path& name, E_DRIVER_TYPE driverType, void *textureId, ECOLOR_FORMAT colorFormat, u32 width, u32 height) override;
 
 protected:
 	friend class irr::COpenXRSwapchain;
+
+	/// Links a hardware buffer to its software counterpart
 	struct SHWBufferLink
 	{
-		SHWBufferLink(const scene::IMeshBuffer *_MeshBuffer) :
-				MeshBuffer(_MeshBuffer),
-				ChangedID_Vertex(0), ChangedID_Index(0),
-				Mapped_Vertex(scene::EHM_NEVER), Mapped_Index(scene::EHM_NEVER)
+		SHWBufferLink(const scene::HWBuffer *buf) : Buffer(buf)
 		{
-			if (MeshBuffer) {
-				MeshBuffer->grab();
-				MeshBuffer->setHWBuffer(reinterpret_cast<void *>(this));
-			}
+			if (!buf)
+				return;
+			buf->grab();
+			buf->Link = this;
 		}
 
 		virtual ~SHWBufferLink()
 		{
-			if (MeshBuffer) {
-				MeshBuffer->setHWBuffer(NULL);
-				MeshBuffer->drop();
-			}
+			if (!Buffer)
+				return;
+			Buffer->Link = nullptr;
+			Buffer->drop();
 		}
 
-		const scene::IMeshBuffer *MeshBuffer;
-		u32 ChangedID_Vertex;
-		u32 ChangedID_Index;
-		scene::E_HARDWARE_MAPPING Mapped_Vertex;
-		scene::E_HARDWARE_MAPPING Mapped_Index;
-		std::list<SHWBufferLink *>::iterator listPosition;
+		const scene::HWBuffer *Buffer;
+		size_t ListPosition = static_cast<size_t>(-1);
+		u32 ChangedID = 0;
+		u16 UnusedCounter = 0;
 	};
 
-	//! Gets hardware buffer link from a meshbuffer (may create or update buffer)
-	virtual SHWBufferLink *getBufferLink(const scene::IMeshBuffer *mb);
+	//! Gets hardware buffer link from a buffer (may create or update buffer)
+	virtual SHWBufferLink *getBufferLink(const scene::HWBuffer *buf);
 
-	//! updates hardware buffer if needed  (only some drivers can)
+	//! updates hardware buffer if needed
 	virtual bool updateHardwareBuffer(SHWBufferLink *HWBuffer) { return false; }
-
-	//! Draw hardware buffer (only some drivers can)
-	virtual void drawHardwareBuffer(SHWBufferLink *HWBuffer) {}
 
 	//! Delete hardware buffer
 	virtual void deleteHardwareBuffer(SHWBufferLink *HWBuffer);
 
-	//! Create hardware buffer from mesh (only some drivers can)
-	virtual SHWBufferLink *createHardwareBuffer(const scene::IMeshBuffer *mb) { return 0; }
+	virtual SHWBufferLink *createHardwareBuffer(const scene::HWBuffer *buf) { return nullptr; }
 
 public:
+	virtual void updateHardwareBuffer(const scene::HWBuffer *buf) override;
+
 	//! Remove hardware buffer
-	void removeHardwareBuffer(const scene::IMeshBuffer *mb) override;
+	void removeHardwareBuffer(const scene::HWBuffer *buf) override;
 
 	//! Remove all hardware buffers
 	void removeAllHardwareBuffers() override;
 
-	//! Update all hardware buffers, remove unused ones
-	virtual void updateAllHardwareBuffers();
+	//! Run garbage-collection on all HW buffers
+	void expireHardwareBuffers();
 
-	//! is vbo recommended on this mesh?
-	virtual bool isHardwareBufferRecommend(const scene::IMeshBuffer *mb);
+	//! Is VBO recommended?
+	virtual bool isHardwareBufferRecommend(const scene::HWBuffer *buf);
 
 	//! Create occlusion query.
 	/** Use node for identification and mesh for occlusion test. */
@@ -386,6 +379,8 @@ public:
 	//! Create render target.
 	IRenderTarget *addRenderTarget() override;
 
+	void blitRenderTarget(IRenderTarget *from, IRenderTarget *to) override {}
+
 	//! Remove render target.
 	void removeRenderTarget(IRenderTarget *renderTarget) override;
 
@@ -418,60 +413,43 @@ public:
 	//! Returns amount of currently available material renderers.
 	u32 getMaterialRendererCount() const override;
 
-	//! Returns name of the material renderer
-	const char *getMaterialRendererName(u32 idx) const override;
 
 	//! Adds a new material renderer to the VideoDriver, based on a high level shading language.
 	virtual s32 addHighLevelShaderMaterial(
 			const c8 *vertexShaderProgram,
-			const c8 *vertexShaderEntryPointName = 0,
-			E_VERTEX_SHADER_TYPE vsCompileTarget = EVST_VS_1_1,
-			const c8 *pixelShaderProgram = 0,
-			const c8 *pixelShaderEntryPointName = 0,
-			E_PIXEL_SHADER_TYPE psCompileTarget = EPST_PS_1_1,
-			const c8 *geometryShaderProgram = 0,
-			const c8 *geometryShaderEntryPointName = "main",
-			E_GEOMETRY_SHADER_TYPE gsCompileTarget = EGST_GS_4_0,
+			const c8 *pixelShaderProgram,
+			const c8 *geometryShaderProgram,
+			const c8 *shaderName = nullptr,
 			scene::E_PRIMITIVE_TYPE inType = scene::EPT_TRIANGLES,
 			scene::E_PRIMITIVE_TYPE outType = scene::EPT_TRIANGLE_STRIP,
 			u32 verticesOut = 0,
-			IShaderConstantSetCallBack *callback = 0,
+			IShaderConstantSetCallBack *callback = nullptr,
 			E_MATERIAL_TYPE baseMaterial = video::EMT_SOLID,
-			s32 userData = 0) override;
+			s32 userData = 0)override;
 
 	virtual s32 addHighLevelShaderMaterialFromFiles(
-			const io::path &vertexShaderProgramFile,
-			const c8 *vertexShaderEntryPointName = "main",
-			E_VERTEX_SHADER_TYPE vsCompileTarget = EVST_VS_1_1,
-			const io::path &pixelShaderProgramFile = "",
-			const c8 *pixelShaderEntryPointName = "main",
-			E_PIXEL_SHADER_TYPE psCompileTarget = EPST_PS_1_1,
-			const io::path &geometryShaderProgramFileName = "",
-			const c8 *geometryShaderEntryPointName = "main",
-			E_GEOMETRY_SHADER_TYPE gsCompileTarget = EGST_GS_4_0,
+			const io::path &vertexShaderProgramFileName,
+			const io::path &pixelShaderProgramFileName,
+			const io::path &geometryShaderProgramFileName,
+			const c8 *shaderName = nullptr,
 			scene::E_PRIMITIVE_TYPE inType = scene::EPT_TRIANGLES,
 			scene::E_PRIMITIVE_TYPE outType = scene::EPT_TRIANGLE_STRIP,
 			u32 verticesOut = 0,
-			IShaderConstantSetCallBack *callback = 0,
+			IShaderConstantSetCallBack *callback = nullptr,
 			E_MATERIAL_TYPE baseMaterial = video::EMT_SOLID,
 			s32 userData = 0) override;
 
-	virtual s32 addHighLevelShaderMaterialFromFiles(
+	s32 addHighLevelShaderMaterialFromFiles(
 			io::IReadFile *vertexShaderProgram,
-			const c8 *vertexShaderEntryPointName = "main",
-			E_VERTEX_SHADER_TYPE vsCompileTarget = EVST_VS_1_1,
 			io::IReadFile *pixelShaderProgram = 0,
-			const c8 *pixelShaderEntryPointName = "main",
-			E_PIXEL_SHADER_TYPE psCompileTarget = EPST_PS_1_1,
 			io::IReadFile *geometryShaderProgram = 0,
-			const c8 *geometryShaderEntryPointName = "main",
-			E_GEOMETRY_SHADER_TYPE gsCompileTarget = EGST_GS_4_0,
+			const c8 *shaderName = nullptr,
 			scene::E_PRIMITIVE_TYPE inType = scene::EPT_TRIANGLES,
 			scene::E_PRIMITIVE_TYPE outType = scene::EPT_TRIANGLE_STRIP,
 			u32 verticesOut = 0,
-			IShaderConstantSetCallBack *callback = 0,
+			IShaderConstantSetCallBack *callback = nullptr,
 			E_MATERIAL_TYPE baseMaterial = video::EMT_SOLID,
-			s32 userData = 0) override;
+			s32 userData = 0);
 
 	virtual void deleteShaderMaterial(s32 material) override;
 
@@ -489,27 +467,11 @@ public:
 	//! Writes the provided image to a file.
 	bool writeImageToFile(IImage *image, io::IWriteFile *file, u32 param = 0) override;
 
-	//! Sets the name of a material renderer.
-	void setMaterialRendererName(u32 idx, const char *name) override;
-
 	//! Swap the material renderers used for certain id's
 	void swapMaterialRenderers(u32 idx1, u32 idx2, bool swapNames) override;
 
 	//! looks if the image is already loaded
 	video::ITexture *findTexture(const io::path &filename) override;
-
-	//! Set/unset a clipping plane.
-	//! There are at least 6 clipping planes available for the user to set at will.
-	//! \param index: The plane index. Must be between 0 and MaxUserClipPlanes.
-	//! \param plane: The plane itself.
-	//! \param enable: If true, enable the clipping plane else disable it.
-	bool setClipPlane(u32 index, const core::plane3df &plane, bool enable = false) override;
-
-	//! Enable/disable a clipping plane.
-	//! There are at least 6 clipping planes available for the user to set at will.
-	//! \param index: The plane index. Must be between 0 and MaxUserClipPlanes.
-	//! \param enable: If true, enable the clipping plane else disable it.
-	void enableClipPlane(u32 index, bool enable) override;
 
 	//! Returns the graphics card vendor name.
 	core::stringc getVendorInfo() override { return "Not available on this driver."; }
@@ -536,26 +498,8 @@ public:
 		AllowZWriteOnTransparent = flag;
 	}
 
-	//! Returns the maximum texture size supported.
-	core::dimension2du getMaxTextureSize() const override;
-
 	//! Used by some SceneNodes to check if a material should be rendered in the transparent render pass
-	bool needsTransparentRenderPass(const irr::video::SMaterial &material) const override;
-
-	//! Color conversion convenience function
-	/** Convert an image (as array of pixels) from source to destination
-	array, thereby converting the color format. The pixel size is
-	determined by the color formats.
-	\param sP Pointer to source
-	\param sF Color format of source
-	\param sN Number of pixels to convert, both array must be large enough
-	\param dP Pointer to destination
-	\param dF Color format of destination
-	*/
-	virtual void convertColor(const void *sP, ECOLOR_FORMAT sF, s32 sN,
-			void *dP, ECOLOR_FORMAT dF) const override;
-
-	bool checkDriverReset() override { return false; }
+	bool needsTransparentRenderPass(const video::SMaterial &material) const override;
 
 protected:
 	//! deletes all textures
@@ -567,16 +511,15 @@ protected:
 	//! adds a surface, not loaded or created by the Irrlicht Engine
 	void addTexture(ITexture *surface);
 
-	virtual ITexture *createDeviceDependentTexture(const io::path &name, IImage *image);
-
-	virtual ITexture *createDeviceDependentTextureCubemap(const io::path &name, const core::array<IImage *> &image);
+	virtual ITexture *createDeviceDependentTexture(const io::path &name, E_TEXTURE_TYPE type,
+		const std::vector<IImage*> &images);
 
 	//! checks triangle count and print warning if wrong
 	bool checkPrimitiveCount(u32 prmcnt) const;
 
 	bool checkImage(IImage *image) const;
 
-	bool checkImage(const core::array<IImage *> &image) const;
+	bool checkImage(const std::vector<IImage*> &image) const;
 
 	// adds a material renderer and drops it afterwards. To be used for internal creation
 	s32 addAndDropMaterialRenderer(IMaterialRenderer *m);
@@ -584,8 +527,17 @@ protected:
 	//! deletes all material renderers
 	void deleteMaterialRenders();
 
+	// adds a created hardware buffer to the relevant data structure
+	void registerHardwareBuffer(SHWBufferLink *HWBuffer);
+
 	// prints renderer version
 	void printVersion();
+
+	inline void accountHWBufferUpload(u32 size)
+	{
+		FrameStats.HWBuffersUploaded++;
+		(void)size;
+	}
 
 	inline bool getWriteZBuffer(const SMaterial &material) const
 	{
@@ -625,7 +577,7 @@ protected:
 
 		void *lock(E_TEXTURE_LOCK_MODE mode = ETLM_READ_WRITE, u32 mipmapLevel = 0, u32 layer = 0, E_TEXTURE_LOCK_FLAGS lockFlags = ETLF_FLIP_Y_UP_RTT) override { return 0; }
 		void unlock() override {}
-		void regenerateMipMapLevels(void *data = 0, u32 layer = 0) override {}
+		void regenerateMipMapLevels() override {}
 	};
 	core::array<SSurface> Textures;
 
@@ -701,7 +653,7 @@ protected:
 	core::array<video::IImageWriter *> SurfaceWriter;
 	core::array<SMaterialRenderer> MaterialRenderers;
 
-	std::list<SHWBufferLink *> HWBufferList;
+	std::vector<SHWBufferLink *> HWBufferList;
 
 	io::IFileSystem *FileSystem;
 
@@ -712,9 +664,8 @@ protected:
 	core::dimension2d<u32> ScreenSize;
 	core::matrix4 TransformationMatrix;
 
-	CFPSCounter FPSCounter;
+	SFrameStats FrameStats;
 
-	u32 PrimitivesDrawn;
 	u32 MinVertexCountForVBO;
 
 	u32 TextureCreationFlags;
@@ -724,8 +675,6 @@ protected:
 	f32 FogDensity;
 	SColor FogColor;
 	SExposedVideoData ExposedData;
-
-	io::IAttributes *DriverAttributes;
 
 	SOverrideMaterial OverrideMaterial;
 	SMaterial OverrideMaterial2D;
@@ -738,9 +687,6 @@ protected:
 	bool AllowZWriteOnTransparent;
 
 	bool FeatureEnabled[video::EVDF_COUNT];
-
-	SColorf AmbientLight;
 };
 
 } // end namespace video
-} // end namespace irr

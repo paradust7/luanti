@@ -1,20 +1,7 @@
---Minetest
---Copyright (C) 2014 sapier
---Copyright (C) 2018 rubenwardy <rw@rubenwardy.com>
---
---This program is free software; you can redistribute it and/or modify
---it under the terms of the GNU Lesser General Public License as published by
---the Free Software Foundation; either version 2.1 of the License, or
---(at your option) any later version.
---
---This program is distributed in the hope that it will be useful,
---but WITHOUT ANY WARRANTY; without even the implied warranty of
---MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
---GNU Lesser General Public License for more details.
---
---You should have received a copy of the GNU Lesser General Public License along
---with this program; if not, write to the Free Software Foundation, Inc.,
---51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+-- Luanti
+-- Copyright (C) 2014 sapier
+-- Copyright (C) 2018 rubenwardy <rw@rubenwardy.com>
+-- SPDX-License-Identifier: LGPL-2.1-or-later
 
 
 local function get_content_icons(packages_with_updates)
@@ -29,16 +16,11 @@ end
 local packages_raw, packages
 
 local function update_packages()
-	if not pkgmgr.global_mods then
-		pkgmgr.refresh_globals()
-	end
-	if not pkgmgr.games then
-		pkgmgr.update_gamelist()
-	end
+	pkgmgr.load_all()
 
 	packages_raw = {}
 	table.insert_all(packages_raw, pkgmgr.games)
-	table.insert_all(packages_raw, pkgmgr.get_texture_packs())
+	table.insert_all(packages_raw, pkgmgr.texture_packs)
 	table.insert_all(packages_raw, pkgmgr.global_mods:get_list())
 
 	local function get_data()
@@ -79,6 +61,7 @@ local function get_formspec(tabview, name, tabdata)
 	if update_count == 0 then
 		contentdb_label = fgettext("Browse online content")
 	else
+		-- TRANSLATORS: $1 = number of available updates
 		contentdb_label = fgettext("Browse online content [$1]", update_count)
 	end
 
@@ -102,15 +85,26 @@ local function get_formspec(tabview, name, tabdata)
 	end
 
 	if selected_pkg then
-		-- Check for screenshot being available
-		local screenshotfilename = selected_pkg.path .. DIR_DELIM .. "screenshot.png"
-		local screenshotfile, error = io.open(screenshotfilename, "r")
+		local valid_screenshots = {
+			-- See also contentdb/app/tasks/importtasks.py, def import_repo_screenshot
+			selected_pkg.path .. DIR_DELIM .. "screenshot.png",
+			selected_pkg.path .. DIR_DELIM .. "screenshot.jpg",
+			selected_pkg.path .. DIR_DELIM .. "screenshot.jpeg",
+		}
 
+		-- Check for screenshot being available
 		local modscreenshot
-		if not error then
-			screenshotfile:close()
-			modscreenshot = screenshotfilename
-		else
+		for _, screenshotfilename in ipairs(valid_screenshots) do
+			local screenshotfile, err = io.open(screenshotfilename, "r")
+			if not err then
+				screenshotfile:close()
+				modscreenshot = screenshotfilename
+				break
+			end
+		end
+
+		-- Fallback to no_screenshot if no screenshot is avaliable
+		if not modscreenshot then
 			modscreenshot = defaulttexturedir .. "no_screenshot.png"
 		end
 
@@ -123,7 +117,7 @@ local function get_formspec(tabview, name, tabdata)
 
 		local title_and_name
 		if selected_pkg.type == "game" then
-			title_and_name = selected_pkg.name
+			title_and_name = selected_pkg.title or selected_pkg.name
 		else
 			title_and_name = (selected_pkg.title or selected_pkg.name) .. "\n" ..
 				core.colorize("#BFBFBF", selected_pkg.name)
@@ -207,6 +201,7 @@ local function handle_doubleclick(pkg)
 			core.settings:set("texture_path", pkg.path)
 		end
 		packages = nil
+		pkgmgr.reload_texture_packs()
 
 		mm_game_theme.init()
 		mm_game_theme.set_engine()
@@ -271,6 +266,7 @@ local function handle_buttons(tabview, fields, tabname, tabdata)
 
 		core.settings:set("texture_path", txp_path)
 		packages = nil
+		pkgmgr.reload_texture_packs()
 
 		mm_game_theme.init()
 		mm_game_theme.set_engine()
@@ -283,10 +279,11 @@ end
 return {
 	name = "content",
 	caption = function()
-		local update_count = update_detector.get_count()
+		local update_count = core.settings:get_bool("contentdb_enable_updates_indicator") and update_detector.get_count() or 0
 		if update_count == 0 then
 			return fgettext("Content")
 		else
+			-- TRANSLATORS: $1 = number of available updates
 			return fgettext("Content [$1]", update_count)
 		end
 	end,

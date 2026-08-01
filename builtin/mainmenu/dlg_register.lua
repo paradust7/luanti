@@ -1,23 +1,11 @@
---Minetest
---Copyright (C) 2022 rubenwardy
---
---This program is free software; you can redistribute it and/or modify
---it under the terms of the GNU Lesser General Public License as published by
---the Free Software Foundation; either version 2.1 of the License, or
---(at your option) any later version.
---
---This program is distributed in the hope that it will be useful,
---but WITHOUT ANY WARRANTY; without even the implied warranty of
---MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
---GNU Lesser General Public License for more details.
---
---You should have received a copy of the GNU Lesser General Public License along
---with this program; if not, write to the Free Software Foundation, Inc.,
---51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+-- Luanti
+-- Copyright (C) 2022 rubenwardy
+-- SPDX-License-Identifier: LGPL-2.1-or-later
 
 --------------------------------------------------------------------------------
 
 local function register_formspec(dialogdata)
+	-- TRANSLATORS: Message when joining a server
 	local title = fgettext("Joining $1", dialogdata.server and dialogdata.server.name or dialogdata.address)
 	local buttons_y = 4 + 1.3
 	if dialogdata.error then

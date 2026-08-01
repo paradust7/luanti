@@ -1,23 +1,9 @@
-/*
-Minetest
-Copyright (C) 2016 sfan5 <sfan5@live.de>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2016 sfan5 <sfan5@live.de>
 #include "tileanimation.h"
 #include "util/serialize.h"
+#include "util/string.h"
 
 void TileAnimationParams::serialize(std::ostream &os, u16 protocol_ver) const
 {
@@ -72,7 +58,7 @@ void TileAnimationParams::determineParams(v2u32 texture_size, int *frame_count,
 		if (frame_count)
 			*frame_count = _frame_count;
 		if (frame_length_ms)
-			*frame_length_ms = 1000.0 * vertical_frames.length / _frame_count;
+			*frame_length_ms = 1000 * vertical_frames.length / _frame_count;
 		if (frame_size)
 			*frame_size = v2u32(texture_size.X, frame_height);
 	} else if (type == TAT_SHEET_2D) {
@@ -103,6 +89,35 @@ void TileAnimationParams::getTextureModifer(std::ostream &os, v2u32 texture_size
 	}
 }
 
+void TileAnimationParams::extractFirstFrame(std::string &name) const
+{
+	if (name.empty())
+		return;
+
+	switch(type) {
+	case TAT_VERTICAL_FRAMES: {
+		// Can't use "[verticalframe", since the the server doesn't know the texture size.
+		std::ostringstream oss;
+		str_texture_modifiers_escape(name);
+		oss << "[combine:" <<
+				vertical_frames.aspect_w << "x" <<
+				vertical_frames.aspect_h <<
+				":0,0=" << name;
+		name = oss.str();
+		break;
+	} case TAT_SHEET_2D: {
+		std::ostringstream oss;
+		oss << name << "^[sheet:" <<
+				sheet_2d.frames_w << "x" <<
+				sheet_2d.frames_h << ":0,0";
+		name = oss.str();
+		break;
+	} case TAT_NONE:
+	default:
+		break;
+	}
+}
+
 v2f TileAnimationParams::getTextureCoords(v2u32 texture_size, int frame) const
 {
 	v2u32 ret(0, 0);
@@ -119,5 +134,5 @@ v2f TileAnimationParams::getTextureCoords(v2u32 texture_size, int frame) const
 		r = frame % sheet_2d.frames_w;
 		ret = v2u32(r * frame_size.X, q * frame_size.Y);
 	}
-	return v2f(ret.X / (float) texture_size.X, ret.Y / (float) texture_size.Y);
+	return v2f::from(ret) / v2f::from(texture_size);
 }

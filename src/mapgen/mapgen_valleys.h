@@ -1,27 +1,14 @@
 /*
-Minetest
+Luanti
+SPDX-License-Identifier: LGPL-2.1-or-later
 Copyright (C) 2016-2019 Duane Robertson <duane@duanerobertson.com>
 Copyright (C) 2016-2019 paramat
 
 Based on Valleys Mapgen by Gael de Sailly
-(https://forum.minetest.net/viewtopic.php?f=9&t=11430)
+(https://forum.luanti.org/viewtopic.php?f=9&t=11430)
 and mapgen_v7, mapgen_flat by kwolekr and paramat.
 
 Licensing changed by permission of Gael de Sailly.
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 */
 
 
@@ -34,10 +21,9 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #define MGVALLEYS_VARY_RIVER_DEPTH 0x04
 #define MGVALLEYS_ALT_DRY          0x08
 
-class BiomeManager;
 class BiomeGenOriginal;
 
-extern FlagDesc flagdesc_mapgen_valleys[];
+extern const FlagDesc flagdesc_mapgen_valleys[];
 
 
 struct MapgenValleysParams : public MapgenParams {
@@ -93,18 +79,18 @@ public:
 	int getSpawnLevelAtPoint(v2s16 p);
 
 private:
-	BiomeGenOriginal *m_bgen;
+	BiomeGenOriginal *m_bgen = nullptr;
 
 	float altitude_chill;
 	float river_depth_bed;
 	float river_size_factor;
 
-	Noise *noise_inter_valley_fill;
-	Noise *noise_inter_valley_slope;
-	Noise *noise_rivers;
-	Noise *noise_terrain_height;
-	Noise *noise_valley_depth;
-	Noise *noise_valley_profile;
+	Noise *noise_inter_valley_fill = nullptr;
+	Noise *noise_inter_valley_slope = nullptr;
+	Noise *noise_rivers = nullptr;
+	Noise *noise_terrain_height = nullptr;
+	Noise *noise_valley_depth = nullptr;
+	Noise *noise_valley_profile = nullptr;
 
 	virtual int generateTerrain();
 };

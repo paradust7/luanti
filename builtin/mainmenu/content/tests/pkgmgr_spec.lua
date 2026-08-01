@@ -1,19 +1,6 @@
---Minetest
---Copyright (C) 2022 rubenwardy
---
---This program is free software; you can redistribute it and/or modify
---it under the terms of the GNU Lesser General Public License as published by
---the Free Software Foundation; either version 2.1 of the License, or
---(at your option) any later version.
---
---This program is distributed in the hope that it will be useful,
---but WITHOUT ANY WARRANTY; without even the implied warranty of
---MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
---GNU Lesser General Public License for more details.
---
---You should have received a copy of the GNU Lesser General Public License along
---with this program; if not, write to the Free Software Foundation, Inc.,
---51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+-- Luanti
+-- Copyright (C) 2022 rubenwardy
+-- SPDX-License-Identifier: LGPL-2.1-or-later
 
 local mods_dir = "/tmp/.minetest/mods"
 local games_dir = "/tmp/.minetest/games"
@@ -46,6 +33,9 @@ local function reset()
 	function core.get_texturepath()
 		return txp_dir
 	end
+	function core.get_texturepath_share()
+		return txp_dir
+	end
 	function core.get_modpath()
 		return mods_dir
 	end
@@ -58,13 +48,6 @@ local function reset()
 
 	setfenv(loadfile("builtin/common/misc_helpers.lua"), env)()
 	setfenv(loadfile("builtin/mainmenu/content/pkgmgr.lua"), env)()
-
-	function env.pkgmgr.update_gamelist()
-		table.insert(calls, { "update_gamelist" })
-	end
-	function env.pkgmgr.refresh_globals()
-		table.insert(calls, { "refresh_globals" })
-	end
 
 	function env.assert_calls(list)
 		assert.are.same(list, calls)
@@ -113,7 +96,6 @@ describe("install_dir", function()
 		env.assert_calls({
 			{ "delete_dir", mods_dir .. "/mymod" },
 			{ "copy_dir", "/tmp/123", mods_dir .. "/mymod", false },
-			{ "refresh_globals" },
 		})
 	end)
 
@@ -129,7 +111,6 @@ describe("install_dir", function()
 		env.assert_calls({
 			{ "delete_dir", mods_dir .. "/mymod" },
 			{ "copy_dir", "/tmp/123", mods_dir .. "/mymod", false },
-			{ "refresh_globals" },
 		})
 	end)
 
@@ -145,7 +126,25 @@ describe("install_dir", function()
 		env.assert_calls({
 			{ "delete_dir", games_dir .. "/mygame" },
 			{ "copy_dir", "/tmp/123", games_dir .. "/mygame", false },
-			{ "update_gamelist" },
+		})
+	end)
+
+	it("updates game (alias)", function()
+		local old_game_path = games_dir .. "/mygame"
+		local env = reset()
+		-- Temporary download directory of the content
+		local DL_DIR = "/tmp/123"
+		env.pkgmgr.get_base_folder = function()
+			return { type = "game", path = DL_DIR }
+		end
+
+		local path, message = env.pkgmgr.install_dir("game", DL_DIR, "mynewgame", old_game_path)
+		assert.is.equal(games_dir .. "/mynewgame", path)
+		assert.is._nil(message)
+		env.assert_calls({
+			{ "delete_dir", games_dir .. "/mygame" },
+			{ "delete_dir", games_dir .. "/mynewgame" },
+			{ "copy_dir", DL_DIR, games_dir .. "/mynewgame", false },
 		})
 	end)
 
@@ -161,7 +160,6 @@ describe("install_dir", function()
 		env.assert_calls({
 			{ "delete_dir", mods_dir .. "/123" },
 			{ "copy_dir", "/tmp/123", mods_dir .. "/123", false },
-			{ "refresh_globals" },
 		})
 	end)
 
@@ -188,7 +186,6 @@ describe("install_dir", function()
 		env.assert_calls({
 			{ "delete_dir", "/tmp/alt-target" },
 			{ "copy_dir", "/tmp/123", "/tmp/alt-target", false },
-			{ "refresh_globals" },
 		})
 	end)
 
@@ -238,6 +235,5 @@ describe("install_dir", function()
 		path, message = env.pkgmgr.install_dir("txp", "/tmp/123", "name", nil)
 		assert.is._not._nil(path)
 		assert.is._nil(message)
-
 	end)
 end)

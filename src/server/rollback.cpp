@@ -1,38 +1,20 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "rollback.h"
-#include <fstream>
+#include "exceptions.h"
 #include <list>
-#include <sstream>
 #include "log.h"
-#include "mapnode.h"
 #include "gamedef.h"
 #include "nodedef.h"
-#include "util/serialize.h"
 #include "util/string.h"
 #include "util/numeric.h"
 #include "inventorymanager.h" // deserializing InventoryLocations
 #include "sqlite3.h"
 #include "filesys.h"
 
-#define POINTS_PER_NODE (16.0)
+#define POINTS_PER_NODE (16.0f)
 
 #define SQLRES(f, good) \
 	if ((f) != (good)) {\
@@ -59,11 +41,11 @@ public:
 		return *this;
 	}
 
-	int id;
+	int id = 0;
 };
 
 struct ActionRow {
-	int          id;
+	int          id = 0;
 	int          actor;
 	time_t       timestamp;
 	int          type;
@@ -136,7 +118,7 @@ void RollbackManager::registerNewNode(const int id, const std::string &name)
 
 int RollbackManager::getActorId(const std::string &name)
 {
-	for (std::vector<Entity>::const_iterator iter = knownActors.begin();
+	for (auto iter = knownActors.begin();
 			iter != knownActors.end(); ++iter) {
 		if (iter->name == name) {
 			return iter->id;
@@ -156,7 +138,7 @@ int RollbackManager::getActorId(const std::string &name)
 
 int RollbackManager::getNodeId(const std::string &name)
 {
-	for (std::vector<Entity>::const_iterator iter = knownNodes.begin();
+	for (auto iter = knownNodes.begin();
 			iter != knownNodes.end(); ++iter) {
 		if (iter->name == name) {
 			return iter->id;
@@ -176,7 +158,7 @@ int RollbackManager::getNodeId(const std::string &name)
 
 const char * RollbackManager::getActorName(const int id)
 {
-	for (std::vector<Entity>::const_iterator iter = knownActors.begin();
+	for (auto iter = knownActors.begin();
 			iter != knownActors.end(); ++iter) {
 		if (iter->id == id) {
 			return iter->name.c_str();
@@ -189,7 +171,7 @@ const char * RollbackManager::getActorName(const int id)
 
 const char * RollbackManager::getNodeName(const int id)
 {
-	for (std::vector<Entity>::const_iterator iter = knownNodes.begin();
+	for (auto iter = knownNodes.begin();
 			iter != knownNodes.end(); ++iter) {
 		if (iter->id == id) {
 			return iter->name.c_str();
@@ -239,9 +221,13 @@ bool RollbackManager::createTables()
 		"	FOREIGN KEY (`oldNode`)   REFERENCES `node`(`id`),\n"
 		"	FOREIGN KEY (`newNode`)   REFERENCES `node`(`id`)\n"
 		");\n"
-		"CREATE INDEX IF NOT EXISTS `actionIndex` ON `action`(`x`,`y`,`z`,`timestamp`,`actor`);\n",
+		// We run queries with the following filters:
+		// - `timestamp` >= ? AND `actor` = ?
+		// - `timestamp` >= ?
+		// - `timestamp` >= ? AND <range query on X, Y, Z>
+		"CREATE INDEX IF NOT EXISTS `actionIndex` ON `action`(`x`,`y`,`z`,`timestamp`,`actor`);\n"
+		"CREATE INDEX IF NOT EXISTS `actionTimestampActorIndex` ON `action`(`timestamp`,`actor`);\n",
 		NULL, NULL, NULL));
-	verbosestream << "SQL Rollback: SQLite3 database structure was created" << std::endl;
 
 	return true;
 }
@@ -251,13 +237,10 @@ bool RollbackManager::initDatabase()
 {
 	verbosestream << "RollbackManager: Database connection setup" << std::endl;
 
-	bool needs_create = !fs::PathExists(database_path);
 	SQLOK(sqlite3_open_v2(database_path.c_str(), &db,
 			SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, NULL));
 
-	if (needs_create) {
-		createTables();
-	}
+	createTables();
 
 	SQLOK(sqlite3_prepare_v2(db,
 		"INSERT INTO `action` (\n"
@@ -372,7 +355,7 @@ bool RollbackManager::initDatabase()
 	}
 	SQLOK(sqlite3_reset(stmt_knownNode_select));
 
-	return needs_create;
+	return true;
 }
 
 
@@ -532,7 +515,6 @@ ActionRow RollbackManager::actionRowFromRollbackAction(const RollbackAction & ac
 {
 	ActionRow row;
 
-	row.id        = 0;
 	row.actor     = getActorId(action.actor);
 	row.timestamp = action.unix_time;
 	row.type      = action.type;
@@ -599,7 +581,7 @@ const std::list<RollbackAction> RollbackManager::rollbackActionsFromActionRows(
 			break;
 
 		default:
-			throw ("W.T.F.");
+			assert(false);
 			break;
 		}
 
@@ -677,12 +659,10 @@ float RollbackManager::getSuspectNearness(bool is_guess, v3s16 suspect_p,
 	f -= 1 * (action_t - suspect_t);
 	// If is a guess, halve the points
 	if (is_guess) {
-		f *= 0.5;
+		f /= 2;
 	}
 	// Limit to 0
-	if (f < 0) {
-		f = 0;
-	}
+	f = MYMAX(f, 0);
 	return f;
 }
 
@@ -740,12 +720,11 @@ std::string RollbackManager::getSuspect(v3s16 p, float nearness_shortcut,
 	if (!current_actor.empty()) {
 		return current_actor;
 	}
-	int cur_time = time(0);
+	time_t cur_time = time(0);
 	time_t first_time = cur_time - (100 - min_nearness);
 	RollbackAction likely_suspect;
 	float likely_suspect_nearness = 0;
-	for (std::list<RollbackAction>::const_reverse_iterator
-	     i = action_latest_buffer.rbegin();
+	for (auto i = action_latest_buffer.rbegin();
 	     i != action_latest_buffer.rend(); ++i) {
 		if (i->unix_time < first_time) {
 			break;
@@ -781,9 +760,7 @@ void RollbackManager::flush()
 {
 	sqlite3_exec(db, "BEGIN", NULL, NULL, NULL);
 
-	std::list<RollbackAction>::const_iterator iter;
-
-	for (iter  = action_todisk_buffer.begin();
+	for (auto iter = action_todisk_buffer.begin();
 			iter != action_todisk_buffer.end();
 			++iter) {
 		if (iter->actor.empty()) {
@@ -807,14 +784,19 @@ void RollbackManager::addAction(const RollbackAction & action)
 	if (action_todisk_buffer.size() >= 500) {
 		flush();
 	}
+	// Cut off latest log sometimes
+	while (action_latest_buffer.size() >= 500) {
+		action_latest_buffer.pop_front();
+	}
 }
 
 std::list<RollbackAction> RollbackManager::getNodeActors(v3s16 pos, int range,
 		time_t seconds, int limit)
 {
-	flush();
 	time_t cur_time = time(0);
 	time_t first_time = cur_time - seconds;
+
+	flush();
 
 	return getActionsSince_range(first_time, pos, range, limit);
 }

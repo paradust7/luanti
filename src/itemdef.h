@@ -1,45 +1,25 @@
-/*
-Minetest
-Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-Copyright (C) 2013 Kahrl <kahrl@gmx.net>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
+// Copyright (C) 2013 Kahrl <kahrl@gmx.net>
 
 #pragma once
 
-#include "irrlichttypes_extrabloated.h"
+#include "irrlichttypes_bloated.h"
 #include <string>
 #include <iostream>
 #include <optional>
 #include <set>
 #include "itemgroup.h"
-#include "sound.h"
+#include "sound_spec.h"
 #include "texture_override.h" // TextureOverride
 #include "tool.h"
 #include "util/pointabilities.h"
 #include "util/pointedthing.h"
+#include "tileanimation.h"
 
-class IGameDef;
-class Client;
 struct ToolCapabilities;
-#ifndef SERVER
-#include "client/texturesource.h"
-struct ItemMesh;
-struct ItemStack;
-#endif
+struct ItemDefinition;
 
 /*
 	Base item definition
@@ -71,9 +51,32 @@ struct TouchInteraction
 	TouchInteraction();
 	// Returns the right mode for the pointed thing and resolves any occurrence
 	// of TouchInteractionMode_USER into an actual mode.
-	TouchInteractionMode getMode(PointedThingType pointed_type) const;
+	TouchInteractionMode getMode(const ItemDefinition &selected_def,
+			PointedThingType pointed_type) const;
 	void serialize(std::ostream &os) const;
 	void deSerialize(std::istream &is);
+};
+
+struct ItemImageDef
+{
+	// May be extended to support meshes in the future
+	std::string name;
+	TileAnimationParams animation;
+
+	ItemImageDef &operator=(const std::string &other_name)
+	{
+		this->name = other_name;
+		return *this;
+	}
+
+	void reset()
+	{
+		animation.type = TileAnimationType::TAT_NONE;
+		name.clear();
+	}
+
+	void serialize(std::ostream &os, u16 protocol_version) const;
+	void deSerialize(std::istream &is, u16 protocol_version);
 };
 
 struct ItemDefinition
@@ -89,10 +92,10 @@ struct ItemDefinition
 	/*
 		Visual properties
 	*/
-	std::string inventory_image; // Optional for nodes, mandatory for tools/craftitems
-	std::string inventory_overlay; // Overlay of inventory_image.
-	std::string wield_image; // If empty, inventory_image or mesh (only nodes) is used
-	std::string wield_overlay; // Overlay of wield_image.
+	ItemImageDef inventory_image; // Optional for nodes, mandatory for tools/craftitems
+	ItemImageDef inventory_overlay; // Overlay of inventory_image.
+	ItemImageDef wield_image; // If empty, inventory_image or mesh (only nodes) is used
+	ItemImageDef wield_overlay; // Overlay of wield_image.
 	std::string palette_image; // If specified, the item will be colorized based on this
 	video::SColor color; // The fallback color of the node.
 	v3f wield_scale;
@@ -154,23 +157,6 @@ public:
 	virtual void getAll(std::set<std::string> &result) const=0;
 	// Check if item is known
 	virtual bool isKnown(const std::string &name) const=0;
-#ifndef SERVER
-	// Get item inventory texture
-	virtual video::ITexture* getInventoryTexture(const ItemStack &item, Client *client) const=0;
-
-	/**
-	 * Get wield mesh
-	 *
-	 * Returns nullptr if there is an inventory image
-	 */
-	virtual ItemMesh* getWieldMesh(const ItemStack &item, Client *client) const = 0;
-	// Get item palette
-	virtual Palette* getPalette(const ItemStack &item, Client *client) const = 0;
-	// Returns the base color of an item stack: the color of all
-	// tiles that do not define their own color.
-	virtual video::SColor getItemstackColor(const ItemStack &stack,
-		Client *client) const = 0;
-#endif
 
 	virtual void serialize(std::ostream &os, u16 protocol_version)=0;
 };

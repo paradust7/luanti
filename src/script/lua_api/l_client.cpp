@@ -1,33 +1,18 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-Copyright (C) 2017 nerzhul, Loic Blot <loic.blot@unix-experience.fr>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
+// Copyright (C) 2017 nerzhul, Loic Blot <loic.blot@unix-experience.fr>
 
 #include "l_client.h"
 #include "chatmessage.h"
 #include "client/client.h"
-#include "client/clientevent.h"
 #include "client/sound.h"
 #include "client/clientenvironment.h"
 #include "common/c_content.h"
 #include "common/c_converter.h"
 #include "cpp_api/s_base.h"
 #include "gettext.h"
+#include "itemdef.h"
 #include "l_internal.h"
 #include "lua_api/l_nodemeta.h"
 #include "gui/mainmenumanager.h"
@@ -74,7 +59,7 @@ int ModApiClient::l_get_current_modname(lua_State *L)
 int ModApiClient::l_get_modpath(lua_State *L)
 {
 	std::string modname = readParam<std::string>(L, 1);
-	// Client mods use a virtual filesystem, see Client::scanModSubfolder()
+	// Client mods use a virtual filesystem, see ModVFS::scanModSubfolder()
 	std::string path = modname + ":";
 	lua_pushstring(L, path.c_str());
 	return 1;
@@ -140,28 +125,6 @@ int ModApiClient::l_get_player_names(lua_State *L)
 		index++;
 	}
 	return 1;
-}
-
-// show_formspec(formspec)
-int ModApiClient::l_show_formspec(lua_State *L)
-{
-	if (!lua_isstring(L, 1) || !lua_isstring(L, 2))
-		return 0;
-
-	ClientEvent *event = new ClientEvent();
-	event->type = CE_SHOW_LOCAL_FORMSPEC;
-	event->show_formspec.formname = new std::string(luaL_checkstring(L, 1));
-	event->show_formspec.formspec = new std::string(luaL_checkstring(L, 2));
-	getClient(L)->pushToEventQueue(event);
-	lua_pushboolean(L, true);
-	return 1;
-}
-
-// send_respawn()
-int ModApiClient::l_send_respawn(lua_State *L)
-{
-	getClient(L)->sendRespawn();
-	return 0;
 }
 
 // disconnect()
@@ -321,7 +284,20 @@ int ModApiClient::l_get_privilege_list(lua_State *L)
 // get_builtin_path()
 int ModApiClient::l_get_builtin_path(lua_State *L)
 {
-	lua_pushstring(L, BUILTIN_MOD_NAME ":");
+	std::string modname;
+	if (getScriptApiBase(L)->getType() == ScriptingType::Client) {
+		modname = BUILTIN_MOD_NAME;
+	} else if (getScriptApiBase(L)->getType() == ScriptingType::SSCSM) {
+		// get_builtin_path() is only called in builtin, so this is fine
+		modname = ScriptApiBase::getCurrentModNameInsecure(L);
+		if (modname != "*client_builtin*" && modname != "*server_builtin*")
+			modname = "";
+	}
+
+	if (modname.empty())
+		return 0;
+
+	lua_pushstring(L, (modname + ":").c_str());
 	return 1;
 }
 
@@ -347,8 +323,6 @@ void ModApiClient::Initialize(lua_State *L, int top)
 	API_FCT(send_chat_message);
 	API_FCT(clear_out_chat_queue);
 	API_FCT(get_player_names);
-	API_FCT(show_formspec);
-	API_FCT(send_respawn);
 	API_FCT(gettext);
 	API_FCT(get_node_or_nil);
 	API_FCT(disconnect);
@@ -360,4 +334,12 @@ void ModApiClient::Initialize(lua_State *L, int top)
 	API_FCT(get_builtin_path);
 	API_FCT(get_language);
 	API_FCT(get_csm_restrictions);
+}
+
+void ModApiClient::InitializeSSCSM(lua_State *L, int top)
+{
+	API_FCT(get_current_modname);
+	API_FCT(get_modpath);
+	API_FCT(print);
+	API_FCT(get_builtin_path);
 }

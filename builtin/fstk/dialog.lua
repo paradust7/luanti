@@ -1,19 +1,6 @@
---Minetest
---Copyright (C) 2014 sapier
---
---This program is free software; you can redistribute it and/or modify
---it under the terms of the GNU Lesser General Public License as published by
---the Free Software Foundation; either version 2.1 of the License, or
---(at your option) any later version.
---
---this program is distributed in the hope that it will be useful,
---but WITHOUT ANY WARRANTY; without even the implied warranty of
---MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
---GNU Lesser General Public License for more details.
---
---You should have received a copy of the GNU Lesser General Public License along
---with this program; if not, write to the Free Software Foundation, Inc.,
---51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+-- Luanti
+-- Copyright (C) 2014 sapier
+-- SPDX-License-Identifier: LGPL-2.1-or-later
 
 local function dialog_event_handler(self,event)
 	if self.user_eventhandler == nil or
@@ -78,15 +65,12 @@ function dialog_create(name,get_formspec,buttonhandler,eventhandler)
 	return self
 end
 
+-- "message" must already be formspec-escaped, e.g. via fgettext or
+-- core.formspec_escape.
 function messagebox(name, message)
 	return dialog_create(name,
 			function()
-				return ([[
-					formspec_version[3]
-					size[8,3]
-					textarea[0.375,0.375;7.25,1.2;;;%s]
-					button[3,1.825;2,0.8;ok;%s]
-				]]):format(message, fgettext("OK"))
+				return ui.get_message_formspec("", message, "ok")
 			end,
 			function(this, fields)
 				if fields.ok then

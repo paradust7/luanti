@@ -1,34 +1,18 @@
-/*
-Minetest
-Copyright (C) 2023 Vitaliy Lobachevskiy
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2023 Vitaliy Lobachevskiy
 
 #include "test.h"
 
-#include <algorithm>
-#include <numeric>
-
 #include "gamedef.h"
+#include "inventory.h" // ItemStack
 #include "dummygamedef.h"
 #include "client/content_mapblock.h"
 #include "client/mapblock_mesh.h"
 #include "client/meshgen/collector.h"
+#include "client/node_visuals.h"
+#include <memory>
 #include "mesh_compare.h"
-#include "util/directiontables.h"
 
 namespace {
 
@@ -42,19 +26,37 @@ public:
 		return const_cast<NodeDefManager *>(m_nodedef);
 	}
 
-	content_t registerNode(ItemDefinition itemdef, ContentFeatures nodedef) {
+	content_t registerNode(const ItemDefinition &itemdef, const ContentFeatures &nodedef,
+			std::unique_ptr<NodeVisuals> visuals) {
 		item_mgr()->registerItem(itemdef);
-		return node_mgr()->set(nodedef.name, nodedef);
+
+		NodeDefManager *mgr = node_mgr();
+		content_t id = mgr->set(nodedef.name, nodedef);
+
+		// mgr->set cannot add ContentFeatures that already contain visuals
+		// We set them manually instead of calling NodeVisuals::fillNodeVisuals
+		ContentFeatures &f = const_cast<ContentFeatures&>(mgr->get(id));
+		setNodeVisuals(f, std::move(visuals));
+
+		return id;
 	}
 
 	void finalize() {
 		node_mgr()->resolveCrossrefs();
+
+		// Need to fill node visuals for predefined nodes
+		node_mgr()->applyFunction([] (ContentFeatures &f) {
+			if (!f.visuals)
+				setNodeVisuals(f);
+		});
 	}
 
-	MeshMakeData makeSingleNodeMMD(bool smooth_lighting = true, bool for_shaders = true)
+	MeshMakeData makeSingleNodeMMD(bool smooth_lighting = true)
 	{
-		MeshMakeData data{ndef(), 1, for_shaders};
-		data.setSmoothLighting(smooth_lighting);
+		MeshMakeData data{ndef(), 1, MeshGrid{1}};
+		data.m_generate_minimap = false;
+		data.m_smooth_lighting = smooth_lighting;
+		data.m_enable_water_reflections = false;
 		data.m_blockpos = {0, 0, 0};
 		for (s16 x = -1; x <= 1; x++)
 		for (s16 y = -1; y <= 1; y++)
@@ -71,16 +73,17 @@ public:
 		itemdef.description = name;
 
 		ContentFeatures f;
+		auto visuals = constructNodeVisuals(&f);
 		f.name = itemdef.name;
 		f.drawtype = NDT_NORMAL;
-		f.solidness = 2;
+		visuals->solidness = 2;
 		f.alpha = ALPHAMODE_OPAQUE;
 		for (TileDef &tiledef : f.tiledef)
 			tiledef.name = name + ".png";
-		for (TileSpec &tile : f.tiles)
+		for (TileSpec &tile : visuals->tiles)
 			tile.layers[0].texture_id = texture;
 
-		return registerNode(itemdef, f);
+		return registerNode(itemdef, f, std::move(visuals));
 	}
 
 	content_t addLiquidSource(std::string name, u32 texture)
@@ -91,9 +94,10 @@ public:
 		itemdef.description = name;
 
 		ContentFeatures f;
+		auto visuals = constructNodeVisuals(&f);
 		f.name = itemdef.name;
 		f.drawtype = NDT_LIQUID;
-		f.solidness = 1;
+		visuals->solidness = 1;
 		f.alpha = ALPHAMODE_BLEND;
 		f.light_propagates = true;
 		f.param_type = CPT_LIGHT;
@@ -104,10 +108,10 @@ public:
 		f.liquid_alternative_flowing = "test:" + name + "_flowing";
 		for (TileDef &tiledef : f.tiledef)
 			tiledef.name = name + ".png";
-		for (TileSpec &tile : f.tiles)
+		for (TileSpec &tile : visuals->tiles)
 			tile.layers[0].texture_id = texture;
 
-		return registerNode(itemdef, f);
+		return registerNode(itemdef, f, std::move(visuals));
 	}
 
 	content_t addLiquidFlowing(std::string name, u32 texture_top, u32 texture_side)
@@ -118,9 +122,10 @@ public:
 		itemdef.description = name;
 
 		ContentFeatures f;
+		auto visuals = constructNodeVisuals(&f);
 		f.name = itemdef.name;
 		f.drawtype = NDT_FLOWINGLIQUID;
-		f.solidness = 0;
+		visuals->solidness = 0;
 		f.alpha = ALPHAMODE_BLEND;
 		f.light_propagates = true;
 		f.param_type = CPT_LIGHT;
@@ -131,10 +136,10 @@ public:
 		f.liquid_alternative_flowing = "test:" + name + "_flowing";
 		f.tiledef_special[0].name = name + "_top.png";
 		f.tiledef_special[1].name = name + "_side.png";
-		f.special_tiles[0].layers[0].texture_id = texture_top;
-		f.special_tiles[1].layers[0].texture_id = texture_side;
+		visuals->special_tiles[0].layers[0].texture_id = texture_top;
+		visuals->special_tiles[1].layers[0].texture_id = texture_side;
 
-		return registerNode(itemdef, f);
+		return registerNode(itemdef, f, std::move(visuals));
 	}
 };
 
@@ -190,7 +195,7 @@ void TestMapblockMeshGenerator::testSimpleNode()
 	data.m_vmanip.setNode({0, 0, 0}, {stone, 0, 0});
 
 	MeshCollector col{{}};
-	MapblockMeshGenerator mg{&data, &col, nullptr};
+	MapblockMeshGenerator mg{&data, &col};
 	mg.generate();
 	UASSERTEQ(std::size_t, col.prebuffers[0].size(), 1);
 	UASSERTEQ(std::size_t, col.prebuffers[1].size(), 0);
@@ -212,7 +217,7 @@ void TestMapblockMeshGenerator::testSurroundedNode()
 	data.m_vmanip.setNode({1, 0, 0}, {wood, 0, 0});
 
 	MeshCollector col{{}};
-	MapblockMeshGenerator mg{&data, &col, nullptr};
+	MapblockMeshGenerator mg{&data, &col};
 	mg.generate();
 	UASSERTEQ(std::size_t, col.prebuffers[0].size(), 1);
 	UASSERTEQ(std::size_t, col.prebuffers[1].size(), 0);
@@ -233,7 +238,7 @@ void TestMapblockMeshGenerator::testInterliquidSame()
 	data.m_vmanip.setNode({1, 0, 0}, {water, 0, 0});
 
 	MeshCollector col{{}};
-	MapblockMeshGenerator mg{&data, &col, nullptr};
+	MapblockMeshGenerator mg{&data, &col};
 	mg.generate();
 	UASSERTEQ(std::size_t, col.prebuffers[0].size(), 1);
 	UASSERTEQ(std::size_t, col.prebuffers[1].size(), 0);
@@ -255,7 +260,7 @@ void TestMapblockMeshGenerator::testInterliquidDifferent()
 	data.m_vmanip.setNode({0, 0, 1}, {lava, 0, 0});
 
 	MeshCollector col{{}};
-	MapblockMeshGenerator mg{&data, &col, nullptr};
+	MapblockMeshGenerator mg{&data, &col};
 	mg.generate();
 	UASSERTEQ(std::size_t, col.prebuffers[0].size(), 1);
 	UASSERTEQ(std::size_t, col.prebuffers[1].size(), 0);

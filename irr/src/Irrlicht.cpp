@@ -5,17 +5,9 @@
 static const char *const copyright = "Irrlicht Engine (c) 2002-2017 Nikolaus Gebhardt"; // put string in binary
 
 #include "irrlicht.h"
-#ifdef _IRR_COMPILE_WITH_WINDOWS_DEVICE_
-#include "CIrrDeviceWin32.h"
-#endif
-
-#ifdef _IRR_COMPILE_WITH_X11_DEVICE_
-#include "CIrrDeviceLinux.h"
-#endif
-
-#ifdef _IRR_COMPILE_WITH_OSX_DEVICE_
-#include "CIrrDeviceOSX.h"
-#endif
+#include "matrix4.h"
+#include "SMaterial.h"
+#include "os.h"
 
 #ifdef _IRR_COMPILE_WITH_SDL_DEVICE_
 #include "CIrrDeviceSDL.h"
@@ -25,47 +17,11 @@ static const char *const copyright = "Irrlicht Engine (c) 2002-2017 Nikolaus Geb
 #include "CIrrDeviceXR.h"
 #endif
 
-namespace irr
-{
-//! stub for calling createDeviceEx
-IRRLICHT_API IrrlichtDevice *IRRCALLCONV createDevice(video::E_DRIVER_TYPE driverType,
-		const core::dimension2d<u32> &windowSize,
-		u32 bits, bool fullscreen,
-		bool stencilbuffer, bool vsync, IEventReceiver *res)
+extern "C" IrrlichtDevice *createDeviceEx(const SIrrlichtCreationParameters &params)
 {
 	(void)copyright; // prevent unused variable warning
 
-	SIrrlichtCreationParameters p;
-	p.DriverType = driverType;
-	p.WindowSize = windowSize;
-	p.Bits = (u8)bits;
-	p.Fullscreen = fullscreen;
-	p.Stencilbuffer = stencilbuffer;
-	p.Vsync = vsync;
-	p.EventReceiver = res;
-
-	return createDeviceEx(p);
-}
-
-extern "C" IRRLICHT_API IrrlichtDevice *IRRCALLCONV createDeviceEx(const SIrrlichtCreationParameters &params)
-{
-
 	IrrlichtDevice *dev = 0;
-
-#ifdef _IRR_COMPILE_WITH_WINDOWS_DEVICE_
-	if (params.DeviceType == EIDT_WIN32 || (!dev && params.DeviceType == EIDT_BEST))
-		dev = new CIrrDeviceWin32(params);
-#endif
-
-#ifdef _IRR_COMPILE_WITH_OSX_DEVICE_
-	if (params.DeviceType == EIDT_OSX || (!dev && params.DeviceType == EIDT_BEST))
-		dev = new CIrrDeviceMacOSX(params);
-#endif
-
-#ifdef _IRR_COMPILE_WITH_X11_DEVICE_
-	if (params.DeviceType == EIDT_X11 || (!dev && params.DeviceType == EIDT_BEST))
-		dev = new CIrrDeviceLinux(params);
-#endif
 
 #ifdef _IRR_COMPILE_WITH_SDL_DEVICE_
 	if (params.DeviceType == EIDT_SDL || (!dev && params.DeviceType == EIDT_BEST))
@@ -87,6 +43,23 @@ extern "C" IRRLICHT_API IrrlichtDevice *IRRCALLCONV createDeviceEx(const SIrrlic
 	return dev;
 }
 
+extern "C" void showErrorMessageBox(IrrlichtDevice *dev,
+	const char *title, const char *message)
+{
+	title = title ? title : "Irrlicht";
+	bool ok = false;
+#ifdef _IRR_COMPILE_WITH_SDL_DEVICE_
+	if (dev && dev->getType() == EIDT_SDL) {
+		ok = static_cast<CIrrDeviceSDL*>(dev)->showErrorMessageBox(title, message);
+	} else {
+		ok = CIrrDeviceSDL::showErrorMessageBox(nullptr, title, message);
+	}
+#endif
+	if (!ok) {
+		os::Printer::log(title, message, ELL_ERROR);
+	}
+}
+
 namespace core
 {
 const matrix4 IdentityMatrix(matrix4::EM4CONST_IDENTITY);
@@ -94,9 +67,9 @@ const matrix4 IdentityMatrix(matrix4::EM4CONST_IDENTITY);
 
 namespace video
 {
-SMaterial IdentityMaterial;
+const SMaterial IdentityMaterial;
 
-extern "C" IRRLICHT_API bool IRRCALLCONV isDriverSupported(E_DRIVER_TYPE driver)
+extern "C" bool isDriverSupported(E_DRIVER_TYPE driver)
 {
 	switch (driver) {
 	case EDT_NULL:
@@ -107,10 +80,6 @@ extern "C" IRRLICHT_API bool IRRCALLCONV isDriverSupported(E_DRIVER_TYPE driver)
 #endif
 #ifdef _IRR_COMPILE_WITH_OPENGL_
 	case EDT_OPENGL:
-		return true;
-#endif
-#ifdef _IRR_COMPILE_WITH_OGLES1_
-	case EDT_OGLES1:
 		return true;
 #endif
 #ifdef _IRR_COMPILE_WITH_OGLES2_
@@ -126,5 +95,3 @@ extern "C" IRRLICHT_API bool IRRCALLCONV isDriverSupported(E_DRIVER_TYPE driver)
 	}
 }
 }
-
-} // end namespace irr

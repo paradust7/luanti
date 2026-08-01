@@ -8,8 +8,6 @@
 
 #include "os.h"
 
-namespace irr
-{
 namespace io
 {
 
@@ -18,10 +16,6 @@ static const io::path emptyFileListEntry;
 CFileList::CFileList(const io::path &path, bool ignoreCase, bool ignorePaths) :
 		IgnorePaths(ignorePaths), IgnoreCase(ignoreCase), Path(path)
 {
-#ifdef _DEBUG
-	setDebugName("CFileList");
-#endif
-
 	Path.replace('\\', '/');
 }
 
@@ -80,7 +74,7 @@ u32 CFileList::addItem(const io::path &fullPath, u32 offset, u32 size, bool isDi
 
 	entry.FullName = entry.Name;
 
-	core::deletePathFromFilename(entry.Name);
+	entry.Name = core::deletePathFromFilename(entry.Name);
 
 	if (IgnorePaths)
 		entry.FullName = entry.Name;
@@ -140,7 +134,7 @@ s32 CFileList::findFile(const io::path &filename, bool isDirectory = false) cons
 		entry.FullName.make_lower();
 
 	if (IgnorePaths)
-		core::deletePathFromFilename(entry.FullName);
+		entry.FullName = core::deletePathFromFilename(entry.FullName);
 
 	return Files.binary_search(entry);
 }
@@ -151,5 +145,4 @@ const io::path &CFileList::getPath() const
 	return Path;
 }
 
-} // end namespace irr
 } // end namespace io

@@ -1,29 +1,18 @@
-/*
-Minetest
-Copyright (C) 2013-22 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013-22 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "mod_configuration.h"
 #include "log.h"
 #include "settings.h"
+#include "subgames.h"
 #include "filesys.h"
 #include "gettext.h"
 #include "exceptions.h"
-
+#include "util/numeric.h"
+#include <list>
+#include <optional>
+#include <algorithm>
 
 std::string ModConfiguration::getUnsatisfiedModsError() const
 {
@@ -31,7 +20,8 @@ std::string ModConfiguration::getUnsatisfiedModsError() const
 	error << gettext("Some mods have unsatisfied dependencies:") << std::endl;
 
 	for (const ModSpec &mod : m_unsatisfied_mods) {
-		//~ Error when a mod is missing dependencies. Ex: "Mod Title is missing: mod1, mod2, mod3"
+		/* TRANSLATORS: Error when a mod is missing dependencies.
+		Example: "Mod Title is missing: mod1, mod2, mod3" */
 		error << " - " << fmtgettext("%s is missing:", mod.name.c_str());
 		for (const std::string &unsatisfied_depend : mod.unsatisfied_depends)
 			error << " " << unsatisfied_depend;
@@ -47,6 +37,8 @@ std::string ModConfiguration::getUnsatisfiedModsError() const
 
 void ModConfiguration::addModsInPath(const std::string &path, const std::string &virtual_path)
 {
+	verbosestream << "Adding mods from path " << path << " virtual=\""
+		<< virtual_path << "\"" << std::endl;
 	addMods(flattenMods(getModsInPath(path, virtual_path)));
 }
 
@@ -60,7 +52,7 @@ void ModConfiguration::addMods(const std::vector<ModSpec> &new_mods)
 	}
 
 	// Add new mods
-	for (int want_from_modpack = 1; want_from_modpack >= 0; --want_from_modpack) {
+	for (bool want_from_modpack : {true, false}) {
 		// First iteration:
 		// Add all the mods that come from modpacks
 		// Second iteration:
@@ -69,8 +61,11 @@ void ModConfiguration::addMods(const std::vector<ModSpec> &new_mods)
 		std::set<std::string> seen_this_iteration;
 
 		for (const ModSpec &mod : new_mods) {
-			if (mod.part_of_modpack != (bool)want_from_modpack)
+			if ((mod.modpack_depth > 0) != want_from_modpack)
 				continue;
+
+			// unrelated to this code, but we want to assert it somewhere
+			assert(fs::IsPathAbsolute(mod.path));
 
 			if (existing_mods.count(mod.name) == 0) {
 				// GOOD CASE: completely new mod.
@@ -115,6 +110,9 @@ void ModConfiguration::addGameMods(const SubgameSpec &gamespec)
 	std::string game_virtual_path;
 	game_virtual_path.append("games/").append(gamespec.id).append("/mods");
 	addModsInPath(gamespec.gamemods_path, game_virtual_path);
+
+	m_first_mod = gamespec.first_mod;
+	m_last_mod = gamespec.last_mod;
 }
 
 void ModConfiguration::addModsFromConfig(
@@ -147,8 +145,6 @@ void ModConfiguration::addModsFromConfig(
 	 *
 	 * Alternative candidates for a modname are stored in `candidates`,
 	 * and used in an error message later.
-	 *
-	 * If not enabled, add `load_mod_modname = false` to world.mt
 	 */
 	for (const auto &modPath : modPaths) {
 		std::vector<ModSpec> addon_mods_in_path = flattenMods(getModsInPath(modPath.second, modPath.first));
@@ -161,7 +157,7 @@ void ModConfiguration::addModsFromConfig(
 					candidates[pair->first].emplace_back(mod.virtual_path);
 				}
 			} else {
-				conf.setBool("load_mod_" + mod.name, false);
+				conf.remove("load_mod_" + mod.name);
 			}
 		}
 	}
@@ -220,31 +216,77 @@ void ModConfiguration::checkConflictsAndDeps()
 
 void ModConfiguration::resolveDependencies()
 {
-	// Step 1: Compile a list of the mod names we're working with
+	// Compile a list of the mod names we're working with
 	std::set<std::string> modnames;
-	for (const ModSpec &mod : m_unsatisfied_mods) {
-		modnames.insert(mod.name);
+	std::optional<ModSpec> first_mod_spec, last_mod_spec;
+	for (ModSpec &mod : m_unsatisfied_mods) {
+		if (mod.name == m_first_mod) {
+			first_mod_spec = mod;
+		} else if (mod.name == m_last_mod) {
+			last_mod_spec = mod;
+		} else {
+			modnames.insert(mod.name);
+		}
 	}
 
-	// Step 2: get dependencies (including optional dependencies)
+	// Optionally shuffle unsatisfied mods so non declared depends get found by their devs
+	if (g_settings->getBool("random_mod_load_order")) {
+		MyRandGenerator rg;
+		std::shuffle(m_unsatisfied_mods.begin(),
+			m_unsatisfied_mods.end(),
+			rg
+		);
+	}
+
+	// Check for presence of first and last mod
+	if (!m_first_mod.empty() && !first_mod_spec.has_value())
+		throw ModError("The mod specified as first by the game was not found.");
+	if (!m_last_mod.empty() && !last_mod_spec.has_value())
+		throw ModError("The mod specified as last by the game was not found.");
+
+	// Check and add first mod
+	if (first_mod_spec.has_value()) {
+		// Dependencies are not allowed for first mod
+		if (!first_mod_spec->depends.empty() || !first_mod_spec->optdepends.empty())
+			throw ModError("Mod specified by first_mod cannot have dependencies");
+
+		m_sorted_mods.push_back(*first_mod_spec);
+	}
+
+	// Get dependencies (including optional dependencies)
 	// of each mod, split mods into satisfied and unsatisfied
 	std::vector<ModSpec> satisfied;
 	std::list<ModSpec> unsatisfied;
 	for (ModSpec mod : m_unsatisfied_mods) {
+		if (mod.name == m_first_mod || mod.name == m_last_mod)
+			continue; // skip, handled separately
+
 		mod.unsatisfied_depends = mod.depends;
 		// check which optional dependencies actually exist
 		for (const std::string &optdep : mod.optdepends) {
 			if (modnames.count(optdep) != 0)
 				mod.unsatisfied_depends.insert(optdep);
 		}
+		mod.unsatisfied_depends.erase(m_first_mod); // first is already satisfied
+
+		if (last_mod_spec.has_value() && mod.unsatisfied_depends.count(last_mod_spec->name) != 0) {
+			throw ModError("Impossible to depend on the mod specified by last_mod");
+		}
 		// if a mod has no depends it is initially satisfied
-		if (mod.unsatisfied_depends.empty())
+		if (mod.unsatisfied_depends.empty()) {
 			satisfied.push_back(mod);
-		else
+		} else {
 			unsatisfied.push_back(mod);
+		}
 	}
 
-	// Step 3: mods without unmet dependencies can be appended to
+	// All dependencies of the last mod are initially unsatisfied
+	if (last_mod_spec.has_value()) {
+		last_mod_spec->unsatisfied_depends = last_mod_spec->depends;
+		last_mod_spec->unsatisfied_depends.erase(m_first_mod);
+	}
+
+	// Mods without unmet dependencies can be appended to
 	// the sorted list.
 	while (!satisfied.empty()) {
 		ModSpec mod = satisfied.back();
@@ -260,8 +302,18 @@ void ModConfiguration::resolveDependencies()
 				++it;
 			}
 		}
+		if (last_mod_spec.has_value())
+			last_mod_spec->unsatisfied_depends.erase(mod.name);
 	}
 
-	// Step 4: write back list of unsatisfied mods
+	// Write back list of unsatisfied mods
 	m_unsatisfied_mods.assign(unsatisfied.begin(), unsatisfied.end());
+
+	// Check and add last mod
+	if (last_mod_spec.has_value()) {
+		if (last_mod_spec->unsatisfied_depends.empty())
+			m_sorted_mods.push_back(*last_mod_spec);
+		else
+			m_unsatisfied_mods.push_back(*last_mod_spec);
+	}
 }

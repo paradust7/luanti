@@ -13,8 +13,6 @@
 #include "CGUIListBox.h"
 #include "os.h"
 
-namespace irr
-{
 namespace gui
 {
 
@@ -26,10 +24,6 @@ CGUIComboBox::CGUIComboBox(IGUIEnvironment *environment, IGUIElement *parent,
 		Selected(-1), HAlign(EGUIA_UPPERLEFT), VAlign(EGUIA_CENTER), MaxSelectionRows(5), HasFocus(false),
 		ActiveFont(nullptr)
 {
-#ifdef _DEBUG
-	setDebugName("CGUIComboBox");
-#endif
-
 	IGUISkin *skin = Environment->getSkin();
 
 	ListButton = Environment->addButton(core::recti(0, 0, 1, 1), this, -1, L"");
@@ -241,10 +235,10 @@ bool CGUIComboBox::OnEvent(const SEvent &event)
 			switch (event.GUIEvent.EventType) {
 			case EGET_ELEMENT_FOCUS_LOST:
 				if (ListBox &&
-						(Environment->hasFocus(ListBox) || ListBox->isMyChild(event.GUIEvent.Caller)) &&
+						(Environment->hasFocus(ListBox) || ListBox->isMyDescendant(event.GUIEvent.Caller)) &&
 						event.GUIEvent.Element != this &&
-						!isMyChild(event.GUIEvent.Element) &&
-						!ListBox->isMyChild(event.GUIEvent.Element)) {
+						!isMyDescendant(event.GUIEvent.Element) &&
+						!ListBox->isMyDescendant(event.GUIEvent.Element)) {
 					openCloseMenu();
 				}
 				break;
@@ -375,7 +369,7 @@ void CGUIComboBox::draw()
 
 	IGUIElement *currentFocus = Environment->getFocus();
 	if (currentFocus != LastFocus) {
-		HasFocus = currentFocus == this || isMyChild(currentFocus);
+		HasFocus = currentFocus == this || isMyDescendant(currentFocus);
 		LastFocus = currentFocus;
 	}
 
@@ -460,4 +454,3 @@ void CGUIComboBox::openCloseMenu()
 }
 
 } // end namespace gui
-} // end namespace irr

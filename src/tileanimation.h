@@ -1,21 +1,6 @@
-/*
-Minetest
-Copyright (C) 2016 sfan5 <sfan5@live.de>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2016 sfan5 <sfan5@live.de>
 
 #pragma once
 
@@ -52,8 +37,14 @@ struct TileAnimationParams
 
 	void serialize(std::ostream &os, u16 protocol_ver) const;
 	void deSerialize(std::istream &is, u16 protocol_ver);
+
 	void determineParams(v2u32 texture_size, int *frame_count, int *frame_length_ms,
 			v2u32 *frame_size) const;
 	void getTextureModifer(std::ostream &os, v2u32 texture_size, int frame) const;
 	v2f getTextureCoords(v2u32 texture_size, int frame) const;
+
+	// Modifies the texture name such that it only contains the first frame
+	// If the texture_size is know (client code), getTextureModifer should be used instead
+	// This function only exists for compatibility with old clients
+	void extractFirstFrame(std::string &name) const;
 };

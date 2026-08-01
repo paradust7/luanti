@@ -1,19 +1,6 @@
---Minetest
---Copyright (C) 2014 sapier
---
---This program is free software; you can redistribute it and/or modify
---it under the terms of the GNU Lesser General Public License as published by
---the Free Software Foundation; either version 2.1 of the License, or
---(at your option) any later version.
---
---This program is distributed in the hope that it will be useful,
---but WITHOUT ANY WARRANTY; without even the implied warranty of
---MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
---GNU Lesser General Public License for more details.
---
---You should have received a copy of the GNU Lesser General Public License along
---with this program; if not, write to the Free Software Foundation, Inc.,
---51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+-- Luanti
+-- Copyright (C) 2014 sapier
+-- SPDX-License-Identifier: LGPL-2.1-or-later
 
 local function table_to_flags(ftable)
 	-- Convert e.g. { jungles = true, caves = false } to "jungles,nocaves"
@@ -109,6 +96,8 @@ local function create_world_formspec(dialogdata)
 	if game ~= nil then
 		local gameconfig = Settings(game.path.."/game.conf")
 
+		current_mg = current_mg or gameconfig:get("default_mapgen") or core.settings:get("mg_name")
+
 		local allowed_mapgens = (gameconfig:get("allowed_mapgens") or ""):split()
 		for key, value in pairs(allowed_mapgens) do
 			allowed_mapgens[key] = value:trim()
@@ -183,6 +172,7 @@ local function create_world_formspec(dialogdata)
 			fgettext("Dungeons") .. ";"..strflag(flags.main, "dungeons").."]"
 		y = y + 0.5
 
+		-- TRANSLATORS: Map generator decorations (used for structures, trees, plants, and more)
 		local d_name = fgettext("Decorations")
 		local d_tt
 		if mapgen == "v6" then
@@ -255,6 +245,7 @@ local function create_world_formspec(dialogdata)
 		-- biomeblend
 		y = y + 0.55
 		form = form .. "checkbox[0,"..y..";flag_v6_biomeblend;" ..
+			-- TRANSLATORS: Smooth transition between biomes
 			fgettext("Biome blending") .. ";"..strflag(flags.v6, "biomeblend").."]" ..
 			"tooltip[flag_v6_biomeblend;" ..
 			fgettext("Smooth transition between biomes") .. "]"
@@ -293,6 +284,7 @@ local function create_world_formspec(dialogdata)
 	if not disallowed_mapgen_settings["seed"] then
 
 		retval = retval .. "field[0.3,1.7;6,0.5;te_seed;" ..
+				-- TRANSLATORS: Value for randomness
 				fgettext("Seed") ..
 				";".. core.formspec_escape(dialogdata.seed) .. "]"
 
@@ -469,7 +461,6 @@ function create_create_world_dlg()
 		worldname = "",
 		-- settings the world is created with:
 		seed = core.settings:get("fixed_map_seed") or "",
-		mg = core.settings:get("mg_name"),
 		flags = {
 			main = core.settings:get_flags("mg_flags"),
 			v5 = core.settings:get_flags("mgv5_spflags"),

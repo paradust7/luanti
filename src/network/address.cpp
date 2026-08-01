@@ -1,38 +1,14 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "address.h"
 
-#include <cstdio>
 #include <iostream>
-#include <cstdlib>
 #include <cstring>
 #include <cerrno>
-#include <sstream>
-#include <iomanip>
 #include "network/networkexceptions.h"
-#include "util/string.h"
-#include "util/numeric.h"
-#include "constants.h"
-#include "debug.h"
 #include "settings.h"
-#include "log.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -161,8 +137,17 @@ void Address::Resolve(const char *name, Address *fallback)
 // IP address -> textual representation
 std::string Address::serializeString() const
 {
+	const void *src = nullptr;
+	switch (m_addr_family) {
+		case AF_INET:  src = &m_address.ipv4; break;
+		case AF_INET6: src = &m_address.ipv6; break;
+	}
+
+	if (!src)
+		return "<unhandled-addr-family>";
+
 	char str[INET6_ADDRSTRLEN];
-	if (inet_ntop(m_addr_family, (void*) &m_address, str, sizeof(str)) == nullptr)
+	if (inet_ntop(m_addr_family, src, str, sizeof(str)) == nullptr)
 		return "";
 	return str;
 }

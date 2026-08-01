@@ -1,49 +1,40 @@
-/*
-Minetest
-Copyright (C) 2013 sapier
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 sapier
 
 #include "guiEngine.h"
+#include "statusTextHelper.h"
 
 #include "client/fontengine.h"
 #include "client/guiscalingfilter.h"
 #include "client/renderingengine.h"
-#include "client/shader.h"
-#include "client/tile.h"
+#include "clientdynamicinfo.h"
 #include "config.h"
 #include "content/content.h"
 #include "content/mods.h"
 #include "filesys.h"
+#include "gettext.h"
 #include "guiMainMenu.h"
 #include "httpfetch.h"
 #include "irrlicht_changes/static_text.h"
 #include "log.h"
+#include "gettext.h"
 #include "porting.h"
 #include "scripting_mainmenu.h"
 #include "settings.h"
-#include "sound.h"
-#include "version.h"
 #include <ICameraSceneNode.h>
 #include <IGUIStaticText.h>
 #include "client/imagefilters.h"
+#include "util/screenshot.h"
+#include "util/tracy_wrapper.h"
+#include "script/common/c_types.h" // LuaError
 
 #if USE_SOUND
 	#include "client/sound/sound_openal.h"
 #endif
+
+#include <algorithm>
+#include <csignal>
 
 
 /******************************************************************************/
@@ -52,10 +43,11 @@ void TextDestGuiEngine::gotText(const StringMap &fields)
 	m_engine->getScriptIface()->handleMainMenuButtons(fields);
 }
 
-/******************************************************************************/
-void TextDestGuiEngine::gotText(const std::wstring &text)
+void TextDestGuiEngine::requestScreenshot()
 {
-	m_engine->getScriptIface()->handleMainMenuEvent(wide_to_utf8(text));
+	if (m_engine) {
+		m_engine->requestScreenshot();
+	}
 }
 
 /******************************************************************************/
@@ -76,7 +68,7 @@ MenuTextureSource::~MenuTextureSource()
 video::ITexture *MenuTextureSource::getTexture(const std::string &name, u32 *id)
 {
 	if (id)
-		*id = 0;
+		*id = 1;
 
 	if (name.empty())
 		return NULL;
@@ -86,11 +78,11 @@ video::ITexture *MenuTextureSource::getTexture(const std::string &name, u32 *id)
 	if (retval)
 		return retval;
 
+	verbosestream << "MenuTextureSource: loading " << name << std::endl;
 	video::IImage *image = m_driver->createImageFromFile(name.c_str());
 	if (!image)
 		return NULL;
 
-	image = Align2Npot2(image, m_driver);
 	retval = m_driver->addTexture(name.c_str(), image);
 	image->drop();
 
@@ -117,12 +109,13 @@ void MenuMusicFetcher::addThePaths(const std::string &name,
 /******************************************************************************/
 /** GUIEngine                                                                 */
 /******************************************************************************/
+
 GUIEngine::GUIEngine(JoystickController *joystick,
 		gui::IGUIElement *parent,
 		RenderingEngine *rendering_engine,
 		IMenuManager *menumgr,
 		MainMenuData *data,
-		bool &kill) :
+		volatile std::sig_atomic_t &kill) :
 	m_rendering_engine(rendering_engine),
 	m_parent(parent),
 	m_menumanager(menumgr),
@@ -130,6 +123,10 @@ GUIEngine::GUIEngine(JoystickController *joystick,
 	m_data(data),
 	m_kill(kill)
 {
+	// Go back to our mainmenu fonts
+	// Delayed until mainmenu initialization because of #15883
+	g_fontengine->clearMediaFonts();
+
 	// initialize texture pointers
 	for (image_definition &texture : m_textures) {
 		texture.texture = NULL;
@@ -141,13 +138,9 @@ GUIEngine::GUIEngine(JoystickController *joystick,
 	// create texture source
 	m_texture_source = std::make_unique<MenuTextureSource>(rendering_engine->get_video_driver());
 
-	// create shader source
-	// (currently only used by clouds)
-	m_shader_source.reset(createShaderSource());
-
 	// create soundmanager
 #if USE_SOUND
-	if (g_settings->getBool("enable_sound") && g_sound_manager_singleton.get()) {
+	if (g_sound_manager_singleton.get()) {
 		m_sound_manager = createOpenALSoundManager(g_sound_manager_singleton.get(),
 				std::make_unique<MenuMusicFetcher>());
 	}
@@ -184,45 +177,76 @@ GUIEngine::GUIEngine(JoystickController *joystick,
 			"",
 			false);
 
-	m_menu->allowClose(false);
+	m_menu->defaultAllowClose(false);
 	m_menu->lockSize(true,v2u32(800,600));
 
+	// Status message for main menu notifications
+	m_status_text = std::make_unique<StatusTextHelper>(
+		rendering_engine->get_gui_env(), m_parent);
+	m_status_text->setMainMenuStyle();
+
+	g_settings->registerChangedCallback("fullscreen", fullscreenChangedCallback, this);
+
+	const auto &report_fatal_error = [&] () {
+		// Throwing an exception from here would make cleanup messy since
+		// ~GUIEngine() won't be called, so we do the error reporting like this:
+		auto err = strgettext("Failed to load main menu script!");
+		RenderingEngine::showErrorMessageBox(err);
+		m_kill = 1; // break game-menu loop
+		m_data->script_data.errormessage = err;
+	};
+
+
 	// Initialize scripting
-
 	infostream << "GUIEngine: Initializing Lua" << std::endl;
-
-	m_script = std::make_unique<MainMenuScripting>(this);
+	try {
+		m_script = std::make_unique<MainMenuScripting>(this);
+	} catch (ModError &e) {
+		errorstream << e.what() << std::endl;
+		report_fatal_error();
+		return;
+	}
 
 	try {
 		m_script->setMainMenuData(&m_data->script_data);
 		m_data->script_data.errormessage.clear();
 
 		if (!loadMainMenuScript()) {
-			errorstream << "No future without main menu!" << std::endl;
-			abort();
+			report_fatal_error();
+			return;
 		}
 
 		run();
-	} catch (LuaError &e) {
+	} catch (ModError &e) {
 		errorstream << "Main menu error: " << e.what() << std::endl;
 		m_data->script_data.errormessage = e.what();
 	}
-
-	m_menu->quitMenu();
-	m_menu.reset();
 }
 
 
 /******************************************************************************/
-std::string findLocaleFileInMods(const std::string &path, const std::string &filename)
+std::string findLocaleFileWithExtension(const std::string &path)
 {
-	std::vector<ModSpec> mods = flattenMods(getModsInPath(path, "root", true));
+	if (fs::PathExists(path + ".mo"))
+		return path + ".mo";
+	if (fs::PathExists(path + ".po"))
+		return path + ".po";
+	if (fs::PathExists(path + ".tr"))
+		return path + ".tr";
+	return "";
+}
+
+
+/******************************************************************************/
+std::string findLocaleFileInMods(const std::string &path, const std::string &filename_no_ext)
+{
+	std::vector<ModSpec> mods = flattenMods(getModsInPath(path, "root", 0));
 
 	for (const auto &mod : mods) {
-		std::string ret = mod.path + DIR_DELIM "locale" DIR_DELIM + filename;
-		if (fs::PathExists(ret)) {
+		std::string ret = findLocaleFileWithExtension(
+				mod.path + DIR_DELIM "locale" DIR_DELIM + filename_no_ext);
+		if (!ret.empty())
 			return ret;
-		}
 	}
 
 	return "";
@@ -235,19 +259,26 @@ Translations *GUIEngine::getContentTranslations(const std::string &path,
 	if (domain.empty() || lang_code.empty())
 		return nullptr;
 
-	std::string filename = domain + "." + lang_code + ".tr";
-	std::string key = path + DIR_DELIM "locale" DIR_DELIM + filename;
+	std::string filename_no_ext = domain + "." + lang_code;
+	std::string key = path + DIR_DELIM "locale" DIR_DELIM + filename_no_ext;
 
 	if (key == m_last_translations_key)
 		return &m_last_translations;
 
 	std::string trans_path = key;
-	ContentType type = getContentType(path);
-	if (type == ContentType::GAME)
-		trans_path = findLocaleFileInMods(path + DIR_DELIM "mods" DIR_DELIM, filename);
-	else if (type == ContentType::MODPACK)
-		trans_path = findLocaleFileInMods(path, filename);
-	// We don't need to search for locale files in a mod, as there's only one `locale` folder.
+
+	switch (getContentType(path)) {
+	case ContentType::GAME:
+		trans_path = findLocaleFileInMods(path + DIR_DELIM "mods" DIR_DELIM,
+				filename_no_ext);
+		break;
+	case ContentType::MODPACK:
+		trans_path = findLocaleFileInMods(path, filename_no_ext);
+		break;
+	default:
+		trans_path = findLocaleFileWithExtension(trans_path);
+		break;
+	}
 
 	if (trans_path.empty())
 		return nullptr;
@@ -257,7 +288,7 @@ Translations *GUIEngine::getContentTranslations(const std::string &path,
 
 	std::string data;
 	if (fs::ReadFile(trans_path, data)) {
-		m_last_translations.loadTranslation(data);
+		m_last_translations.loadTranslation(fs::GetFilenameFromPath(trans_path.c_str()), data);
 	}
 
 	return &m_last_translations;
@@ -293,42 +324,29 @@ void GUIEngine::run()
 	IrrlichtDevice *device = m_rendering_engine->get_raw_device();
 	video::IVideoDriver *driver = device->getVideoDriver();
 
-	// Always create clouds because they may or may not be
-	// needed based on the game selected
-	cloudInit();
-
 	unsigned int text_height = g_fontengine->getTextHeight();
 
-	// Reset fog color
-	{
-		video::SColor fog_color;
-		video::E_FOG_TYPE fog_type = video::EFT_FOG_LINEAR;
-		f32 fog_start = 0;
-		f32 fog_end = 0;
-		f32 fog_density = 0;
-		bool fog_pixelfog = false;
-		bool fog_rangefog = false;
-		driver->getFog(fog_color, fog_type, fog_start, fog_end, fog_density,
-				fog_pixelfog, fog_rangefog);
-
-		driver->setFog(RenderingEngine::MENU_SKY_COLOR, fog_type, fog_start,
-				fog_end, fog_density, fog_pixelfog, fog_rangefog);
-	}
-
-	const irr::core::dimension2d<u32> initial_screen_size(
+	const core::dimension2d<u32> initial_screen_size(
 			g_settings->getU16("screen_w"),
 			g_settings->getU16("screen_h")
 		);
-	const bool initial_window_maximized = g_settings->getBool("window_maximized");
+	const bool initial_window_maximized = !g_settings->getBool("fullscreen") &&
+			g_settings->getBool("window_maximized");
+	auto last_window_info = ClientDynamicInfo::getCurrent();
 
 	FpsControl fps_control;
 	f32 dtime = 0.0f;
 
 	fps_control.reset();
 
-	while (m_rendering_engine->run() && !m_startgame && !m_kill) {
+	auto framemarker = FrameMarker("GUIEngine::run()-frame").started();
 
+	while (m_rendering_engine->run() && !m_startgame && !m_kill) {
+		framemarker.end();
 		fps_control.limit(device, &dtime);
+		framemarker.start();
+
+		g_fontengine->handleReload();
 
 		if (device->isWindowVisible()) {
 			// check if we need to update the "upper left corner"-text
@@ -336,8 +354,14 @@ void GUIEngine::run()
 				updateTopLeftTextSize();
 				text_height = g_fontengine->getTextHeight();
 			}
+			auto window_info = ClientDynamicInfo::getCurrent();
+			if (!window_info.equal(last_window_info)) {
+				m_script->handleMainMenuEvent("WindowInfoChange");
+				last_window_info = window_info;
+			}
 
-			driver->beginScene(true, true, RenderingEngine::MENU_SKY_COLOR);
+			driver->setFog(m_rendering_engine->m_menu_sky_color);
+			driver->beginScene(true, true, m_rendering_engine->m_menu_sky_color);
 
 			if (m_clouds_enabled) {
 				drawClouds(dtime);
@@ -356,6 +380,22 @@ void GUIEngine::run()
 			// the menu.
 			drawHeader(driver);
 
+			// Take screenshot if requested
+			// Must be before endScene() to capture the rendered frame
+			if (m_take_screenshot) {
+				m_take_screenshot = false;
+				std::string filename;
+				if (takeScreenshot(driver, filename)) {
+					std::string msg = fmtgettext("Saved screenshot to \"%s\"", filename.c_str());
+					m_status_text->showStatusText(utf8_to_wide(msg));
+				}
+			}
+
+			// Update status message
+			if (m_status_text) {
+				m_status_text->update(dtime);
+			}
+
 			driver->endScene();
 		}
 
@@ -368,6 +408,7 @@ void GUIEngine::run()
 		m_menu->getAndroidUIInput();
 #endif
 	}
+	framemarker.end();
 
 	m_script->beforeClose();
 
@@ -377,43 +418,39 @@ void GUIEngine::run()
 /******************************************************************************/
 GUIEngine::~GUIEngine()
 {
+	g_settings->deregisterAllChangedCallbacks(this);
+
 	// deinitialize script first. gc destructors might depend on other stuff
 	infostream << "GUIEngine: Deinitializing scripting" << std::endl;
 	m_script.reset();
 
+	if (m_menu) {
+		m_menu->quitMenu();
+		m_menu.reset();
+	}
+
 	m_sound_manager.reset();
 
 	m_irr_toplefttext->remove();
-
-	m_cloud.clouds.reset();
-
-	// delete textures
-	for (image_definition &texture : m_textures) {
-		if (texture.texture)
-			m_rendering_engine->get_video_driver()->removeTexture(texture.texture);
-	}
-}
-
-/******************************************************************************/
-void GUIEngine::cloudInit()
-{
-	m_shader_source->addShaderConstantSetterFactory(
-		new FogShaderConstantSetterFactory());
-
-	m_cloud.clouds = make_irr<Clouds>(m_smgr, m_shader_source.get(), -1, rand());
-	m_cloud.clouds->setHeight(100.0f);
-	m_cloud.clouds->update(v3f(0, 0, 0), video::SColor(255,240,240,255));
-
-	m_cloud.camera = m_smgr->addCameraSceneNode(0,
-				v3f(0,0,0), v3f(0, 60, 100));
-	m_cloud.camera->setFarValue(10000);
 }
 
 /******************************************************************************/
 void GUIEngine::drawClouds(float dtime)
 {
-	m_cloud.clouds->step(dtime*3);
-	m_smgr->drawAll();
+	g_menuclouds->update(v3f(0, 0, 0), m_rendering_engine->m_menu_clouds_color);
+	g_menuclouds->step(dtime * 3);
+	g_menucloudsmgr->drawAll();
+}
+
+/******************************************************************************/
+void GUIEngine::setMenuCloudsColor(video::SColor color)
+{
+	m_rendering_engine->m_menu_clouds_color = color;
+}
+
+void GUIEngine::setMenuSkyColor(video::SColor color)
+{
+	m_rendering_engine->m_menu_sky_color = color;
 }
 
 /******************************************************************************/
@@ -431,14 +468,8 @@ void GUIEngine::drawBackground(video::IVideoDriver *driver)
 	v2u32 screensize = driver->getScreenSize();
 
 	video::ITexture* texture = m_textures[TEX_LAYER_BACKGROUND].texture;
-
-	/* If no texture, draw background of solid color */
-	if(!texture){
-		video::SColor color(255,80,58,37);
-		core::rect<s32> rect(0, 0, screensize.X, screensize.Y);
-		driver->draw2DRectangle(color, rect, NULL);
+	if (!texture)
 		return;
-	}
 
 	v2u32 sourcesize = texture->getOriginalSize();
 
@@ -594,36 +625,25 @@ void GUIEngine::drawFooter(video::IVideoDriver *driver)
 bool GUIEngine::setTexture(texture_layer layer, const std::string &texturepath,
 		bool tile_image, unsigned int minsize)
 {
-	video::IVideoDriver *driver = m_rendering_engine->get_video_driver();
+	m_textures[layer].texture = nullptr;
 
-	if (m_textures[layer].texture) {
-		driver->removeTexture(m_textures[layer].texture);
-		m_textures[layer].texture = NULL;
-	}
-
-	if (texturepath.empty() || !fs::PathExists(texturepath)) {
+	if (texturepath.empty() || !fs::PathExists(texturepath))
 		return false;
-	}
 
-	m_textures[layer].texture = driver->getTexture(texturepath.c_str());
+	m_textures[layer].texture = m_texture_source->getTexture(texturepath);
 	m_textures[layer].tile    = tile_image;
 	m_textures[layer].minsize = minsize;
 
-	if (!m_textures[layer].texture) {
-		return false;
-	}
-
-	return true;
+	return m_textures[layer].texture != nullptr;
 }
 
 /******************************************************************************/
 bool GUIEngine::downloadFile(const std::string &url, const std::string &target)
 {
 #if USE_CURL
-	std::ofstream target_file(target.c_str(), std::ios::out | std::ios::binary);
-	if (!target_file.good()) {
+	auto target_file = open_ofstream(target.c_str(), true);
+	if (!target_file.good())
 		return false;
-	}
 
 	HTTPFetchRequest fetch_request;
 	HTTPFetchResult fetch_result;
@@ -635,7 +655,7 @@ bool GUIEngine::downloadFile(const std::string &url, const std::string &target)
 
 	if (!completed || !fetch_result.succeeded) {
 		target_file.close();
-		fs::DeleteSingleFileOrEmptyDirectory(target);
+		fs::DeleteSingleFileOrEmptyDirectory(target, true);
 		return false;
 	}
 	// TODO: directly stream the response data into the file instead of first
@@ -659,11 +679,21 @@ void GUIEngine::setTopleftText(const std::string &text)
 /******************************************************************************/
 void GUIEngine::updateTopLeftTextSize()
 {
-	core::rect<s32> rect(0, 0, g_fontengine->getTextWidth(m_toplefttext.c_str()),
-		g_fontengine->getTextHeight());
-	rect += v2s32(4, 0);
+	const auto &str = m_toplefttext.getString();
+	u32 lines = std::count(str.begin(), str.end(), L'\n') + 1;
+	core::rect<s32> rect(0, 0,
+		g_fontengine->getTextWidth(str.c_str()),
+		g_fontengine->getTextHeight() * lines
+	);
+	rect += v2s32(4, 4);
 
 	m_irr_toplefttext->remove();
 	m_irr_toplefttext = gui::StaticText::add(m_rendering_engine->get_gui_env(),
 			m_toplefttext, rect, false, true, 0, -1);
+}
+
+/******************************************************************************/
+void GUIEngine::fullscreenChangedCallback(const std::string &name, void *data)
+{
+	static_cast<GUIEngine*>(data)->getScriptIface()->handleMainMenuEvent("FullscreenChange");
 }

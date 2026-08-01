@@ -1,13 +1,13 @@
 -- Minimal test entities to test visuals
 
-minetest.register_entity("testentities:sprite", {
+core.register_entity("testentities:sprite", {
 	initial_properties = {
 		visual = "sprite",
 		textures = { "testentities_sprite.png" },
 	},
 })
 
-minetest.register_entity("testentities:upright_sprite", {
+core.register_entity("testentities:upright_sprite", {
 	initial_properties = {
 		visual = "upright_sprite",
 		textures = {
@@ -17,7 +17,7 @@ minetest.register_entity("testentities:upright_sprite", {
 	},
 })
 
-minetest.register_entity("testentities:cube", {
+core.register_entity("testentities:cube", {
 	initial_properties = {
 		visual = "cube",
 		textures = {
@@ -31,21 +31,21 @@ minetest.register_entity("testentities:cube", {
 	},
 })
 
-minetest.register_entity("testentities:item", {
+core.register_entity("testentities:item", {
 	initial_properties = {
 		visual = "item",
 		wield_item = "testnodes:normal",
 	},
 })
 
-minetest.register_entity("testentities:wielditem", {
+core.register_entity("testentities:wielditem", {
 	initial_properties = {
 		visual = "wielditem",
 		wield_item = "testnodes:normal",
 	},
 })
 
-minetest.register_entity("testentities:mesh", {
+core.register_entity("testentities:mesh", {
 	initial_properties = {
 		visual = "mesh",
 		mesh = "testnodes_pyramid.obj",
@@ -55,7 +55,7 @@ minetest.register_entity("testentities:mesh", {
 	},
 })
 
-minetest.register_entity("testentities:mesh_unshaded", {
+core.register_entity("testentities:mesh_unshaded", {
 	initial_properties = {
 		visual = "mesh",
 		mesh = "testnodes_pyramid.obj",
@@ -66,10 +66,81 @@ minetest.register_entity("testentities:mesh_unshaded", {
 	},
 })
 
+core.register_entity("testentities:node", {
+	initial_properties = {
+		visual = "node",
+		node = { name = "stairs:stair_stone" },
+	},
+})
+
+-- More complex meshes
+
+core.register_entity("testentities:sam", {
+	initial_properties = {
+		visual = "mesh",
+		mesh = "testentities_sam.b3d",
+		textures = {
+			"testentities_sam.png"
+		},
+	},
+	on_activate = function(self)
+		self.object:set_animation({x = 0, y = 219}, 30, 0, true)
+		self._timer = 0
+		self._grow_head = true
+		self:_animate_head()
+	end,
+	_head_anim_duration = 2,
+	_animate_head = function(self)
+		local s = self._grow_head and 2 or 1
+		self.object:set_bone_override("Head", {
+			scale = {
+				vec = vector.new(s, s, s),
+				absolute = false,
+				interpolation = self._head_anim_duration,
+			},
+		})
+	end,
+	on_step = function(self, dtime)
+		self._timer = self._timer + dtime
+		if self._timer >= self._head_anim_duration then
+			self._timer = 0
+			self._grow_head = not self._grow_head
+			self:_animate_head()
+		end
+	end,
+})
+
+core.register_entity("testentities:lava_flan", {
+	initial_properties = {
+		infotext = "Lava Flan (smoke test .x)",
+		visual = "mesh",
+		mesh = "testentities_lava_flan.x",
+		textures = {
+			"testentities_lava_flan.png"
+		},
+	},
+	on_activate = function(self)
+		self.object:set_animation({x = 0, y = 28}, 15, 0, true)
+	end,
+})
+
+core.register_entity("testentities:cool_guy", {
+	initial_properties = {
+		visual = "mesh",
+		mesh = "testentities_cool_guy.x",
+		textures = {
+			"testentities_cool_guy.png"
+		},
+	},
+	on_activate = function(self)
+		self.object:set_animation({x = 0, y = 29}, 30, 0, true)
+	end,
+})
+
 -- Advanced visual tests
 
 -- An entity for testing animated and yaw-modulated sprites
-minetest.register_entity("testentities:yawsprite", {
+core.register_entity("testentities:yawsprite", {
 	initial_properties = {
 		selectionbox = {-0.3, -0.5, -0.3, 0.3, 0.3, 0.3},
 		visual = "sprite",
@@ -84,7 +155,7 @@ minetest.register_entity("testentities:yawsprite", {
 })
 
 -- An entity for testing animated upright sprites
-minetest.register_entity("testentities:upright_animated", {
+core.register_entity("testentities:upright_animated", {
 	initial_properties = {
 		visual = "upright_sprite",
 		textures = {"testnodes_anim.png"},
@@ -95,7 +166,7 @@ minetest.register_entity("testentities:upright_animated", {
 	end,
 })
 
-minetest.register_entity("testentities:nametag", {
+core.register_entity("testentities:nametag", {
 	initial_properties = {
 		visual = "sprite",
 		textures = { "testentities_sprite.png" },
@@ -103,7 +174,7 @@ minetest.register_entity("testentities:nametag", {
 
 	on_activate = function(self, staticdata)
 		if staticdata ~= "" then
-			local data = minetest.deserialize(staticdata)
+			local data = core.deserialize(staticdata)
 			self.color = data.color
 			self.bgcolor = data.bgcolor
 		else
@@ -132,6 +203,6 @@ minetest.register_entity("testentities:nametag", {
 	end,
 
 	get_staticdata = function(self)
-		return minetest.serialize({ color = self.color, bgcolor = self.bgcolor })
+		return core.serialize({ color = self.color, bgcolor = self.bgcolor })
 	end,
 })

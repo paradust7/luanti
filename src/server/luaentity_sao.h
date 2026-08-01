@@ -1,26 +1,12 @@
-/*
-Minetest
-Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-Copyright (C) 2013-2020 Minetest core developers & community
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
+// Copyright (C) 2013-2020 Minetest core developers & community
 
 #pragma once
 
 #include "unit_sao.h"
+#include "util/guid.h"
 
 class LuaEntitySAO : public UnitSAO
 {
@@ -30,11 +16,7 @@ public:
 	LuaEntitySAO(ServerEnvironment *env, v3f pos, const std::string &data);
 	// Used by the Lua API
 	LuaEntitySAO(ServerEnvironment *env, v3f pos, const std::string &name,
-			const std::string &state) :
-			UnitSAO(env, pos),
-			m_init_name(name), m_init_state(state)
-	{
-	}
+			const std::string &state);
 	~LuaEntitySAO();
 
 	ActiveObjectType getType() const { return ACTIVEOBJECT_TYPE_LUAENTITY; }
@@ -47,7 +29,7 @@ public:
 	bool shouldUnload() const { return true; }
 	void getStaticData(std::string *result) const;
 
-	u32 punch(v3f dir, const ToolCapabilities *toolcap = nullptr,
+	u32 punch(v3f dir, const ToolCapabilities &toolcap,
 			ServerActiveObject *puncher = nullptr,
 			float time_from_last_punch = 1000000.0f,
 			u16 initial_wear = 0);
@@ -62,6 +44,7 @@ public:
 
 	void setHP(s32 hp, const PlayerHPChangeReason &reason);
 	u16 getHP() const;
+	std::string getGUID() const;
 
 	/* LuaEntitySAO-specific */
 	void setVelocity(v3f velocity);
@@ -81,8 +64,14 @@ public:
 
 protected:
 	void dispatchScriptDeactivate(bool removal);
-	virtual void onMarkedForDeactivation() { dispatchScriptDeactivate(false); }
-	virtual void onMarkedForRemoval() { dispatchScriptDeactivate(true); }
+	virtual void onMarkedForDeactivation() {
+		UnitSAO::onMarkedForDeactivation();
+		dispatchScriptDeactivate(false);
+	}
+	virtual void onMarkedForRemoval() {
+		UnitSAO::onMarkedForRemoval();
+		dispatchScriptDeactivate(true);
+	}
 
 private:
 	std::string getPropertyPacket();
@@ -94,6 +83,8 @@ private:
 	std::string m_init_name;
 	std::string m_init_state;
 	bool m_registered = false;
+
+	MyGUID m_guid;
 
 	v3f m_velocity;
 	v3f m_acceleration;

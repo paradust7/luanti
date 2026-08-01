@@ -4,8 +4,6 @@
 
 #include "CGUIImageList.h"
 
-namespace irr
-{
 namespace gui
 {
 
@@ -18,10 +16,6 @@ CGUIImageList::CGUIImageList(video::IVideoDriver *driver) :
 		ImagesPerRow(0),
 		UseAlphaChannel(false)
 {
-#ifdef _DEBUG
-	setDebugName("CGUIImageList");
-#endif
-
 	if (Driver) {
 		Driver->grab();
 	}
@@ -81,4 +75,3 @@ void CGUIImageList::draw(s32 index, const core::position2d<s32> &destPos,
 }
 
 } // end namespace gui
-} // end namespace irr

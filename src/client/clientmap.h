@@ -1,29 +1,14 @@
-/*
-Minetest
-Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
-#include "irrlichttypes_extrabloated.h"
+#include "irrlichttypes_bloated.h"
 #include "map.h"
-#include "camera.h"
-#include <set>
+#include <ISceneNode.h>
 #include <map>
+#include <functional>
 
 struct MapDrawControl
 {
@@ -38,8 +23,30 @@ struct MapDrawControl
 };
 
 class Client;
-class ITextureSource;
-class PartialMeshBuffer;
+class RenderingEngine;
+
+enum CameraMode : int;
+
+namespace scene
+{
+	class IMeshBuffer;
+}
+
+namespace video
+{
+	class IVideoDriver;
+}
+
+struct CachedMeshBuffer {
+	std::vector<scene::IMeshBuffer*> buf;
+	u8 age = 0;
+
+	void drop();
+};
+
+using CachedMeshBuffers = std::unordered_map<std::string, CachedMeshBuffer>;
+
+using ModifyMaterialCallback = std::function<void(video::SMaterial& /* material */, bool /* is_foliage */)>;
 
 /*
 	ClientMap
@@ -75,12 +82,7 @@ public:
 
 	virtual void OnRegisterSceneNode() override;
 
-	virtual void render() override
-	{
-		video::IVideoDriver* driver = SceneManager->getVideoDriver();
-		driver->setTransform(video::ETS_WORLD, AbsoluteTransformation);
-		renderMap(driver, SceneManager->getSceneNodeRenderPass());
-	}
+	virtual void render() override;
 
 	virtual const aabb3f &getBoundingBox() const override
 	{
@@ -89,21 +91,31 @@ public:
 
 	void getBlocksInViewRange(v3s16 cam_pos_nodes,
 		v3s16 *p_blocks_min, v3s16 *p_blocks_max, float range=-1.0f);
+
 	void updateDrawList();
-	// @brief Calculate statistics about the map and keep the blocks alive
+	/// @brief clears m_drawlist and m_keeplist
+	void clearDrawList();
+
+	/// @brief Calculate statistics about the map and keep the blocks alive
 	void touchMapBlocks();
+
 	void updateDrawListShadow(v3f shadow_light_pos, v3f shadow_light_dir, float radius, float length);
+	void clearDrawListShadow();
+
 	// Returns true if draw list needs updating before drawing the next frame.
 	bool needsUpdateDrawList() { return m_needs_update_drawlist; }
+
 	void renderMap(video::IVideoDriver* driver, s32 pass);
 
 	void renderMapShadows(video::IVideoDriver *driver,
-			const video::SMaterial &material, s32 pass, int frame, int total_frames);
+			ModifyMaterialCallback cb, s32 pass, int frame, int total_frames);
 
 	int getBackgroundBrightness(float max_d, u32 daylight_factor,
 			int oldvalue, bool *sunlight_seen_result);
 
 	void renderPostFx(CameraMode cam_mode);
+
+	void invalidateMapBlockMesh(MapBlockMesh *mesh);
 
 	// For debug printing
 	void PrintInfo(std::ostream &out) override;
@@ -112,7 +124,7 @@ public:
 	f32 getWantedRange() const { return m_control.wanted_range; }
 	f32 getCameraFov() const { return m_camera_fov; }
 
-	void onSettingChanged(const std::string &name);
+	void onSettingChanged(std::string_view name, bool all);
 
 protected:
 	// use drop() instead
@@ -124,7 +136,6 @@ private:
 
 	// update the vertex order in transparent mesh buffers
 	void updateTransparentMeshBuffers();
-
 
 	// Orders blocks by distance to the camera
 	class MapBlockComparer
@@ -143,29 +154,6 @@ private:
 		v3s16 m_camera_block;
 	};
 
-
-	// reference to a mesh buffer used when rendering the map.
-	struct DrawDescriptor {
-		v3s16 m_pos;
-		union {
-			scene::IMeshBuffer *m_buffer;
-			const PartialMeshBuffer *m_partial_buffer;
-		};
-		bool m_reuse_material:1;
-		bool m_use_partial_buffer:1;
-
-		DrawDescriptor(v3s16 pos, scene::IMeshBuffer *buffer, bool reuse_material) :
-			m_pos(pos), m_buffer(buffer), m_reuse_material(reuse_material), m_use_partial_buffer(false)
-		{}
-
-		DrawDescriptor(v3s16 pos, const PartialMeshBuffer *buffer) :
-			m_pos(pos), m_partial_buffer(buffer), m_reuse_material(false), m_use_partial_buffer(true)
-		{}
-
-		scene::IMeshBuffer* getBuffer();
-		void draw(video::IVideoDriver* driver);
-	};
-
 	Client *m_client;
 	RenderingEngine *m_rendering_engine;
 
@@ -182,15 +170,17 @@ private:
 	bool m_needs_update_transparent_meshes = true;
 
 	std::map<v3s16, MapBlock*, MapBlockComparer> m_drawlist;
+	// List of additional blocks to keep (relevant with mesh_chunk > 1, since
+	// not all blocks contain a mesh)
 	std::vector<MapBlock*> m_keeplist;
 	std::map<v3s16, MapBlock*> m_drawlist_shadow;
 	bool m_needs_update_drawlist;
-
-	std::set<v2s16> m_last_drawn_sectors;
+	CachedMeshBuffers m_dynamic_buffers;
 
 	bool m_cache_trilinear_filter;
 	bool m_cache_bilinear_filter;
 	bool m_cache_anistropic_filter;
+	bool m_cache_transparency_sorting_group_by_buffers;
 	u16 m_cache_transparency_sorting_distance;
 
 	bool m_loops_occlusion_culler;

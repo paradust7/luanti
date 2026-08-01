@@ -17,8 +17,6 @@
 
 #include "COGLESCoreExtensionHandler.h"
 
-namespace irr
-{
 namespace video
 {
 
@@ -28,11 +26,13 @@ public:
 	COpenGL3ExtensionHandler() :
 			COGLESCoreExtensionHandler() {}
 
-	void initExtensionsOld();
-	void initExtensionsNew();
+	void initExtensions();
 
 	/// Checks whether a named extension is present
-	bool queryExtension(const std::string &name) const noexcept;
+	inline bool queryExtension(const std::string &name) const noexcept
+	{
+		return GL.IsExtensionPresent(name);
+	}
 
 	bool queryFeature(video::E_VIDEO_DRIVER_FEATURE feature) const
 	{
@@ -72,6 +72,12 @@ public:
 			return false;
 		case EVDF_STENCIL_BUFFER:
 			return StencilBuffer;
+		case EVDF_TEXTURE_MULTISAMPLE:
+			return TextureMultisampleSupported;
+		case EVDF_TEXTURE_2D_ARRAY:
+			return Texture2DArraySupported;
+		case EVDF_RENDER_TO_FLOAT_TEXTURE:
+			return RenderToFloatTextureSupported;
 		default:
 			return false;
 		};
@@ -138,7 +144,8 @@ public:
 
 	inline void irrGlDrawBuffer(GLenum mode)
 	{
-		GL.DrawBuffer(mode);
+		// GLES only has DrawBuffers, so use that
+		GL.DrawBuffers(1, &mode);
 	}
 
 	inline void irrGlDrawBuffers(GLsizei n, const GLenum *bufs)
@@ -156,15 +163,25 @@ public:
 		GL.BlendEquation(mode);
 	}
 
+	inline void irrGlObjectLabel(GLenum identifier, GLuint name, const char *label)
+	{
+		if (KHRDebugSupported) {
+			u32 len = static_cast<u32>(strlen(label));
+			// Since our texture strings can get quite long we also truncate
+			// to a hardcoded limit of 82
+			len = std::min(len, std::min(MaxLabelLength, 82U));
+			GL.ObjectLabel(identifier, name, len, label);
+		}
+	}
+
+	bool LODBiasSupported = false;
 	bool AnisotropicFilterSupported = false;
 	bool BlendMinMaxSupported = false;
-
-private:
-	void addExtension(std::string &&name);
-	void extensionsLoaded();
-
-	std::unordered_set<std::string> Extensions;
+	bool TextureMultisampleSupported = false;
+	bool Texture2DArraySupported = false;
+	bool KHRDebugSupported = false;
+	bool RenderToFloatTextureSupported = false;
+	u32 MaxLabelLength = 0;
 };
 
-}
 }

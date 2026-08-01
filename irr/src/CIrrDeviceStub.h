@@ -8,8 +8,6 @@
 #include "SIrrCreationParameters.h"
 #include "IContextManager.h"
 
-namespace irr
-{
 // lots of prototypes:
 class ILogger;
 class CLogger;
@@ -33,7 +31,15 @@ IFileSystem *createFileSystem();
 
 namespace video
 {
-IVideoDriver *createNullDriver(io::IFileSystem *io, const core::dimension2d<u32> &screenSize);
+	IVideoDriver *createNullDriver(io::IFileSystem *io, const core::dimension2d<u32> &screenSize);
+
+	IVideoDriver *createOpenGLDriver(const SIrrlichtCreationParameters &params, io::IFileSystem *io, IContextManager *contextManager);
+
+	IVideoDriver *createOpenGL3Driver(const SIrrlichtCreationParameters &params, io::IFileSystem *io, IContextManager *contextManager);
+
+	IVideoDriver *createOGLES2Driver(const SIrrlichtCreationParameters &params, io::IFileSystem *io, IContextManager *contextManager);
+
+	IVideoDriver *createWebGL1Driver(const SIrrlichtCreationParameters &params, io::IFileSystem *io, IContextManager *contextManager);
 }
 
 //! Stub for an Irrlicht Device implementation
@@ -95,9 +101,6 @@ public:
 	//! Checks if the window is running in fullscreen mode.
 	bool isFullscreen() const override;
 
-	//! get color format of the current window
-	video::ECOLOR_FORMAT getColorFormat() const override;
-
 	//! Activate any joysticks, and generate events for them.
 	bool activateJoysticks(core::array<SJoystickInfo> &joystickInfo) override;
 
@@ -151,7 +154,7 @@ public:
 	float getDisplayDensity() const override;
 
 	//! Resize the render window.
-	void setWindowSize(const irr::core::dimension2d<u32> &size) override {}
+	void setWindowSize(const core::dimension2d<u32> &size) override {}
 
 	bool hasXR() const override { return false; }
 	void recenterXR() override {}
@@ -205,5 +208,3 @@ protected:
 	SIrrlichtCreationParameters CreationParams;
 	bool Close;
 };
-
-} // end namespace irr

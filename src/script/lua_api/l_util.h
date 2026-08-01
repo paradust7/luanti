@@ -1,27 +1,11 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
 #include "lua_api/l_base.h"
 
-class AsyncEngine;
 
 class ModApiUtil : public ModApiBase
 {
@@ -43,6 +27,9 @@ private:
 
 	// get us precision time
 	static int l_get_us_time(lua_State *L);
+
+	// get_us_time() for SSCSM. less precise
+	static int l_get_us_time_sscsm(lua_State *L);
 
 	// parse_json(str[, nullvalue])
 	static int l_parse_json(lua_State *L);
@@ -67,6 +54,9 @@ private:
 
 	// is_yes(arg)
 	static int l_is_yes(lua_State *L);
+
+	// path_exists(path)
+	static int l_path_exists(lua_State *L);
 
 	// get_builtin_path()
 	static int l_get_builtin_path(lua_State *L);
@@ -122,6 +112,12 @@ private:
 	// colorspec_to_bytes(colorspec)
 	static int l_colorspec_to_bytes(lua_State *L);
 
+	// colorspec_to_table(colorspec)
+	static int l_colorspec_to_table(lua_State *L);
+
+	// time_to_day_night_ratio(time_of_day)
+	static int l_time_to_day_night_ratio(lua_State *L);
+
 	// encode_png(w, h, data, level)
 	static int l_encode_png(lua_State *L);
 
@@ -134,8 +130,15 @@ private:
 	// urlencode(value)
 	static int l_urlencode(lua_State *L);
 
+	// is_valid_player_name(name)
+	static int l_is_valid_player_name(lua_State *L);
+
+	// strip_escapes(str)
+	static int l_strip_escapes(lua_State *L);
+
 public:
 	static void Initialize(lua_State *L, int top);
 	static void InitializeAsync(lua_State *L, int top);
 	static void InitializeClient(lua_State *L, int top);
+	static void InitializeSSCSM(lua_State *L, int top);
 };

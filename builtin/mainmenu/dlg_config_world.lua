@@ -1,19 +1,6 @@
---Minetest
---Copyright (C) 2013 sapier
---
---This program is free software; you can redistribute it and/or modify
---it under the terms of the GNU Lesser General Public License as published by
---the Free Software Foundation; either version 2.1 of the License, or
---(at your option) any later version.
---
---This program is distributed in the hope that it will be useful,
---but WITHOUT ANY WARRANTY; without even the implied warranty of
---MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
---GNU Lesser General Public License for more details.
---
---You should have received a copy of the GNU Lesser General Public License along
---with this program; if not, write to the Free Software Foundation, Inc.,
---51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+-- Luanti
+-- Copyright (C) 2013 sapier
+-- SPDX-License-Identifier: LGPL-2.1-or-later
 
 --------------------------------------------------------------------------------
 
@@ -32,31 +19,17 @@ local function init_data(data)
 				return true
 			end
 		end,
-		function(element, criteria)
-			if criteria.hide_game and
-					element.is_game_content then
-				return false
-			end
-
-			if criteria.hide_modpackcontents and
-					element.modpack ~= nil then
-				return false
-			end
-			return true
-		end,
+		nil,
 		{
 			worldpath = data.worldspec.path,
 			gameid = data.worldspec.gameid
-		})
+		}
+	)
 
 	if data.selected_mod > data.list:size() then
 		data.selected_mod = 0
 	end
 
-	data.list:set_filtercriteria({
-		hide_game = data.hide_gamemods,
-		hide_modpackcontents = data.hide_modpackcontents
-	})
 	-- Sorting is already done by pgkmgr.get_mods
 end
 
@@ -126,7 +99,7 @@ local function get_formspec(data)
 	local retval =
 		"size[11.5,7.5,true]" ..
 		"label[0.5,0;" .. fgettext("World:") .. "]" ..
-		"label[1.75,0;" .. data.worldspec.name .. "]"
+		"label[1.75,0;" .. core.formspec_escape(data.worldspec.name) .. "]"
 
 	if mod.is_modpack or mod.type == "game" then
 		local info = core.formspec_escape(
@@ -140,16 +113,22 @@ local function get_formspec(data)
 		end
 		retval = retval ..
 			"textarea[0.25,0.7;5.75,7.2;;" .. info .. ";]"
+	elseif mod.type == "worldmods" then
+		retval = retval ..
+			"textarea[0.25,0.7;5.75,7.2;;" ..
+			fgettext("Mods located inside the world folder.") .. ";]"
 	else
 		local hard_deps, soft_deps = pkgmgr.get_dependencies(mod.path)
 
 		-- Add error messages to dep lists
-		if mod.enabled or mod.is_game_content then
+		if mod.enabled or mod.always_on then
 			for i, dep_name in ipairs(hard_deps) do
 				local dep = enabled_mods_by_name[dep_name]
 				if not dep then
+					-- TRANSLATORS: Displayed when a mod dependency is unsatisfied
 					hard_deps[i] = mt_color_red .. dep_name .. " " .. fgettext("(Unsatisfied)")
 				elseif with_error[dep.virtual_path] then
+					-- TRANSLATORS: Message in the mod list when a mod is enabled with error
 					hard_deps[i] = mt_color_orange .. dep_name .. " " .. fgettext("(Enabled, has error)")
 				else
 					hard_deps[i] = mt_color_green .. dep_name
@@ -176,11 +155,14 @@ local function get_formspec(data)
 			if soft_deps_str == "" then
 				retval = retval ..
 					"label[0,1.25;" ..
+					-- TRANSLATORS: About mod dependencies
 					fgettext("No (optional) dependencies") .. "]"
 			else
 				retval = retval ..
+					-- TRANSLATORS: About mod dependencies
 					"label[0,1.25;" .. fgettext("No hard dependencies") ..
 					"]" ..
+					-- TRANSLATORS: About mod dependencies
 					"label[0,1.75;" .. fgettext("Optional dependencies:") ..
 					"]" ..
 					"textlist[0,2.25;5,4;world_config_optdepends;" ..
@@ -189,15 +171,19 @@ local function get_formspec(data)
 		else
 			if soft_deps_str == "" then
 				retval = retval ..
+					-- TRANSLATORS: About mod dependencies
 					"label[0,1.25;" .. fgettext("Dependencies:") .. "]" ..
 					"textlist[0,1.75;5,4;world_config_depends;" ..
 					hard_deps_str .. ";0]" ..
+					-- TRANSLATORS: About mod dependencies
 					"label[0,6;" .. fgettext("No optional dependencies") .. "]"
 			else
 				retval = retval ..
+					-- TRANSLATORS: About mod dependencies
 					"label[0,1.25;" .. fgettext("Dependencies:") .. "]" ..
 					"textlist[0,1.75;5,2.125;world_config_depends;" ..
 					hard_deps_str .. ";0]" ..
+					-- TRANSLATORS: About mod dependencies
 					"label[0,3.9;" .. fgettext("Optional dependencies:") ..
 					"]" ..
 					"textlist[0,4.375;5,1.8;world_config_optdepends;" ..
@@ -214,9 +200,9 @@ local function get_formspec(data)
 		"button[9,7;2.5,0.5;btn_config_world_cdb;" ..
 		fgettext("Find More Mods") .. "]"
 
-	if mod.name ~= "" and not mod.is_game_content then
+	if mod.name ~= "" and not mod.always_on then
 		if mod.is_modpack then
-			if pkgmgr.is_modpack_entirely_enabled(data, mod.name) then
+			if pkgmgr.is_modpack_entirely_enabled(data.list:get_raw_list(), mod) then
 				retval = retval ..
 					"button[5.5,0.125;3,0.5;btn_mp_disable;" ..
 					fgettext("Disable modpack") .. "]"
@@ -292,14 +278,13 @@ local function handle_buttons(this, fields)
 
 		for i = 1, #rawlist do
 			local mod = rawlist[i]
-			if not mod.is_modpack and
-					not mod.is_game_content then
+			if not mod.is_modpack and not mod.always_on then
 				if modname_valid(mod.name) then
 					if mod.enabled then
 						worldfile:set("load_mod_" .. mod.name, mod.virtual_path)
 						was_set[mod.name] = true
 					elseif not was_set[mod.name] then
-						worldfile:set("load_mod_" .. mod.name, "false")
+						worldfile:remove("load_mod_" .. mod.name)
 					end
 				elseif mod.enabled then
 					gamedata.errormessage = fgettext_ne("Failed to enable mo" ..
@@ -349,18 +334,15 @@ local function handle_buttons(this, fields)
 		-- multiple enables.
 
 		local was_enabled = {}
-		for i = 1, #list do
-			if not list[i].is_game_content
-					and not list[i].is_modpack and list[i].enabled then
-				was_enabled[list[i].name] = true
+		for _, mod in ipairs(list) do
+			if not mod.always_on and not mod.is_modpack and mod.enabled then
+				was_enabled[mod.name] = true
 			end
 		end
 
-		for i = 1, #list do
-			if not list[i].is_game_content and not list[i].is_modpack and
-					not was_enabled[list[i].name] then
-				list[i].enabled = true
-				was_enabled[list[i].name] = true
+		for _, mod in ipairs(list) do
+			if not mod.always_on and not mod.is_modpack and not was_enabled[mod.name] then
+				mod.enabled = true
 			end
 		end
 
@@ -371,10 +353,9 @@ local function handle_buttons(this, fields)
 	if fields.btn_disable_all_mods then
 		local list = this.data.list:get_raw_list()
 
-		for i = 1, #list do
-			if not list[i].is_game_content
-					and not list[i].is_modpack then
-				list[i].enabled = false
+		for _, mod in ipairs(list) do
+			if not mod.always_on and not mod.is_modpack then
+				mod.enabled = false
 			end
 		end
 		enabled_all = false

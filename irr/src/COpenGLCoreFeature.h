@@ -5,30 +5,29 @@
 #pragma once
 
 #include "irrTypes.h"
+#include <cstddef>
 
-namespace irr
-{
 namespace video
 {
 
 class COpenGLCoreFeature
 {
 public:
-	COpenGLCoreFeature() :
-			BlendOperation(false), ColorAttachment(0), MultipleRenderTarget(0), MaxTextureUnits(1)
-	{
-	}
+	COpenGLCoreFeature() = default;
 
 	virtual ~COpenGLCoreFeature()
 	{
 	}
 
-	bool BlendOperation;
+	bool BlendOperation = false;
+	bool TexStorage = false;
 
-	u8 ColorAttachment;
-	u8 MultipleRenderTarget;
-	u8 MaxTextureUnits;
+	u8 ColorAttachment = 0;
+	u8 MultipleRenderTarget = 0;
+	u8 MaxTextureUnits = 0;
+
+	/// Maximum supported UBO size in bytes, 0 if not supported
+	size_t MaxUBOSize = 0;
 };
 
-}
 }

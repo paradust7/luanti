@@ -1,21 +1,6 @@
-/*
-Minetest
-Copyright (C) 2020 Hugues Ross <hugues.ross@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2020 Hugues Ross <hugues.ross@gmail.com>
 
 #pragma once
 
@@ -23,7 +8,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include <string>
 #include <vector>
 
-typedef u16 override_t;
+typedef u32 override_t;
 
 //! Bitmask enum specifying what a texture override should apply to
 enum class OverrideTarget : override_t
@@ -43,11 +28,19 @@ enum class OverrideTarget : override_t
 	SPECIAL_4 = 1 << 11,
 	SPECIAL_5 = 1 << 12,
 	SPECIAL_6 = 1 << 13,
+	OVERLAY_TOP = 1 << 14,
+	OVERLAY_BOTTOM = 1 << 15,
+	OVERLAY_RIGHT = 1 << 16,
+	OVERLAY_LEFT = 1 << 17,
+	OVERLAY_FRONT = 1 << 18,
+	OVERLAY_BACK = 1 << 19,
 
 	SIDES = LEFT | RIGHT | FRONT | BACK,
 	ALL_FACES = TOP | BOTTOM | SIDES,
 	ALL_SPECIAL = SPECIAL_1 | SPECIAL_2 | SPECIAL_3 | SPECIAL_4 | SPECIAL_5 | SPECIAL_6,
-	NODE_TARGETS = ALL_FACES | ALL_SPECIAL,
+	OVERLAY_SIDES = OVERLAY_LEFT | OVERLAY_RIGHT | OVERLAY_FRONT | OVERLAY_BACK,
+	OVERLAY_ALL   = OVERLAY_TOP | OVERLAY_BOTTOM | OVERLAY_SIDES,
+	NODE_TARGETS = ALL_FACES | ALL_SPECIAL | OVERLAY_ALL,
 	ITEM_TARGETS = INVENTORY | WIELD,
 };
 

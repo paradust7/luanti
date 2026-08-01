@@ -1,33 +1,16 @@
-/*
-Minetest
-Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
-#include "irrlichttypes_extrabloated.h"
-#include "inventory.h"
+#include "irrlichttypes.h"
+#include "inventory.h" // ItemStack
+#include "util/basic_macros.h"
 #include "util/numeric.h"
-#include "client/localplayer.h"
-#include <ICameraSceneNode.h>
-#include <ISceneNode.h>
 #include <plane3d.h>
 #include <array>
-#include <list>
+#include <vector>
 #include <optional>
 
 class LocalPlayer;
@@ -36,34 +19,31 @@ class Client;
 class RenderingEngine;
 class WieldMeshSceneNode;
 
+enum CameraMode : int;
+
+namespace scene {
+	class ICameraSceneNode;
+	class ISceneManager;
+	class ISceneNode;
+};
+
 struct Nametag
 {
-	scene::ISceneNode *parent_node;
+	scene::ISceneNode *parent_node = nullptr;
 	std::string text;
 	video::SColor textcolor;
 	std::optional<video::SColor> bgcolor;
-	v3f pos;
-
-	Nametag(scene::ISceneNode *a_parent_node,
-			const std::string &text,
-			const video::SColor &textcolor,
-			const std::optional<video::SColor> &bgcolor,
-			const v3f &pos):
-		parent_node(a_parent_node),
-		text(text),
-		textcolor(textcolor),
-		bgcolor(bgcolor),
-		pos(pos)
-	{
-	}
+	std::optional<u32> textsize;
+	v3f pos; // offset from parent node
+	bool scale_z;
 
 	video::SColor getBgColor(bool use_fallback) const
 	{
-		if (bgcolor)
+		if (bgcolor.has_value())
 			return bgcolor.value();
 		else if (!use_fallback)
 			return video::SColor(0, 0, 0, 0);
-		else if (textcolor.getLuminance() > 186)
+		else if (textcolor.getBrightness() > 186)
 			// Dark background for light text
 			return video::SColor(50, 50, 50, 50);
 		else
@@ -71,8 +51,6 @@ struct Nametag
 			return video::SColor(50, 255, 255, 255);
 	}
 };
-
-enum CameraMode {CAMERA_MODE_FIRST, CAMERA_MODE_THIRD, CAMERA_MODE_THIRD_FRONT};
 
 /*
 	Client camera class, manages the player and camera scene nodes, the viewing distance
@@ -84,6 +62,9 @@ class Camera
 public:
 	Camera(MapDrawControl &draw_control, Client *client, RenderingEngine *rendering_engine);
 	~Camera();
+
+	static void settingChangedCallback(const std::string &name, void *data);
+	void readSettings();
 
 	// Get camera scene node.
 	// It has the eye transformation, pitch and view bobbing applied.
@@ -100,10 +81,7 @@ public:
 	}
 
 	// Returns the absolute position of the head SceneNode in the world
-	inline v3f getHeadPosition() const
-	{
-		return m_headnode->getAbsolutePosition();
-	}
+	v3f getHeadPosition() const;
 
 	// Get the camera direction (in absolute camera coordinates).
 	// This has view bobbing applied.
@@ -162,6 +140,9 @@ public:
 	// Update the camera from the local player's position.
 	void update(LocalPlayer* player, f32 frametime, f32 tool_reload_ratio);
 
+	// Adjust the camera offset when needed
+	void updateOffset();
+
 	// Update render distance
 	void updateViewingRange();
 
@@ -170,12 +151,12 @@ public:
 	void setDigging(s32 button);
 
 	// Replace the wielded item mesh
-	void wield(const ItemStack &item, const ItemStack &hand);
+	void wield(const ItemStack &item, const ItemStack &hand, bool animate = true);
 
 	// Draw the wielded tool.
 	// This has to happen *after* the main scene is drawn.
 	// Warning: This clears the Z buffer.
-	void drawWieldedTool(irr::core::matrix4* translation=NULL);
+	void drawWieldedTool(core::matrix4* translation=NULL);
 
 	// Draw the wielded arm/tool as an object in the scene (for XR)
 	void enableSceneHand(
@@ -186,14 +167,7 @@ public:
 	void disableSceneHands();
 
 	// Toggle the current camera mode
-	void toggleCameraMode() {
-		if (m_camera_mode == CAMERA_MODE_FIRST)
-			m_camera_mode = CAMERA_MODE_THIRD;
-		else if (m_camera_mode == CAMERA_MODE_THIRD)
-			m_camera_mode = CAMERA_MODE_THIRD_FRONT;
-		else
-			m_camera_mode = CAMERA_MODE_FIRST;
-	}
+	void toggleCameraMode();
 
 	// Set the current camera mode
 	inline void setCameraMode(CameraMode mode)
@@ -202,14 +176,12 @@ public:
 	}
 
 	//read the current camera mode
-	inline CameraMode getCameraMode()
+	inline CameraMode getCameraMode() const
 	{
 		return m_camera_mode;
 	}
 
-	Nametag *addNametag(scene::ISceneNode *parent_node,
-		const std::string &text, video::SColor textcolor,
-		std::optional<video::SColor> bgcolor, const v3f &pos);
+	Nametag *addNametag(const Nametag &params);
 
 	void removeNametag(Nametag *nametag);
 
@@ -221,6 +193,8 @@ private:
 	// Use getFrustumCuller().
 	// This helper just exists to decrease the header's number of includes.
 	std::array<core::plane3d<f32>, 4> getFrustumCullPlanes() const;
+
+	void updateWieldedTool();
 
 	// Nodes
 	scene::ISceneNode *m_playernode = nullptr;
@@ -256,7 +230,7 @@ private:
 
 	// Server-sent FOV variables
 	bool m_server_sent_fov = false;
-	f32 m_curr_fov_degrees, m_old_fov_degrees, m_target_fov_degrees;
+	f32 m_curr_fov_degrees, m_target_fov_degrees;
 
 	// FOV transition variables
 	bool m_fov_transition_active = false;
@@ -281,8 +255,6 @@ private:
 	s32 m_view_bobbing_state = 0;
 	// Speed of view bobbing animation
 	f32 m_view_bobbing_speed = 0.0f;
-	// Fall view bobbing
-	f32 m_view_bobbing_fall = 0.0f;
 
 	// Digging animation frame (0 <= m_digging_anim < 1)
 	f32 m_digging_anim = 0.0f;
@@ -296,13 +268,12 @@ private:
 	ItemStack m_wield_item_next;
 	ItemStack m_wield_hand_next;
 
-	CameraMode m_camera_mode = CAMERA_MODE_FIRST;
+	CameraMode m_camera_mode;
 
-	f32 m_cache_fall_bobbing_amount;
 	f32 m_cache_view_bobbing_amount;
 	bool m_arm_inertia;
 
-	std::list<Nametag *> m_nametags;
+	std::vector<Nametag*> m_nametags;
 	bool m_show_nametag_backgrounds;
 
 	// Last known light color of the player

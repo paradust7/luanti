@@ -1,5 +1,3 @@
--- Minetest: builtin/item.lua
-
 local builtin_shared = ...
 
 local function copy_pointed_thing(pointed_thing)
@@ -355,20 +353,19 @@ function core.item_place(itemstack, placer, pointed_thing, param2)
 	return itemstack, nil
 end
 
-function core.item_secondary_use(itemstack, placer)
+function core.item_secondary_use(itemstack, user)
 	return itemstack
 end
 
 function core.item_drop(itemstack, dropper, pos)
 	local dropper_is_player = dropper and dropper:is_player()
 	local p = table.copy(pos)
-	local cnt = itemstack:get_count()
 	if dropper_is_player then
 		p.y = p.y + 1.2
 	end
-	local item = itemstack:take_item(cnt)
-	local obj = core.add_item(p, item)
+	local obj = core.add_item(p, ItemStack(itemstack))
 	if obj then
+		itemstack:clear()
 		if dropper_is_player then
 			local dir = dropper:get_look_dir()
 			dir.x = dir.x * 2.9
@@ -377,7 +374,7 @@ function core.item_drop(itemstack, dropper, pos)
 			obj:set_velocity(dir)
 			obj:get_luaentity().dropped_by = dropper:get_player_name()
 		end
-		return itemstack
+		return itemstack, obj
 	end
 	-- If we reach this, adding the object to the
 	-- environment failed
@@ -393,7 +390,7 @@ function core.item_pickup(itemstack, picker, pointed_thing, ...)
 		end
 	end
 
-	-- Pickup item.
+	-- Pick up item
 	local inv = picker and picker:get_inventory()
 	if inv then
 		return inv:add_item("main", itemstack)
@@ -438,7 +435,7 @@ function core.do_item_eat(hp_change, replace_with_item, itemstack, user, pointed
 		core.add_item(pos, replace_with_item)
 	end
 
-	user:set_hp(user:get_hp() + hp_change)
+	user:set_hp(user:get_hp() + hp_change, {type="set_hp", custom_type="__builtin:item_eat"})
 
 	return nil -- don't overwrite wield item a second time
 end
@@ -516,7 +513,8 @@ function core.node_dig(pos, node, digger)
 		.. node.name .. " at " .. core.pos_to_string(pos))
 
 	local wielded = digger and digger:get_wielded_item()
-	local drops = core.get_node_drops(node, wielded and wielded:get_name())
+	local drops = core.get_node_drops(node, wielded and wielded:get_name(),
+				wielded and ItemStack(wielded), digger, vector.copy(pos))
 
 	if wielded then
 		local wdef = wielded:get_definition()
@@ -570,6 +568,26 @@ function core.node_dig(pos, node, digger)
 			pos = pos,
 			exclude_player = diggername,
 		}, true)
+	end
+	-- Particles also
+	if diggername ~= "" and def and def.drawtype ~= "airlike" then
+		-- cf. ParticleManager::addDiggingParticles() et al
+		local gravity = tonumber(core.settings:get("movement_gravity")) or 9.81
+		core.add_particlespawner({
+			amount = 16,
+			time = 0.001,
+			minpos = vector.offset(pos, -0.25, -0.25, -0.25),
+			maxpos = vector.offset(pos, 0.25, 0.25, 0.25),
+			minvel = vector.new(-1.5, 0, -1.5),
+			maxvel = vector.new(1.5, 3, 1.5),
+			minacc = vector.new(0, -gravity, 0),
+			maxacc = vector.new(0, -gravity, 0),
+			minexptime = 0, maxexptime = 1,
+			minsize = 0, maxsize = 0, -- random
+			node = node,
+			blend = (def and def.use_texture_alpha == "blend") and "blend" or "clip",
+			exclude_player = diggername,
+		})
 	end
 
 	-- Run callback
@@ -641,6 +659,7 @@ core.nodedef_default = {
 	on_drop = redef_wrapper(core, 'item_drop'), -- core.item_drop
 	on_pickup = redef_wrapper(core, 'item_pickup'), -- core.item_pickup
 	on_use = nil,
+	after_use = nil,
 	can_dig = nil,
 
 	on_punch = redef_wrapper(core, 'node_punch'), -- core.node_punch
@@ -742,16 +761,16 @@ core.noneitemdef_default = {  -- This is used for the hand and unknown items
 --
 
 local get_node_raw = core.get_node_raw
-core.get_node_raw = nil
+local get_name_from_content_id = core.get_name_from_content_id
 
 function core.get_node(pos)
 	local content, param1, param2 = get_node_raw(pos.x, pos.y, pos.z)
-	return {name = core.get_name_from_content_id(content), param1 = param1, param2 = param2}
+	return {name = get_name_from_content_id(content), param1 = param1, param2 = param2}
 end
 
 function core.get_node_or_nil(pos)
 	local content, param1, param2, pos_ok = get_node_raw(pos.x, pos.y, pos.z)
 	return pos_ok and
-			{name = core.get_name_from_content_id(content), param1 = param1, param2 = param2}
+			{name = get_name_from_content_id(content), param1 = param1, param2 = param2}
 			or nil
 end

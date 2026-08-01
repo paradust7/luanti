@@ -1,19 +1,6 @@
---Minetest
---Copyright (C) 2014 sapier
---
---This program is free software; you can redistribute it and/or modify
---it under the terms of the GNU Lesser General Public License as published by
---the Free Software Foundation; either version 2.1 of the License, or
---(at your option) any later version.
---
---This program is distributed in the hope that it will be useful,
---but WITHOUT ANY WARRANTY; without even the implied warranty of
---MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
---GNU Lesser General Public License for more details.
---
---You should have received a copy of the GNU Lesser General Public License along
---with this program; if not, write to the Free Software Foundation, Inc.,
---51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+-- Luanti
+-- Copyright (C) 2014 sapier
+-- SPDX-License-Identifier: LGPL-2.1-or-later
 
 ui = {}
 ui.childlist = {}
@@ -51,6 +38,20 @@ function ui.find_by_name(name)
 end
 
 --------------------------------------------------------------------------------
+-- "title" and "message" must already be formspec-escaped, e.g. via fgettext or
+-- core.formspec_escape.
+function ui.get_message_formspec(title, message, btn_id)
+	return table.concat({
+		"size[14,8]",
+		"real_coordinates[true]",
+		"set_focus[", btn_id, ";true]",
+		"box[0.5,1.2;13,5;#000]",
+		("textarea[0.5,1.2;13,5;;%s;%s]"):format(title, message),
+		"button[5,6.6;4,1;", btn_id, ";" .. fgettext("OK") .. "]",
+	})
+end
+
+--------------------------------------------------------------------------------
 --------------------------------------------------------------------------------
 -- Internal functions not to be called from user
 --------------------------------------------------------------------------------
@@ -76,6 +77,9 @@ function ui.update()
 		}
 		ui.overridden = true
 	elseif gamedata ~= nil and gamedata.errormessage ~= nil then
+		-- Note to API users:
+		-- "gamedata.errormessage" must not be formspec-escaped yet.
+		-- For translations, fgettext_ne should be used.
 		local error_message = core.formspec_escape(gamedata.errormessage)
 
 		local error_title
@@ -84,15 +88,7 @@ function ui.update()
 		else
 			error_title = fgettext("An error occurred:")
 		end
-		formspec = {
-			"size[14,8]",
-			"real_coordinates[true]",
-			"set_focus[btn_error_confirm;true]",
-			"box[0.5,1.2;13,5;#000]",
-			("textarea[0.5,1.2;13,5;;%s;%s]"):format(
-				error_title, error_message),
-			"button[5,6.6;4,1;btn_error_confirm;" .. fgettext("OK") .. "]"
-		}
+		formspec = {ui.get_message_formspec(error_title, error_message, "btn_error_confirm")}
 		ui.overridden = true
 	else
 		local active_toplevel_ui_elements = 0
@@ -122,7 +118,7 @@ function ui.update()
 
 		if (active_toplevel_ui_elements > 1) then
 			core.log("warning", "more than one active ui "..
-				"element, self most likely isn't intended")
+				"element, this most likely isn't intended")
 		end
 
 		if (active_toplevel_ui_elements == 0) then
@@ -170,6 +166,10 @@ end
 --------------------------------------------------------------------------------
 --------------------------------------------------------------------------------
 core.button_handler = function(fields)
+	if fields["try_quit"] and not fields["key_enter"] then
+		core.event_handler("MenuQuit")
+		return
+	end
 	if fields["btn_reconnect_yes"] then
 		gamedata.reconnect_requested = false
 		gamedata.errormessage = nil

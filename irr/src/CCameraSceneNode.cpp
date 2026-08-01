@@ -7,8 +7,6 @@
 #include "IVideoDriver.h"
 #include "os.h"
 
-namespace irr
-{
 namespace scene
 {
 
@@ -20,10 +18,6 @@ CCameraSceneNode::CCameraSceneNode(ISceneNode *parent, ISceneManager *mgr, s32 i
 		Target(lookat), UpVector(0.0f, 1.0f, 0.0f), ZNear(1.0f), ZFar(3000.0f),
 		InputReceiverEnabled(true), TargetAndRotationAreBound(false)
 {
-#ifdef _DEBUG
-	setDebugName("CCameraSceneNode");
-#endif
-
 	// set default projection
 	f32 aspect = 4.0f / 3.0f; // Aspect ratio.
 
@@ -341,5 +335,4 @@ ISceneNode *CCameraSceneNode::clone(ISceneNode *newParent, ISceneManager *newMan
 	return nb;
 }
 
-} // end namespace
 } // end namespace

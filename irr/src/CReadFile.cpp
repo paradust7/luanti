@@ -4,18 +4,12 @@
 
 #include "CReadFile.h"
 
-namespace irr
-{
 namespace io
 {
 
 CReadFile::CReadFile(const io::path &fileName) :
 		File(0), FileSize(0), Filename(fileName)
 {
-#ifdef _DEBUG
-	setDebugName("CReadFile");
-#endif
-
 	openFile();
 }
 
@@ -93,4 +87,3 @@ IReadFile *CReadFile::createReadFile(const io::path &fileName)
 }
 
 } // end namespace io
-} // end namespace irr

@@ -1,34 +1,23 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
-#include "irrlichttypes_extrabloated.h"
+#include "IGUIElement.h"
+#include "irrlichttypes_bloated.h"
 #include "irr_ptr.h"
-#include "util/string.h"
+
 #ifdef __ANDROID__
 	#include <porting_android.h>
 #endif
 
-enum class PointerType {
-	Mouse,
-	Touch,
+struct PointerAction {
+	v2s32 pos;
+	u64 time; // ms
+
+	static PointerAction fromEvent(const SEvent &event);
+	bool isRelated(PointerAction other);
 };
 
 class GUIModalMenu;
@@ -66,14 +55,10 @@ public:
 	porting::AndroidDialogState getAndroidUIInputState();
 #endif
 
-	PointerType getPointerType() { return m_pointer_type; };
-
 protected:
 	virtual std::wstring getLabelByID(s32 id) = 0;
 	virtual std::string getNameByID(s32 id) = 0;
 
-	// Stores the last known pointer type.
-	PointerType m_pointer_type = PointerType::Mouse;
 	// Stores the last known pointer position.
 	// If the last input event was a mouse event, it's the cursor position.
 	// If the last input event was a touch event, it's the finger position.
@@ -86,22 +71,26 @@ protected:
 	std::string m_jni_field_name;
 #endif
 
+	struct ScalingInfo {
+		f32 scale;
+		core::rect<s32> rect;
+	};
+	ScalingInfo getScalingInfo(v2u32 screensize, v2u32 base_size);
+
 	// This is set to true if the menu is currently processing a second-touch event.
 	bool m_second_touch = false;
-	// This is set to true if the menu is currently processing a mouse event
-	// that was synthesized by the menu itself from a touch event.
-	bool m_simulated_mouse = false;
+
+	virtual bool remapClickOutside(const SEvent &event);
 
 private:
 	IMenuManager *m_menumgr;
-	/* If true, remap a double-click (or double-tap) action to ESC. This is so
-	 * that, for example, Android users can double-tap to close a formspec.
-	*
-	 * This value can (currently) only be set by the class constructor
-	 * and the default value for the setting is true.
+	/* If true, remap a click outside the formspec to ESC. This is so that, for
+	 * example, touchscreen users can close formspecs.
+	 * The default for this setting is true. Currently, it's set to false for
+	 * the mainmenu to prevent Minetest from closing unexpectedly.
 	 */
-	bool m_remap_dbl_click;
-	bool remapDoubleClick(const SEvent &event);
+	bool m_remap_click_outside;
+	PointerAction m_last_click_outside{};
 
 	// This might be necessary to expose to the implementation if it
 	// wants to launch other menus
@@ -111,13 +100,11 @@ private:
 
 	irr_ptr<gui::IGUIElement> m_touch_hovered;
 
+	// Converts touches into clicks.
 	bool simulateMouseEvent(ETOUCH_INPUT_EVENT touch_event, bool second_try=false);
 	void enter(gui::IGUIElement *element);
 	void leave();
 
 	// Used to detect double-taps and convert them into double-click events.
-	struct {
-		v2s32 pos;
-		s64 time;
-	} m_last_touch;
+	PointerAction m_last_touch{};
 };

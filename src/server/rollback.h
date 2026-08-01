@@ -1,21 +1,6 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
@@ -24,6 +9,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "rollback_interface.h"
 #include <list>
 #include <vector>
+#include <deque>
 #include "sqlite3.h"
 
 class IGameDef;
@@ -31,7 +17,7 @@ class IGameDef;
 struct ActionRow;
 struct Entity;
 
-class RollbackManager: public IRollbackManager
+class RollbackManager final : public IRollbackManager
 {
 public:
 	RollbackManager(const std::string & world_path, IGameDef * gamedef);
@@ -82,20 +68,20 @@ private:
 	std::string current_actor;
 	bool current_actor_is_guess = false;
 
-	std::list<RollbackAction> action_todisk_buffer;
-	std::list<RollbackAction> action_latest_buffer;
+	std::vector<RollbackAction> action_todisk_buffer;
+	std::deque<RollbackAction> action_latest_buffer;
 
 	std::string database_path;
-	sqlite3 * db;
-	sqlite3_stmt * stmt_insert;
-	sqlite3_stmt * stmt_replace;
-	sqlite3_stmt * stmt_select;
-	sqlite3_stmt * stmt_select_range;
-	sqlite3_stmt * stmt_select_withActor;
-	sqlite3_stmt * stmt_knownActor_select;
-	sqlite3_stmt * stmt_knownActor_insert;
-	sqlite3_stmt * stmt_knownNode_select;
-	sqlite3_stmt * stmt_knownNode_insert;
+	sqlite3 *db = nullptr;
+	sqlite3_stmt *stmt_insert = nullptr;
+	sqlite3_stmt *stmt_replace = nullptr;
+	sqlite3_stmt *stmt_select = nullptr;
+	sqlite3_stmt *stmt_select_range = nullptr;
+	sqlite3_stmt *stmt_select_withActor = nullptr;
+	sqlite3_stmt *stmt_knownActor_select = nullptr;
+	sqlite3_stmt *stmt_knownActor_insert = nullptr;
+	sqlite3_stmt *stmt_knownNode_select = nullptr;
+	sqlite3_stmt *stmt_knownNode_insert = nullptr;
 
 	std::vector<Entity> knownActors;
 	std::vector<Entity> knownNodes;

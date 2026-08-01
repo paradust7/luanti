@@ -6,20 +6,17 @@
 
 #include "IReadFile.h"
 #include "CImage.h"
+#include "coreutil.h"
 #include "os.h"
 #include "irrString.h"
+#include <csetjmp>
 
-namespace irr
-{
 namespace video
 {
 
 //! constructor
 CImageLoaderJPG::CImageLoaderJPG()
 {
-#ifdef _DEBUG
-	setDebugName("CImageLoaderJPG");
-#endif
 }
 
 //! destructor
@@ -260,4 +257,3 @@ IImageLoader *createImageLoaderJPG()
 }
 
 } // end namespace video
-} // end namespace irr

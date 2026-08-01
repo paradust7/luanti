@@ -1,21 +1,6 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
@@ -23,7 +8,6 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include <string>
 #include <thread>
 #include <mutex>
-#include <unordered_map>
 #include "common/helper.h"
 #include "util/basic_macros.h"
 
@@ -33,7 +17,6 @@ extern "C" {
 }
 
 #include "irrlichttypes.h"
-#include "common/c_types.h"
 #include "common/c_internal.h"
 #include "debug.h"
 #include "config.h"
@@ -59,22 +42,26 @@ extern "C" {
 
 enum class ScriptingType: u8 {
 	Async, // either mainmenu (client) or ingame (server)
-	Client,
+	Client, // CPCSM
 	MainMenu,
 	Server,
-	Emerge
+	Emerge,
+	PauseMenu,
+	SSCSM,
 };
 
 class Server;
-#ifndef SERVER
+#if CHECK_CLIENT_BUILD()
 class Client;
 #endif
 class EmergeThread;
 class IGameDef;
 class Environment;
 class GUIEngine;
+class SSCSMEnvironment;
 class ServerActiveObject;
 struct PlayerHPChangeReason;
+struct ModVFS;
 
 class ScriptApiBase : protected LuaHelper {
 public:
@@ -91,8 +78,8 @@ public:
 	void loadMod(const std::string &script_path, const std::string &mod_name);
 	void loadScript(const std::string &script_path);
 
-#ifndef SERVER
-	void loadModFromMemory(const std::string &mod_name);
+#if CHECK_CLIENT_BUILD()
+	void loadModFromMemory(const std::string &mod_name, std::string init_path = "");
 #endif
 
 	void runCallbacksRaw(int nargs,
@@ -105,9 +92,10 @@ public:
 	ScriptingType getType() { return m_type; }
 
 	IGameDef *getGameDef() { return m_gamedef; }
-	Server* getServer();
-#ifndef SERVER
-	Client* getClient();
+	Server *getServer();
+#if CHECK_CLIENT_BUILD()
+	Client *getClient();
+	ModVFS *getModVFS();
 #endif
 
 	// IMPORTANT: These cannot be used for any security-related uses, they exist
@@ -116,19 +104,17 @@ public:
 	void setOriginDirect(const char *origin);
 	void setOriginFromTableRaw(int index, const char *fxn);
 
-	// Returns the currently running mod, only during init time.
-	// The reason this is "insecure" is that mods can mess with each others code,
-	// so the boundary of who is responsible is fuzzy.
-	// Note: checking this against BUILTIN_MOD_NAME is always safe (not spoofable).
-	// returns "" on error
+	/**
+	 * Returns the currently running mod, only during init time.
+	 * The reason this is insecure is that mods can mess with each others code,
+	 * so the boundary of who is responsible is fuzzy.
+	 * @note Checking this against BUILTIN_MOD_NAME is always safe (not spoofable).
+	 * @note See ScriptApiSecurity::getCurrentModName() for the secure equivalent.
+	 * @return mod name or "" on error
+	 */
 	static std::string getCurrentModNameInsecure(lua_State *L);
-	// Returns the currently running mod, only during init time.
-	// This checks the Lua stack to only permit direct calls in the file
-	// scope. That way it is assured that it's really the mod it claims to be.
-	// returns "" on error
-	static std::string getCurrentModName(lua_State *L);
 
-#ifdef SERVER
+#if !CHECK_CLIENT_BUILD()
 	inline void clientOpenLibs(lua_State *L) { assert(false); }
 #else
 	void clientOpenLibs(lua_State *L);
@@ -172,9 +158,12 @@ protected:
 	Environment* getEnv() { return m_environment; }
 	void setEnv(Environment* env) { m_environment = env; }
 
-#ifndef SERVER
+#if CHECK_CLIENT_BUILD()
 	GUIEngine* getGuiEngine() { return m_guiengine; }
 	void setGuiEngine(GUIEngine* guiengine) { m_guiengine = guiengine; }
+
+	SSCSMEnvironment *getSSCSMEnv() { return m_sscsm_environment; }
+	void setSSCSMEnv(SSCSMEnvironment *env) { m_sscsm_environment = env; }
 #endif
 
 	EmergeThread* getEmergeThread() { return m_emerge; }
@@ -186,7 +175,7 @@ protected:
 
 	std::recursive_mutex m_luastackmutex;
 	std::string     m_last_run_mod;
-	bool            m_secure = false;
+
 #ifdef SCRIPTAPI_LOCK_DEBUG
 	int             m_lock_recursion_count{};
 	std::thread::id m_owning_thread;
@@ -195,14 +184,15 @@ protected:
 private:
 	static int luaPanic(lua_State *L);
 
-	lua_State      *m_luastack = nullptr;
+	lua_State        *m_luastack = nullptr;
 
-	IGameDef       *m_gamedef = nullptr;
-	Environment    *m_environment = nullptr;
-#ifndef SERVER
-	GUIEngine      *m_guiengine = nullptr;
+	IGameDef         *m_gamedef = nullptr;
+	Environment      *m_environment = nullptr;
+#if CHECK_CLIENT_BUILD()
+	GUIEngine        *m_guiengine = nullptr;
+	SSCSMEnvironment *m_sscsm_environment = nullptr;
 #endif
-	EmergeThread   *m_emerge = nullptr;
+	EmergeThread     *m_emerge = nullptr;
 
-	ScriptingType  m_type;
+	ScriptingType     m_type;
 };

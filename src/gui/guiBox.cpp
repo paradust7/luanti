@@ -1,23 +1,10 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "guiBox.h"
+#include <IVideoDriver.h>
+#include "irr_v2d.h"
 
 GUIBox::GUIBox(gui::IGUIEnvironment *env, gui::IGUIElement *parent, s32 id,
 	const core::rect<s32> &rectangle,
@@ -109,9 +96,21 @@ void GUIBox::draw()
 	driver->draw2DRectangle(main_rect, m_colors[0], m_colors[1], m_colors[3],
 		m_colors[2], &AbsoluteClippingRect);
 
+	// The border rectangle can be larger than 'AbsoluteClippingRect',
+	// hence clip against the (generally larger) parent.
+	core::rect<s32> border_rect = core::rect<s32>(
+		topleft_border.X,
+		topleft_border.Y,
+		lowerright_border.X,
+		lowerright_border.Y
+	);
+	if(!isNotClipped()) {
+		border_rect.clipAgainst(Parent->getAbsoluteClippingRect());
+	}
+
 	for (size_t i = 0; i <= 3; i++)
 		driver->draw2DRectangle(m_bordercolors[i], border_rects[i],
-				&AbsoluteClippingRect);
+				&border_rect);
 
 	IGUIElement::draw();
 }

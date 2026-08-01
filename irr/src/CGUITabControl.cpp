@@ -12,8 +12,6 @@
 #include "rect.h"
 #include "os.h"
 
-namespace irr
-{
 namespace gui
 {
 
@@ -29,10 +27,6 @@ CGUITab::CGUITab(IGUIEnvironment *environment,
 		BackColor(0, 0, 0, 0), OverrideTextColorEnabled(false), TextColor(255, 0, 0, 0),
 		DrawBackground(false)
 {
-#ifdef _DEBUG
-	setDebugName("CGUITab");
-#endif
-
 	const IGUISkin *const skin = environment->getSkin();
 	if (skin)
 		TextColor = skin->getColor(EGDC_BUTTON_TEXT);
@@ -104,10 +98,6 @@ CGUITabControl::CGUITabControl(IGUIEnvironment *environment,
 		Border(border), FillBackground(fillbackground), ScrollControl(false), TabHeight(0), VerticalAlignment(EGUIA_UPPERLEFT),
 		UpButton(0), DownButton(0), TabMaxWidth(0), CurrentScrollTabIndex(0), TabExtraWidth(20)
 {
-#ifdef _DEBUG
-	setDebugName("CGUITabControl");
-#endif
-
 	IGUISkin *skin = Environment->getSkin();
 	IGUISpriteBank *sprites = 0;
 
@@ -930,5 +920,4 @@ void CGUITabControl::updateAbsolutePosition()
 	recalculateScrollBar();
 }
 
-} // end namespace irr
 } // end namespace gui

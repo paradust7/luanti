@@ -15,8 +15,6 @@
 
 #include "COpenGLCommon.h"
 
-namespace irr
-{
 namespace video
 {
 
@@ -33,14 +31,8 @@ public:
 			COpenGLDriver *driver,
 			s32 &outMaterialTypeNr,
 			const c8 *vertexShaderProgram = 0,
-			const c8 *vertexShaderEntryPointName = 0,
-			E_VERTEX_SHADER_TYPE vsCompileTarget = video::EVST_VS_1_1,
 			const c8 *pixelShaderProgram = 0,
-			const c8 *pixelShaderEntryPointName = 0,
-			E_PIXEL_SHADER_TYPE psCompileTarget = video::EPST_PS_1_1,
 			const c8 *geometryShaderProgram = 0,
-			const c8 *geometryShaderEntryPointName = "main",
-			E_GEOMETRY_SHADER_TYPE gsCompileTarget = EGST_GS_4_0,
 			scene::E_PRIMITIVE_TYPE inType = scene::EPT_TRIANGLES,
 			scene::E_PRIMITIVE_TYPE outType = scene::EPT_TRIANGLE_STRIP,
 			u32 verticesOut = 0,
@@ -104,7 +96,7 @@ protected:
 
 	bool Alpha;
 	bool Blending;
-	bool AlphaTest;
+	bool Skinning = false;
 
 	struct SUniformInfo
 	{
@@ -113,13 +105,11 @@ protected:
 		GLint location;
 	};
 
-	GLhandleARB Program;
 	GLuint Program2;
 	core::array<SUniformInfo> UniformInfo;
 	s32 UserData;
 };
 
 } // end namespace video
-} // end namespace irr
 
 #endif // compile with OpenGL

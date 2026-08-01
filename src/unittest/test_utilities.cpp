@@ -1,25 +1,11 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "test.h"
 
 #include <cmath>
+#include <limits>
 #include "util/enriched_string.h"
 #include "util/numeric.h"
 #include "util/string.h"
@@ -61,6 +47,10 @@ public:
 	void testSanitizeDirName();
 	void testIsBlockInSight();
 	void testColorizeURL();
+	void testSanitizeUntrusted();
+	void testReadSeed();
+	void testMyDoubleStringConversions();
+	void testGetMemorySize();
 };
 
 static TestUtilities g_test_instance;
@@ -95,6 +85,10 @@ void TestUtilities::runTests(IGameDef *gamedef)
 	TEST(testSanitizeDirName);
 	TEST(testIsBlockInSight);
 	TEST(testColorizeURL);
+	TEST(testSanitizeUntrusted);
+	TEST(testReadSeed);
+	TEST(testMyDoubleStringConversions);
+	TEST(testGetMemorySize);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -331,7 +325,7 @@ void TestUtilities::testUTF8()
 	// try to check that the conversion function does not accidentally keep
 	// its internal state across invocations.
 	// \xC4\x81 is UTF-8 for \u0101
-	utf8_to_wide("\xC4");
+	static_cast<void>(utf8_to_wide("\xC4"));
 	UASSERT(utf8_to_wide("\x81") != L"\u0101");
 }
 
@@ -343,6 +337,8 @@ void TestUtilities::testRemoveEscapes()
 		L"abc\x1b(escaped)def") == L"abcdef");
 	UASSERT(unescape_enriched<wchar_t>(
 		L"abc\x1b((escaped with parenthesis\\))def") == L"abcdef");
+	UASSERTEQ(auto, unescape_enriched("abc\x1b(not this\\\\)def"),
+		"abcdef");
 	UASSERT(unescape_enriched<wchar_t>(
 		L"abc\x1b(incomplete") == L"abc");
 	UASSERT(unescape_enriched<wchar_t>(
@@ -350,6 +346,9 @@ void TestUtilities::testRemoveEscapes()
 	// Nested escapes not supported
 	UASSERT(unescape_enriched<wchar_t>(
 		L"abc\x1b(outer \x1b(inner escape)escape)def") == L"abcescape)def");
+	// Multiple
+	UASSERTEQ(auto, unescape_enriched("one\x1bX two \x1b(four)three"),
+		"one two three");
 }
 
 void TestUtilities::testWrapRows()
@@ -378,7 +377,7 @@ void TestUtilities::testWrapRows()
 void TestUtilities::testEnrichedString()
 {
 	EnrichedString str(L"Test bar");
-	irr::video::SColor color(0xFF, 0, 0, 0xFF);
+	video::SColor color(0xFF, 0, 0, 0xFF);
 
 	UASSERT(str.substr(1, 3).getString() == L"est");
 	str += L" BUZZ";
@@ -669,8 +668,6 @@ C apply_all(const C &co, F functor)
 	return ret;
 }
 
-#define cast_v3(T, other) T((other).X, (other).Y, (other).Z)
-
 void TestUtilities::testIsBlockInSight()
 {
 	const std::vector<v3s16> testdata1 = {
@@ -687,7 +684,7 @@ void TestUtilities::testIsBlockInSight()
 	auto test1 = [] (const std::vector<v3s16> &data) {
 		float range = BS * MAP_BLOCKSIZE * 4;
 		float fov = 72 * core::DEGTORAD;
-		v3f cam_pos = cast_v3(v3f, data[0]), cam_dir = cast_v3(v3f, data[1]);
+		v3f cam_pos = v3f::from(data[0]), cam_dir = v3f::from(data[1]);
 		UASSERT( isBlockInSight(data[2], cam_pos, cam_dir, fov, range));
 		UASSERT(!isBlockInSight(data[3], cam_pos, cam_dir, fov, range));
 		UASSERT(!isBlockInSight(data[4], cam_pos, cam_dir, fov, range));
@@ -728,16 +725,105 @@ void TestUtilities::testIsBlockInSight()
 
 void TestUtilities::testColorizeURL()
 {
-#ifdef USE_CURL
+#ifdef HAVE_COLORIZE_URL
 	#define RED COLOR_CODE("#faa")
 	#define GREY COLOR_CODE("#aaa")
 	#define WHITE COLOR_CODE("#fff")
 
 	std::string result = colorize_url("http://example.com/");
-	UASSERT(result == (GREY "http://" WHITE "example.com" GREY "/"));
+	UASSERTEQ(auto, result, (GREY "http://" WHITE "example.com" GREY "/"));
 
 	result = colorize_url(u8"https://u:p@wikipedi\u0430.org:1234/heIIoll?a=b#c");
-	UASSERT(result ==
+	UASSERTEQ(auto, result,
 		(GREY "https://u:p@" WHITE "wikipedi" RED "%d0%b0" WHITE ".org" GREY ":1234/heIIoll?a=b#c"));
+#else
+	warningstream << "Test skipped." << std::endl;
 #endif
+}
+
+void TestUtilities::testSanitizeUntrusted()
+{
+	std::string_view t1{u8"Anästhesieausrüstung"};
+	UASSERTEQ(auto, sanitize_untrusted(t1), t1);
+
+	std::string_view t2{"stop\x00here", 9};
+	UASSERTEQ(auto, sanitize_untrusted(t2), "stop");
+
+	UASSERTEQ(auto, sanitize_untrusted("\x01\x08\x13\x1dhello\r\n\tworld"), "hello\n\tworld");
+
+	std::string_view t3{"some \x1b(T@whatever)text\x1b" "E here"};
+	UASSERTEQ(auto, sanitize_untrusted(t3), t3);
+	auto t3_sanitized = sanitize_untrusted(t3, false);
+	UASSERT(str_starts_with(t3_sanitized, "some ") && str_ends_with(t3_sanitized, " here"));
+	UASSERT(t3_sanitized.find('\x1b') == std::string::npos);
+
+	UASSERTEQ(auto, sanitize_untrusted("\x1b[31m"), "[31m");
+
+	// edge cases
+	for (bool keep : {true, false}) {
+		UASSERTEQ(auto, sanitize_untrusted("\x1b", keep), "");
+		UASSERTEQ(auto, sanitize_untrusted("\x1b(", keep), "(");
+	}
+}
+
+void TestUtilities::testReadSeed()
+{
+	UASSERTEQ(int, read_seed("123"), 123);
+	UASSERTEQ(int, read_seed("0x123"), 0x123);
+	// hashing should produce some non-zero number
+	UASSERT(read_seed("hello") != 0);
+}
+
+void TestUtilities::testMyDoubleStringConversions()
+{
+	const auto expect_parse_failure = [](const std::string &s) {
+		UASSERT(!my_string_to_double(s).has_value());
+	};
+	expect_parse_failure("");
+	expect_parse_failure("helloworld");
+	expect_parse_failure("42x");
+
+	const auto expect_double = [](const std::string &s, double expected) {
+		auto got = my_string_to_double(s);
+		UASSERT(got.has_value());
+		UASSERTEQ(double, *got, expected);
+	};
+	expect_double("1", 1.0);
+	expect_double("42", 42.0);
+	expect_double("42.25", 42.25);
+	expect_double("3e3", 3000.0);
+	expect_double("0xff", 255.0);
+	expect_double("0x1.0p+1", 2.0);
+
+	UASSERT(std::isnan(my_string_to_double(my_double_to_string(
+			std::numeric_limits<double>::quiet_NaN())).value()));
+	const auto test_round_trip = [](double number) {
+		auto got = my_string_to_double(my_double_to_string(number));
+		UASSERT(got.has_value());
+		UASSERTEQ(double, *got, number);
+	};
+	test_round_trip(std::numeric_limits<double>::infinity());
+	test_round_trip(-std::numeric_limits<double>::infinity());
+	test_round_trip(0.3);
+	test_round_trip(0.1 + 0.2);
+}
+
+void TestUtilities::testGetMemorySize()
+{
+#if defined(_WIN32) || defined(__linux__) || defined(__APPLE__)
+	const bool fail_ok = false;
+#else
+	const bool fail_ok = true;
+#endif
+
+	u32 total = porting::getMemorySizeMB();
+	UASSERT(total != 0 || fail_ok);
+	if (total != 0) {
+		infostream << "memory size in MB = " << total << std::endl;
+		// should be a sane value
+		UASSERTCMP(u32, >=, total, 130);
+		UASSERTCMP(u32, <, total, 8 * 1024 * 1024);
+	} else {
+		warningstream << "testGetMemorySize: retrieving failed" << std::endl;
+	}
 }

@@ -1,21 +1,6 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "lua_api/l_mapgen.h"
 #include "lua_api/l_internal.h"
@@ -23,16 +8,15 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "common/c_converter.h"
 #include "common/c_content.h"
 #include "cpp_api/s_security.h"
-#include "util/serialize.h"
 #include "server.h"
-#include "environment.h"
+#include "serverenvironment.h"
+#include "servermap.h"
 #include "emerge_internal.h"
+#include "map_settings_manager.h"
 #include "mapgen/mg_biome.h"
 #include "mapgen/mg_ore.h"
 #include "mapgen/mg_decoration.h"
 #include "mapgen/mg_schematic.h"
-#include "mapgen/mapgen_v5.h"
-#include "mapgen/mapgen_v7.h"
 #include "mapgen/treegen.h"
 #include "filesys.h"
 #include "settings.h"
@@ -97,8 +81,6 @@ ObjDef *get_objdef(lua_State *L, int index, const ObjDefManager *objmgr);
 Biome *get_or_load_biome(lua_State *L, int index,
 	BiomeManager *biomemgr);
 Biome *read_biome_def(lua_State *L, int index, const NodeDefManager *ndef);
-size_t get_biome_list(lua_State *L, int index,
-	BiomeManager *biomemgr, std::unordered_set<biome_t> *biome_id_list);
 
 Schematic *get_or_load_schematic(lua_State *L, int index,
 	SchematicManager *schemmgr, StringMap *replace_names);
@@ -265,7 +247,7 @@ bool read_schematic_def(lua_State *L, int index,
 		u8 param2 = getintfield_default(L, -1, "param2", 0);
 
 		//// Find or add new nodename-to-ID mapping
-		std::unordered_map<std::string, content_t>::iterator it = name_id_map.find(name);
+		auto it = name_id_map.find(name);
 		content_t name_index;
 		if (it != name_id_map.end()) {
 			name_index = it->second;
@@ -381,21 +363,19 @@ Biome *read_biome_def(lua_State *L, int index, const NodeDefManager *ndef)
 		ModApiMapgen::es_BiomeTerrainType, BIOMETYPE_NORMAL);
 	Biome *b = BiomeManager::create(biometype);
 
-	b->name            = getstringfield_default(L, index, "name", "");
-	b->depth_top       = getintfield_default(L,    index, "depth_top",       0);
-	b->depth_filler    = getintfield_default(L,    index, "depth_filler",    -31000);
-	b->depth_water_top = getintfield_default(L,    index, "depth_water_top", 0);
-	b->depth_riverbed  = getintfield_default(L,    index, "depth_riverbed",  0);
-	b->heat_point      = getfloatfield_default(L,  index, "heat_point",      0.f);
-	b->humidity_point  = getfloatfield_default(L,  index, "humidity_point",  0.f);
-	b->vertical_blend  = getintfield_default(L,    index, "vertical_blend",  0);
-	b->flags           = 0; // reserved
+	getstringfield(L, index, "name", b->name);
+	getintfield(L,    index, "depth_top",       b->depth_top);
+	getintfield(L,    index, "depth_filler",    b->depth_filler);
+	getintfield(L,    index, "depth_water_top", b->depth_water_top);
+	getintfield(L,    index, "depth_riverbed",  b->depth_riverbed);
+	getfloatfield(L,  index, "heat_point",      b->heat_point);
+	getfloatfield(L,  index, "humidity_point",  b->humidity_point);
+	getintfield(L,    index, "vertical_blend",  b->vertical_blend);
+	getfloatfield(L,  index, "weight",          b->weight);
 
-	b->min_pos = getv3s16field_default(
-		L, index, "min_pos", v3s16(-31000, -31000, -31000));
+	b->min_pos = getv3s16field_default(L, index, "min_pos", b->min_pos);
 	getintfield(L, index, "y_min", b->min_pos.Y);
-	b->max_pos = getv3s16field_default(
-		L, index, "max_pos", v3s16(31000, 31000, 31000));
+	b->max_pos = getv3s16field_default(L, index, "max_pos", b->max_pos);
 	getintfield(L, index, "y_max", b->max_pos.Y);
 
 	std::vector<std::string> &nn = b->m_nodenames;
@@ -426,8 +406,8 @@ Biome *read_biome_def(lua_State *L, int index, const NodeDefManager *ndef)
 }
 
 
-size_t get_biome_list(lua_State *L, int index,
-	BiomeManager *biomemgr, std::unordered_set<biome_t> *biome_id_list)
+static size_t get_biome_list(lua_State *L, int index,
+	BiomeManager *biomemgr, std::unordered_set<biome_t> *biome_ids)
 {
 	if (index < 0)
 		index = lua_gettop(L) + 1 + index;
@@ -445,13 +425,13 @@ size_t get_biome_list(lua_State *L, int index,
 	if (is_single) {
 		Biome *biome = get_or_load_biome(L, index, biomemgr);
 		if (!biome) {
-			infostream << "get_biome_list: failed to get biome '"
+			warningstream << "get_biome_list: failed to get biome '"
 				<< (lua_isstring(L, index) ? lua_tostring(L, index) : "")
 				<< "'." << std::endl;
 			return 1;
 		}
 
-		biome_id_list->insert(biome->index);
+		biome_ids->insert(biome->index);
 		return 0;
 	}
 
@@ -462,13 +442,13 @@ size_t get_biome_list(lua_State *L, int index,
 		Biome *biome = get_or_load_biome(L, -1, biomemgr);
 		if (!biome) {
 			fail_count++;
-			infostream << "get_biome_list: failed to get biome '"
+			warningstream << "get_biome_list: failed to get biome '"
 				<< (lua_isstring(L, -1) ? lua_tostring(L, -1) : "")
 				<< "'" << std::endl;
 			continue;
 		}
 
-		biome_id_list->insert(biome->index);
+		biome_ids->insert(biome->index);
 	}
 
 	return fail_count;
@@ -569,24 +549,33 @@ int ModApiMapgen::l_get_biome_data(lua_State *L)
 	if (!biomegen)
 		return 0;
 
-	const Biome *biome = biomegen->calcBiomeAtPoint(pos);
-	if (!biome || biome->index == OBJDEF_INVALID_INDEX)
-		return 0;
-
-	lua_newtable(L);
-
-	lua_pushinteger(L, biome->index);
-	lua_setfield(L, -2, "biome");
-
 	if (biomegen->getType() == BIOMEGEN_ORIGINAL) {
 		float heat = ((BiomeGenOriginal*) biomegen)->calcHeatAtPoint(pos);
 		float humidity = ((BiomeGenOriginal*) biomegen)->calcHumidityAtPoint(pos);
+		const Biome *biome = ((BiomeGenOriginal*) biomegen)->calcBiomeFromNoise(heat, humidity, pos);
+		if (!biome || biome->index == OBJDEF_INVALID_INDEX)
+			return 0;
+
+		lua_newtable(L);
+
+		lua_pushinteger(L, biome->index);
+		lua_setfield(L, -2, "biome");
 
 		lua_pushnumber(L, heat);
 		lua_setfield(L, -2, "heat");
 
 		lua_pushnumber(L, humidity);
 		lua_setfield(L, -2, "humidity");
+
+	} else {
+		const Biome *biome = biomegen->calcBiomeAtPoint(pos);
+		if (!biome || biome->index == OBJDEF_INVALID_INDEX)
+			return 0;
+
+		lua_newtable(L);
+
+		lua_pushinteger(L, biome->index);
+		lua_setfield(L, -2, "biome");
 	}
 
 	return 1;
@@ -857,29 +846,44 @@ int ModApiMapgen::l_get_mapgen_edges(lua_State *L)
 	// MapSettingsManager::makeMapgenParams cannot be used here because it would
 	// make mapgen settings immutable from then on. Mapgen settings should stay
 	// mutable until after mod loading ends.
+	std::unique_ptr<MapgenParams> params(settingsmgr->makeMapgenParamsCopy());
 
 	s16 mapgen_limit;
 	if (lua_isnumber(L, 1)) {
-		 mapgen_limit = lua_tointeger(L, 1);
+		mapgen_limit = lua_tointeger(L, 1);
 	} else {
-		std::string mapgen_limit_str;
-		settingsmgr->getMapSetting("mapgen_limit", &mapgen_limit_str);
-		mapgen_limit = stoi(mapgen_limit_str, 0, MAX_MAP_GENERATION_LIMIT);
+		mapgen_limit = params->mapgen_limit;
 	}
 
-	s16 chunksize;
+	v3s16 chunksize;
 	if (lua_isnumber(L, 2)) {
-		chunksize = lua_tointeger(L, 2);
+		chunksize = v3s16(lua_tointeger(L, 2));
+	} else if (lua_istable(L, 2)) {
+		chunksize = check_v3s16(L, 2);
 	} else {
-		std::string chunksize_str;
-		settingsmgr->getMapSetting("chunksize", &chunksize_str);
-		chunksize = stoi(chunksize_str, -32768, 32767);
+		chunksize = params->chunksize;
 	}
 
-	std::pair<s16, s16> edges = get_mapgen_edges(mapgen_limit, chunksize);
-	push_v3s16(L, v3s16(1, 1, 1) * edges.first);
-	push_v3s16(L, v3s16(1, 1, 1) * edges.second);
+	auto edges = get_mapgen_edges(mapgen_limit, chunksize);
+	push_v3s16(L, edges.first);
+	push_v3s16(L, edges.second);
 	return 2;
+}
+
+// get_mapgen_chunksize()
+int ModApiMapgen::l_get_mapgen_chunksize(lua_State *L)
+{
+	NO_MAP_LOCK_REQUIRED;
+
+	const MapSettingsManager *settingsmgr = getEmergeManager(L)->map_settings_mgr;
+
+	// MapSettingsManager::makeMapgenParams cannot be used here because it would
+	// make mapgen settings immutable from then on. Mapgen settings should stay
+	// mutable until after mod loading ends.
+	std::unique_ptr<MapgenParams> params(settingsmgr->makeMapgenParamsCopy());
+
+	push_v3s16(L, params->chunksize);
+	return 1;
 }
 
 // get_mapgen_setting(name)
@@ -909,7 +913,7 @@ int ModApiMapgen::l_get_mapgen_setting_noiseparams(lua_State *L)
 		getEmergeManager(L)->map_settings_mgr;
 
 	const char *name = luaL_checkstring(L, 1);
-	if (!settingsmgr->getMapSettingNoiseParams(name, &np))
+	if (!settingsmgr->getNoiseParams(name, &np))
 		return 0;
 
 	push_noiseparams(L, &np);
@@ -1052,14 +1056,15 @@ int ModApiMapgen::l_get_gen_notify(lua_State *L)
 {
 	NO_MAP_LOCK_REQUIRED;
 
-	EmergeManager *emerge = getServer(L)->getEmergeManager();
+	auto *emerge = getEmergeManager(L);
+
 	push_flags_string(L, flagdesc_gennotify, emerge->gen_notify_on,
 		emerge->gen_notify_on);
 
 	lua_createtable(L, emerge->gen_notify_on_deco_ids.size(), 0);
 	int i = 1;
 	for (u32 id : emerge->gen_notify_on_deco_ids) {
-		lua_pushnumber(L, id);
+		lua_pushinteger(L, id);
 		lua_rawseti(L, -2, i++);
 	}
 
@@ -1336,57 +1341,69 @@ int ModApiMapgen::l_register_ore(lua_State *L)
 	BiomeManager *bmgr    = emerge->getWritableBiomeManager();
 	OreManager *oremgr    = emerge->getWritableOreManager();
 
-	enum OreType oretype = (OreType)getenumfield(L, index,
-				"ore_type", es_OreType, ORE_SCATTER);
-	Ore *ore = oremgr->create(oretype);
-	if (!ore) {
-		errorstream << "register_ore: ore_type " << oretype << " not implemented\n";
-		return 0;
+	int oretype_int;
+	std::string oretype_string = getstringfield_default(L, index, "ore_type", "nil");
+	if (!string_to_enum(es_OreType, oretype_int, oretype_string)) {
+		throw LuaError("register_ore: unknown oretype \"" + oretype_string + "\"");
 	}
+	enum OreType oretype = (OreType) oretype_int;
 
+	std::unique_ptr<Ore> ore(oremgr->create(oretype));
 	ore->name           = getstringfield_default(L, index, "name", "");
 	ore->ore_param2     = (u8)getintfield_default(L, index, "ore_param2", 0);
 	ore->clust_scarcity = getintfield_default(L, index, "clust_scarcity", 1);
 	ore->clust_num_ores = getintfield_default(L, index, "clust_num_ores", 1);
 	ore->clust_size     = getintfield_default(L, index, "clust_size", 0);
-	ore->noise          = NULL;
+	ore->noise          = nullptr;
 	ore->flags          = 0;
 
 	//// Get noise_threshold
-	warn_if_field_exists(L, index, "noise_threshhold",
-		"Deprecated: new name is \"noise_threshold\".");
-
-	float nthresh;
-	if (!getfloatfield(L, index, "noise_threshold", nthresh) &&
-			!getfloatfield(L, index, "noise_threshhold", nthresh))
-		nthresh = 0;
-	ore->nthresh = nthresh;
+	{
+		float nthresh;
+		if (getfloatfield(L, index, "noise_threshold", nthresh)) {
+		} else if (getfloatfield(L, index, "noise_threshhold", nthresh)) {
+			log_deprecated(L, "Field \"noise_threshhold\" on ore " + ore->name +
+					" is deprecated, use \"noise_threshold\" instead.", 2);
+		} else {
+			nthresh = 0;
+		}
+		ore->nthresh = nthresh;
+	}
 
 	//// Get y_min/y_max
-	warn_if_field_exists(L, index, "height_min",
-		"Deprecated: new name is \"y_min\".");
-	warn_if_field_exists(L, index, "height_max",
-		"Deprecated: new name is \"y_max\".");
 
-	int ymin, ymax;
-	if (!getintfield(L, index, "y_min", ymin) &&
-		!getintfield(L, index, "height_min", ymin))
-		ymin = -31000;
-	if (!getintfield(L, index, "y_max", ymax) &&
-		!getintfield(L, index, "height_max", ymax))
-		ymax = 31000;
-	ore->y_min = ymin;
-	ore->y_max = ymax;
+	{
+		int ymin;
+		if (getintfield(L, index, "y_min", ymin)) {
+		} else if (getintfield(L, index, "height_min", ymin)) {
+			log_deprecated(L, "Field \"height_min\" on ore " + ore->name +
+					" is deprecated, use \"y_min\" instead.", 2);
+		} else {
+			ymin = -31000;
+		}
+		ore->y_min = ymin;
+	}
+
+	{
+		int ymax;
+		if (getintfield(L, index, "y_max", ymax)) {
+		} else if (getintfield(L, index, "height_max", ymax)) {
+			log_deprecated(L, "Field \"height_max\" on ore " + ore->name +
+					" is deprecated, use \"y_max\" instead.", 2);
+		} else {
+			ymax = 31000;
+		}
+		ore->y_max = ymax;
+	}
 
 	if (ore->clust_scarcity <= 0 || ore->clust_num_ores <= 0) {
 		errorstream << "register_ore: clust_scarcity and clust_num_ores"
 			"must be greater than 0" << std::endl;
-		delete ore;
 		return 0;
 	}
 
 	//// Get flags
-	getflagsfield(L, index, "flags", flagdesc_ore, &ore->flags, NULL);
+	getflagsfield(L, index, "flags", flagdesc_ore, &ore->flags, nullptr);
 
 	//// Get biomes associated with this decoration (if any)
 	lua_getfield(L, index, "biomes");
@@ -1399,15 +1416,15 @@ int ModApiMapgen::l_register_ore(lua_State *L)
 	if (read_noiseparams(L, -1, &ore->np)) {
 		ore->flags |= OREFLAG_USE_NOISE;
 	} else if (ore->needs_noise) {
-		log_deprecated(L,
-			"register_ore: ore type requires 'noise_params' but it is not specified, falling back to defaults");
+		log_deprecated(L, "register_ore: ore type requires 'noise_params'"
+				" but it is not specified, falling back to defaults", 2);
 	}
 	lua_pop(L, 1);
 
 	//// Get type-specific parameters
 	switch (oretype) {
 		case ORE_SHEET: {
-			OreSheet *oresheet = (OreSheet *)ore;
+			OreSheet *oresheet = (OreSheet *)ore.get();
 
 			oresheet->column_height_min = getintfield_default(L, index,
 				"column_height_min", 1);
@@ -1419,7 +1436,7 @@ int ModApiMapgen::l_register_ore(lua_State *L)
 			break;
 		}
 		case ORE_PUFF: {
-			OrePuff *orepuff = (OrePuff *)ore;
+			OrePuff *orepuff = (OrePuff *)ore.get();
 
 			lua_getfield(L, index, "np_puff_top");
 			read_noiseparams(L, -1, &orepuff->np_puff_top);
@@ -1432,7 +1449,7 @@ int ModApiMapgen::l_register_ore(lua_State *L)
 			break;
 		}
 		case ORE_VEIN: {
-			OreVein *orevein = (OreVein *)ore;
+			OreVein *orevein = (OreVein *)ore.get();
 
 			orevein->random_factor = getfloatfield_default(L, index,
 				"random_factor", 1.f);
@@ -1440,7 +1457,7 @@ int ModApiMapgen::l_register_ore(lua_State *L)
 			break;
 		}
 		case ORE_STRATUM: {
-			OreStratum *orestratum = (OreStratum *)ore;
+			OreStratum *orestratum = (OreStratum *)ore.get();
 
 			lua_getfield(L, index, "np_stratum_thickness");
 			if (read_noiseparams(L, -1, &orestratum->np_stratum_thickness))
@@ -1456,9 +1473,8 @@ int ModApiMapgen::l_register_ore(lua_State *L)
 			break;
 	}
 
-	ObjDefHandle handle = oremgr->add(ore);
+	ObjDefHandle handle = oremgr->add(ore.get());
 	if (handle == OBJDEF_INVALID_HANDLE) {
-		delete ore;
 		return 0;
 	}
 
@@ -1467,7 +1483,10 @@ int ModApiMapgen::l_register_ore(lua_State *L)
 	size_t nnames = getstringlistfield(L, index, "wherein", &ore->m_nodenames);
 	ore->m_nnlistsizes.push_back(nnames);
 
-	ndef->pendNodeResolve(ore);
+	ndef->pendNodeResolve(ore.get());
+
+	// We passed ownership of the ore object to oremgr earlier.
+	ore.release();
 
 	lua_pushinteger(L, handle);
 	return 1;
@@ -1585,7 +1604,7 @@ int ModApiMapgen::l_generate_ores(lua_State *L)
 }
 
 
-// generate_decorations(vm, p1, p2)
+// generate_decorations(vm, p1, p2, use_mapgen_biomes)
 int ModApiMapgen::l_generate_decorations(lua_State *L)
 {
 	NO_MAP_LOCK_REQUIRED;
@@ -1595,26 +1614,56 @@ int ModApiMapgen::l_generate_decorations(lua_State *L)
 		return 0;
 
 	DecorationManager *decomgr;
-	if (auto mg = getMapgen(L))
+	Mapgen mg, *mgp = nullptr;
+	bool use_mapgen_biomes = readParam<bool>(L, 4, false);
+	MMVManip *oldvm = nullptr, *vm = checkObject<LuaVoxelManip>(L, 1)->vm;
+	if (auto mg = getMapgen(L)) {
 		decomgr = mg->m_emerge->decomgr;
-	else
+		if (use_mapgen_biomes) {
+			mgp = mg;
+			oldvm = mgp->vm;
+			if (!oldvm) {
+				goto no_vm;
+			}
+		}
+	} else {
+		if (use_mapgen_biomes) {
+			no_vm:
+			throw LuaError("use_mapgen_biomes specified outside a "
+				       "map generation context");
+		}
 		decomgr = emerge->decomgr;
+	}
+	if (!mgp) {
+		mgp = &mg;
+		// Intentionally truncates to s32, see Mapgen::Mapgen()
+		mg.seed = (s32)emerge->mgparams->seed;
+		mg.ndef = emerge->ndef;
+	}
 
-	Mapgen mg;
-	// Intentionally truncates to s32, see Mapgen::Mapgen()
-	mg.seed = (s32)emerge->mgparams->seed;
-	mg.vm   = checkObject<LuaVoxelManip>(L, 1)->vm;
-	mg.ndef = emerge->ndef;
-
-	v3s16 pmin = lua_istable(L, 2) ? check_v3s16(L, 2) :
-			mg.vm->m_area.MinEdge + v3s16(1,1,1) * MAP_BLOCKSIZE;
-	v3s16 pmax = lua_istable(L, 3) ? check_v3s16(L, 3) :
-			mg.vm->m_area.MaxEdge - v3s16(1,1,1) * MAP_BLOCKSIZE;
+	const v3s16 default_pmin = vm->m_area.MinEdge + MAP_BLOCKSIZE,
+				default_pmax = vm->m_area.MaxEdge - MAP_BLOCKSIZE;
+	v3s16 pmin = lua_istable(L, 2) ? check_v3s16(L, 2) : default_pmin;
+	v3s16 pmax = lua_istable(L, 3) ? check_v3s16(L, 3) : default_pmax;
 	sortBoxVerticies(pmin, pmax);
+	if (use_mapgen_biomes) {
+		assert(oldvm);
+		const v3s16 required_pmin = oldvm->m_area.MinEdge + MAP_BLOCKSIZE,
+			required_pmax = oldvm->m_area.MaxEdge - MAP_BLOCKSIZE;
+		if (pmin != required_pmin || pmax != required_pmax)
+			throw LuaError("use_mapgen_biomes requires extents matching chunk area");
+	}
 
 	u32 blockseed = Mapgen::getBlockSeed(pmin, mg.seed);
 
-	decomgr->placeAllDecos(&mg, blockseed, pmin, pmax);
+	mgp->vm = vm;
+	try {
+		decomgr->placeAllDecos(mgp, blockseed, pmin, pmax);
+	} catch (...) {
+		mgp->vm = oldvm;
+		throw;
+	}
+	mgp->vm = oldvm;
 
 	return 0;
 }
@@ -1623,14 +1672,13 @@ int ModApiMapgen::l_generate_decorations(lua_State *L)
 // create_schematic(p1, p2, probability_list, filename, y_slice_prob_list)
 int ModApiMapgen::l_create_schematic(lua_State *L)
 {
-	MAP_LOCK_REQUIRED;
+	GET_ENV_PTR;
 
 	const NodeDefManager *ndef = getServer(L)->getNodeDefManager();
 
 	const char *filename = luaL_checkstring(L, 4);
 	CHECK_SECURE_PATH(L, filename, true);
 
-	Map *map = &(getEnv(L)->getMap());
 	Schematic schem;
 
 	v3s16 p1 = check_v3s16(L, 1);
@@ -1668,7 +1716,7 @@ int ModApiMapgen::l_create_schematic(lua_State *L)
 		}
 	}
 
-	if (!schem.getSchematicFromMap(map, p1, p2)) {
+	if (!schem.getSchematicFromMap(&env->getMap(), p1, p2)) {
 		errorstream << "create_schematic: failed to get schematic "
 			"from map" << std::endl;
 		return 0;
@@ -1689,8 +1737,6 @@ int ModApiMapgen::l_create_schematic(lua_State *L)
 //     replacements, force_placement, flagstring)
 int ModApiMapgen::l_place_schematic(lua_State *L)
 {
-	MAP_LOCK_REQUIRED;
-
 	GET_ENV_PTR;
 
 	ServerMap *map = &(env->getServerMap());
@@ -1782,6 +1828,27 @@ int ModApiMapgen::l_place_schematic_on_vmanip(lua_State *L)
 		vm, p, flags, (Rotation)rot, force_placement);
 
 	lua_pushboolean(L, schematic_did_fit);
+	return 1;
+}
+
+// spawn_tree_on_vmanip(vmanip, pos, treedef)
+int ModApiMapgen::l_spawn_tree_on_vmanip(lua_State *L)
+{
+	NO_MAP_LOCK_REQUIRED;
+
+	MMVManip *vm = checkObject<LuaVoxelManip>(L, 1)->vm;
+	v3s16 p0 = read_v3s16(L, 2);
+	treegen::TreeDef tree_def;
+	const NodeDefManager *ndef = getGameDef(L)->ndef();
+	if (!read_tree_def(L, 3, ndef, tree_def))
+		return 0;
+
+	treegen::error e = treegen::make_ltree(*vm, p0, tree_def);
+	if (e != treegen::SUCCESS) {
+		throw LuaError("spawn_tree_on_vmanip(): " + treegen::error_to_string(e));
+	}
+
+	lua_pushboolean(L, true);
 	return 1;
 }
 
@@ -2010,6 +2077,7 @@ void ModApiMapgen::Initialize(lua_State *L, int top)
 	API_FCT(get_mapgen_params);
 	API_FCT(set_mapgen_params);
 	API_FCT(get_mapgen_edges);
+	API_FCT(get_mapgen_chunksize);
 	API_FCT(get_mapgen_setting);
 	API_FCT(set_mapgen_setting);
 	API_FCT(get_mapgen_setting_noiseparams);
@@ -2035,6 +2103,7 @@ void ModApiMapgen::Initialize(lua_State *L, int top)
 	API_FCT(create_schematic);
 	API_FCT(place_schematic);
 	API_FCT(place_schematic_on_vmanip);
+	API_FCT(spawn_tree_on_vmanip);
 	API_FCT(serialize_schematic);
 	API_FCT(read_schematic);
 }
@@ -2051,15 +2120,18 @@ void ModApiMapgen::InitializeEmerge(lua_State *L, int top)
 	API_FCT(get_seed);
 	API_FCT(get_mapgen_params);
 	API_FCT(get_mapgen_edges);
+	API_FCT(get_mapgen_chunksize);
 	API_FCT(get_mapgen_setting);
 	API_FCT(get_mapgen_setting_noiseparams);
 	API_FCT(get_noiseparams);
+	API_FCT(get_gen_notify);
 	API_FCT(get_decoration_id);
 	API_FCT(save_gen_notify);
 
 	API_FCT(generate_ores);
 	API_FCT(generate_decorations);
 	API_FCT(place_schematic_on_vmanip);
+	API_FCT(spawn_tree_on_vmanip);
 	API_FCT(serialize_schematic);
 	API_FCT(read_schematic);
 }

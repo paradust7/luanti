@@ -5,10 +5,7 @@
 #pragma once
 
 #include "SMaterial.h"
-#include "S3DVertex.h"
 
-namespace irr
-{
 namespace video
 {
 
@@ -77,4 +74,3 @@ public:
 };
 
 } // end namespace video
-} // end namespace irr

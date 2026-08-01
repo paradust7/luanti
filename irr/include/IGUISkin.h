@@ -9,49 +9,11 @@
 #include "SColor.h"
 #include "rect.h"
 
-namespace irr
-{
 namespace gui
 {
 class IGUIFont;
 class IGUISpriteBank;
 class IGUIElement;
-
-//! Enumeration of available default skins.
-/** To set one of the skins, use the following code, for example to set
-the Windows classic skin:
-\code
-gui::IGUISkin* newskin = environment->createSkin(gui::EGST_WINDOWS_CLASSIC);
-environment->setSkin(newskin);
-newskin->drop();
-\endcode
-*/
-enum EGUI_SKIN_TYPE
-{
-	//! Default windows look and feel
-	EGST_WINDOWS_CLASSIC = 0,
-
-	//! Like EGST_WINDOWS_CLASSIC, but with metallic shaded windows and buttons
-	EGST_WINDOWS_METALLIC,
-
-	//! Burning's skin
-	EGST_BURNING_SKIN,
-
-	//! An unknown skin, not serializable at present
-	EGST_UNKNOWN,
-
-	//! this value is not used, it only specifies the number of skin types
-	EGST_COUNT
-};
-
-//! Names for gui element types
-const c8 *const GUISkinTypeNames[EGST_COUNT + 1] = {
-		"windowsClassic",
-		"windowsMetallic",
-		"burning",
-		"unknown",
-		0,
-	};
 
 //! Enumeration for skin colors
 enum EGUI_DEFAULT_COLOR
@@ -370,10 +332,27 @@ const c8 *const GUISkinFontNames[EGDF_COUNT + 1] = {
 		0,
 	};
 
+enum EGUI_DEFAULT_BEHAVIOR {
+	//! Smooth scrolling
+	EGDB_SMOOTH_SCROLL,
+	//! Moves the slider instantly to the selected tray position
+	EGDB_SCOLLBAR_JUMP_TO_CLICKED,
+
+	//! value not used. count of enum values.
+	EGDB_COUNT
+};
+
+
 //! A skin modifies the look of the GUI elements.
 class IGUISkin : virtual public IReferenceCounted
 {
 public:
+	//! returns display density scaling factor
+	virtual float getScale() const = 0;
+
+	//! sets display density scaling factor
+	virtual void setScale(float scale) = 0;
+
 	//! returns default color
 	virtual video::SColor getColor(EGUI_DEFAULT_COLOR color) const = 0;
 
@@ -401,6 +380,9 @@ public:
 
 	//! sets a default font
 	virtual void setFont(IGUIFont *font, EGUI_DEFAULT_FONT which = EGDF_DEFAULT) = 0;
+
+	virtual s32  getBehavior(EGUI_DEFAULT_BEHAVIOR which) const = 0;
+	virtual void setBehavior(EGUI_DEFAULT_BEHAVIOR which, s32 value) = 0;
 
 	//! returns the sprite bank
 	virtual IGUISpriteBank *getSpriteBank() const = 0;
@@ -431,6 +413,10 @@ public:
 	virtual void draw3DButtonPaneStandard(IGUIElement *element,
 			const core::rect<s32> &rect,
 			const core::rect<s32> *clip = 0) = 0;
+	virtual void drawColored3DButtonPaneStandard(IGUIElement* element,
+			const core::rect<s32>& rect,
+			const core::rect<s32>* clip=0,
+			const video::SColor* colors=0) = 0;
 
 	//! draws a pressed 3d button pane
 	/** Used for drawing for example buttons in pressed state.
@@ -444,6 +430,10 @@ public:
 	virtual void draw3DButtonPanePressed(IGUIElement *element,
 			const core::rect<s32> &rect,
 			const core::rect<s32> *clip = 0) = 0;
+	virtual void drawColored3DButtonPanePressed(IGUIElement* element,
+			const core::rect<s32>& rect,
+			const core::rect<s32>* clip=0,
+			const video::SColor* colors=0) = 0;
 
 	//! draws a sunken 3d pane
 	/** Used for drawing the background of edit, combo or check boxes.
@@ -556,10 +546,6 @@ public:
 	If the pointer is null, no clipping will be performed. */
 	virtual void draw2DRectangle(IGUIElement *element, const video::SColor &color,
 			const core::rect<s32> &pos, const core::rect<s32> *clip = 0) = 0;
-
-	//! get the type of this skin
-	virtual EGUI_SKIN_TYPE getType() const { return EGST_UNKNOWN; }
 };
 
 } // end namespace gui
-} // end namespace irr

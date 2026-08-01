@@ -1,26 +1,13 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "test.h"
 
+#include <memory>
 #include "log.h"
 #include "settings.h"
+#include "network/address.h"
 #include "network/socket.h"
 
 class TestAddress : public TestBase
@@ -35,6 +22,7 @@ public:
 	void testBasic();
 	void testIsLocalhost();
 	void testResolve();
+	void testSerializeString();
 };
 
 static TestAddress g_test_instance;
@@ -44,6 +32,7 @@ void TestAddress::runTests(IGameDef *gamedef)
 	TEST(testBasic);
 	TEST(testIsLocalhost);
 	TEST(testResolve);
+	TEST(testSerializeString);
 }
 
 void TestAddress::testBasic()
@@ -116,4 +105,30 @@ void TestAddress::testResolve()
 		warningstream << "Couldn't verify Address::Resolve fallback (no IPv6?)"
 			<< std::endl;
 	}
+}
+
+void TestAddress::testSerializeString()
+{
+	// IPv4 tests
+	UASSERTEQ(auto, Address(127, 0, 0, 1, 0).serializeString(), "127.0.0.1");
+	UASSERTEQ(auto, Address(192, 168, 1, 1, 0).serializeString(), "192.168.1.1");
+	UASSERTEQ(auto, Address(0, 0, 0, 0, 0).serializeString(), "0.0.0.0");
+	UASSERTEQ(auto, Address(255, 255, 255, 255, 0).serializeString(), "255.255.255.255");
+
+	// IPv6 tests
+	auto ipv6Bytes = std::make_unique<IPv6AddressBytes>();
+	// ::1 (localhost)
+	std::vector<u8> ipv6RawAddr = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+	memcpy(ipv6Bytes->bytes, &ipv6RawAddr[0], 16);
+	UASSERTEQ(auto, Address(ipv6Bytes.get(), 0).serializeString(), "::1");
+
+	// :: (any)
+	ipv6RawAddr = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+	memcpy(ipv6Bytes->bytes, &ipv6RawAddr[0], 16);
+	UASSERTEQ(auto, Address(ipv6Bytes.get(), 0).serializeString(), "::");
+
+	// fe80::1 (link-local)
+	ipv6RawAddr = {0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+	memcpy(ipv6Bytes->bytes, &ipv6RawAddr[0], 16);
+	UASSERTEQ(auto, Address(ipv6Bytes.get(), 0).serializeString(), "fe80::1");
 }

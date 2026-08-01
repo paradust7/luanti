@@ -1,21 +1,6 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "cpp_api/s_node.h"
 #include "cpp_api/s_internal.h"
@@ -230,7 +215,7 @@ void ScriptApiNode::node_after_destruct(v3s16 p, MapNode node)
 	lua_pop(L, 1);  // Pop error handler
 }
 
-bool ScriptApiNode::node_on_timer(v3s16 p, MapNode node, f32 dtime)
+bool ScriptApiNode::node_on_timer(v3s16 p, MapNode node, f32 elapsed, f32 timeout)
 {
 	SCRIPTAPI_PRECHECKHEADER
 
@@ -244,10 +229,14 @@ bool ScriptApiNode::node_on_timer(v3s16 p, MapNode node, f32 dtime)
 
 	// Call function
 	push_v3s16(L, p);
-	lua_pushnumber(L,dtime);
-	PCALL_RES(lua_pcall(L, 2, 1, error_handler));
-	lua_remove(L, error_handler);
-	return readParam<bool>(L, -1, false);
+	lua_pushnumber(L, elapsed);
+	pushnode(L, node);
+	lua_pushnumber(L, timeout);
+	PCALL_RES(lua_pcall(L, 4, 1, error_handler));
+	bool ret = readParam<bool>(L, -1, false);
+	lua_pop(L, 2); // error handler, return value
+
+	return ret;
 }
 
 void ScriptApiNode::node_on_receive_fields(v3s16 p,

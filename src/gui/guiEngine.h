@@ -1,21 +1,6 @@
-/*
-Minetest
-Copyright (C) 2013 sapier
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 sapier
 
 #pragma once
 
@@ -24,10 +9,14 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 /******************************************************************************/
 #include "irrlichttypes.h"
 #include "guiFormSpecMenu.h"
+#include "statusTextHelper.h"
 #include "client/clouds.h"
 #include "client/sound.h"
 #include "util/enriched_string.h"
 #include "translation.h"
+
+#include <csignal>
+#include <memory>
 
 /******************************************************************************/
 /* Structs and macros                                                         */
@@ -53,7 +42,6 @@ struct image_definition {
 class GUIEngine;
 class RenderingEngine;
 class MainMenuScripting;
-class IWritableShaderSource;
 struct MainMenuData;
 
 /******************************************************************************/
@@ -77,10 +65,9 @@ public:
 	void gotText(const StringMap &fields);
 
 	/**
-	 * receive text/events transmitted by guiFormSpecMenu
-	 * @param text textual representation of event
+	 * Request a screenshot from the main menu
 	 */
-	void gotText(const std::wstring &text);
+	void requestScreenshot();
 
 private:
 	/** target to transmit data to */
@@ -145,7 +132,7 @@ public:
 			RenderingEngine *rendering_engine,
 			IMenuManager *menumgr,
 			MainMenuData *data,
-			bool &kill);
+			volatile std::sig_atomic_t &kill);
 
 	/** default destructor */
 	virtual ~GUIEngine();
@@ -164,6 +151,14 @@ public:
 	std::string getScriptDir()
 	{
 		return m_scriptdir;
+	}
+
+	/**
+	 * Request taking a screenshot on the next frame
+	 */
+	void requestScreenshot()
+	{
+		m_take_screenshot = true;
 	}
 
 	/**
@@ -203,8 +198,6 @@ private:
 	MainMenuData                         *m_data = nullptr;
 	/** texture source */
 	std::unique_ptr<ISimpleTextureSource> m_texture_source;
-	/** shader source */
-	std::unique_ptr<IWritableShaderSource> m_shader_source;
 	/** sound manager */
 	std::unique_ptr<ISoundManager>        m_sound_manager;
 
@@ -216,10 +209,13 @@ private:
 	irr_ptr<GUIFormSpecMenu>              m_menu;
 
 	/** reference to kill variable managed by SIGINT handler */
-	bool                                 &m_kill;
+	volatile std::sig_atomic_t           &m_kill;
 
 	/** variable used to abort menu and return back to main game handling */
 	bool                                  m_startgame = false;
+
+	/** flag to take a screenshot on next frame */
+	bool                                  m_take_screenshot = false;
 
 	/** scripting interface */
 	std::unique_ptr<MainMenuScripting>    m_script;
@@ -275,25 +271,21 @@ private:
 	void setTopleftText(const std::string &text);
 
 	/** pointer to gui element shown at topleft corner */
-	irr::gui::IGUIStaticText *m_irr_toplefttext = nullptr;
+	gui::IGUIStaticText *m_irr_toplefttext = nullptr;
 	/** and text that is in it */
 	EnrichedString m_toplefttext;
 
-	/** initialize cloud subsystem */
-	void cloudInit();
+	/** status message element for menu notifications */
+	std::unique_ptr<StatusTextHelper> m_status_text;
+
 	/** do preprocessing for cloud subsystem */
 	void drawClouds(float dtime);
 
-	/** internam data required for drawing clouds */
-	struct clouddata {
-		/** pointer to cloud class */
-		irr_ptr<Clouds> clouds;
-		/** camera required for drawing clouds */
-		scene::ICameraSceneNode *camera = nullptr;
-	};
-
 	/** is drawing of clouds enabled atm */
-	bool        m_clouds_enabled = true;
-	/** data used to draw clouds */
-	clouddata   m_cloud;
+	bool m_clouds_enabled = true;
+
+	void setMenuCloudsColor(video::SColor color);
+	void setMenuSkyColor(video::SColor color);
+
+	static void fullscreenChangedCallback(const std::string &name, void *data);
 };

@@ -1,42 +1,27 @@
-/*
-Minetest
-Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
-#include <iostream>
-#include <set>
+#include <list>
 #include <map>
+#include <ostream>
+#include <set>
+#include <unordered_map>
 
 #include "irrlichttypes_bloated.h"
-#include "mapblock.h"
+#include "mapblock.h" // for forEachNodeInArea
 #include "mapnode.h"
 #include "constants.h"
 #include "voxel.h"
 #include "modifiedstate.h"
-#include "util/numeric.h"
-#include "nodetimer.h"
-#include "debug.h"
+#include "util/numeric.h" // for forEachNodeInArea
 
 class MapSector;
 class NodeMetadata;
+class NodeTimer;
 class IGameDef;
-class IRollbackManager;
 
 /*
 	MapEditEvent
@@ -62,6 +47,9 @@ struct MapEditEvent
 	MapNode n = CONTENT_AIR;
 	std::vector<v3s16> modified_blocks; // Represents a set
 	bool is_private_change = false;
+	// Setting low_priority to true allows the server
+	// to send this change to clients with some delay.
+	bool low_priority = false;
 
 	MapEditEvent() = default;
 
@@ -73,7 +61,7 @@ struct MapEditEvent
 		modified_blocks.push_back(getNodeBlockPos(pos));
 	}
 
-	void setModifiedBlocks(const std::map<v3s16, MapBlock *> blocks)
+	void setModifiedBlocks(const std::map<v3s16, MapBlock *>& blocks)
 	{
 		assert(modified_blocks.empty()); // only meant for initialization (once)
 		modified_blocks.reserve(blocks.size());
@@ -94,7 +82,7 @@ struct MapEditEvent
 			VoxelArea a;
 			for (v3s16 p : modified_blocks) {
 				v3s16 np1 = p*MAP_BLOCKSIZE;
-				v3s16 np2 = np1 + v3s16(1,1,1)*MAP_BLOCKSIZE - v3s16(1,1,1);
+				v3s16 np2 = np1 + v3s16(MAP_BLOCKSIZE-1);
 				a.addPoint(np1);
 				a.addPoint(np2);
 			}
@@ -206,7 +194,7 @@ public:
 	// Deletes sectors and their blocks from memory
 	// Takes cache into account
 	// If deleted sector is in sector cache, clears cache
-	void deleteSectors(std::vector<v2s16> &list);
+	void deleteSectors(const std::vector<v2s16> &list);
 
 	// For debug printing. Prints "Map: ", "ServerMap: " or "ClientMap: "
 	virtual void PrintInfo(std::ostream &out);
@@ -313,27 +301,38 @@ protected:
 		u32 needed_count);
 };
 
-#define VMANIP_BLOCK_DATA_INEXIST     1
-#define VMANIP_BLOCK_CONTAINS_CIGNORE 2
-
 class MMVManip : public VoxelManipulator
 {
 public:
 	MMVManip(Map *map);
-	virtual ~MMVManip() = default;
+	~MMVManip() override;
+	DISABLE_CLASS_COPY(MMVManip)
 
-	virtual void clear()
-	{
-		VoxelManipulator::clear();
-		m_loaded_blocks.clear();
-	}
-
+	/*
+		Loads specified area from map and *adds* it to the area already
+		contained in the VManip.
+	*/
 	void initialEmerge(v3s16 blockpos_min, v3s16 blockpos_max,
 		bool load_if_inexistent = true);
 
-	// This is much faster with big chunks of generated data
+	/**
+		Uses the flags array to determine which blocks the VManip covers,
+		and for which of them we have any data.
+		@warning requires VManip area to be block-aligned
+		@return map of blockpos -> any data?
+	*/
+	std::map<v3s16, bool> getCoveredBlocks() const;
+
+	/**
+		Writes data in VManip back to the map. Blocks without any data in the VManip
+		are skipped.
+		@note VOXELFLAG_NO_DATA is checked per-block, not per-node. So you need
+		to ensure that the relevant parts of m_data are initialized.
+		@param modified_blocks output array of touched blocks (optional)
+		@param overwrite_generated if false, blocks marked as generate in the map are not changed
+	*/
 	void blitBackAll(std::map<v3s16, MapBlock*> * modified_blocks,
-		bool overwrite_generated = true);
+		bool overwrite_generated = true) const;
 
 	/*
 		Creates a copy of this VManip including contents, the copy will not be
@@ -347,6 +346,10 @@ public:
 	// Is it impossible to call initialEmerge / blitBackAll?
 	inline bool isOrphan() const { return !m_map; }
 
+	std::list<MMVManip **>::iterator addTrackedRef(MMVManip **ref_ref);
+
+	void removeTrackedRef(std::list<MMVManip **>::iterator it);
+
 	bool m_is_dirty = false;
 
 protected:
@@ -354,9 +357,8 @@ protected:
 
 	// may be null
 	Map *m_map = nullptr;
-	/*
-		key = blockpos
-		value = flags describing the block
-	*/
-	std::map<v3s16, u8> m_loaded_blocks;
+
+private:
+	// references to this that need to be cleared on destruction
+	std::list<MMVManip **> m_tracked_refs;
 };

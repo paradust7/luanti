@@ -4,10 +4,6 @@
 
 #pragma once
 
-#include "irrTypes.h"
-
-namespace irr
-{
 namespace video
 {
 enum E_INDEX_TYPE
@@ -17,4 +13,3 @@ enum E_INDEX_TYPE
 };
 
 } // end namespace video
-} // end namespace irr

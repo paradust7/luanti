@@ -13,8 +13,6 @@
 #include "COpenGLCoreTexture.h"
 #include "COpenGLCoreCacheHandler.h"
 
-namespace irr
-{
 namespace video
 {
 
@@ -22,13 +20,9 @@ COpenGL3Renderer2D::COpenGL3Renderer2D(const c8 *vertexShaderProgram, const c8 *
 		COpenGL3MaterialRenderer(driver, 0, EMT_SOLID),
 		WithTexture(withTexture)
 {
-#ifdef _DEBUG
-	setDebugName("Renderer2D");
-#endif
-
 	int Temp = 0;
-
-	init(Temp, vertexShaderProgram, pixelShaderProgram, false);
+	init(Temp, vertexShaderProgram, pixelShaderProgram,
+		withTexture ? "2DTexture" : "2DNoTexture", false);
 
 	COpenGL3CacheHandler *cacheHandler = Driver->getCacheHandler();
 
@@ -36,6 +30,7 @@ COpenGL3Renderer2D::COpenGL3Renderer2D(const c8 *vertexShaderProgram, const c8 *
 
 	// These states don't change later.
 
+	ProjectionID = getPixelShaderConstantID("uProjection");
 	ThicknessID = getPixelShaderConstantID("uThickness");
 	if (WithTexture) {
 		TextureUsageID = getPixelShaderConstantID("uTextureUsage");
@@ -66,6 +61,17 @@ void COpenGL3Renderer2D::OnSetMaterial(const video::SMaterial &material,
 	f32 Thickness = (material.Thickness > 0.f) ? material.Thickness : 1.f;
 	setPixelShaderConstant(ThicknessID, &Thickness, 1);
 
+	{
+		// Update projection matrix
+		const core::dimension2d<u32> renderTargetSize = Driver->getCurrentRenderTargetSize();
+		core::matrix4 proj;
+		float xInv2 = 2.0f / renderTargetSize.Width;
+		float yInv2 = 2.0f / renderTargetSize.Height;
+		proj.setScale({ xInv2, -yInv2, 0.0f });
+		proj.setTranslation({ -1.0f, 1.0f, 0.0f });
+		setPixelShaderConstant(ProjectionID, proj.pointer(), 4 * 4);
+	}
+
 	if (WithTexture) {
 		s32 TextureUsage = material.TextureLayers[0].Texture ? 1 : 0;
 		setPixelShaderConstant(TextureUsageID, &TextureUsage, 1);
@@ -77,5 +83,4 @@ bool COpenGL3Renderer2D::OnRender(IMaterialRendererServices *service, E_VERTEX_T
 	return true;
 }
 
-}
 }

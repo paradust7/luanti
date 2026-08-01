@@ -1,10 +1,10 @@
 #pragma once
 
-#include "irrlichttypes_extrabloated.h"
 #include <algorithm>
-#include <string>
+#include <IGUIElement.h>
+#include <IGUIEnvironment.h>
 
-class ISimpleTextureSource;
+
 
 class GUIAnimatedImage : public gui::IGUIElement {
 public:

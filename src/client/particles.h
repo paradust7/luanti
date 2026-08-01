@@ -1,29 +1,25 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
+#include "irrlichttypes_bloated.h"
+#include "irr_ptr.h"
+#include "ISceneNode.h"
+#include "S3DVertex.h"
+#include "CMeshBuffer.h"
+
+#include <mutex>
+#include <memory>
 #include <vector>
 #include <unordered_map>
-#include "irrlichttypes_extrabloated.h"
-#include "irr_ptr.h"
 #include "../particles.h"
+#include "util/numeric.h"
+
+namespace video {
+	class ITexture;
+}
 
 struct ClientEvent;
 class ParticleManager;
@@ -91,6 +87,9 @@ public:
 	ParticleSpawner *getParent() const { return m_parent; }
 
 	const ClientParticleTexRef &getTextureRef() const { return m_texture; }
+
+	ParticleParamTypes::BlendMode getBlendMode() const
+	{ return m_texture.tex ? m_texture.tex->blendmode : m_p.texture.blendmode; }
 
 	ParticleBuffer *getBuffer() const { return m_buffer; }
 	bool attachToBuffer(ParticleBuffer *buffer);
@@ -221,11 +220,11 @@ public:
 	void handleParticleEvent(ClientEvent *event, Client *client,
 			LocalPlayer *player);
 
-	void addDiggingParticles(IGameDef *gamedef, LocalPlayer *player, v3s16 pos,
-		const MapNode &n, const ContentFeatures &f);
+	void addDiggingParticles(LocalPlayer *player, v3s16 pos,
+		const MapNode &n);
 
-	void addNodeParticle(IGameDef *gamedef, LocalPlayer *player, v3s16 pos,
-		const MapNode &n, const ContentFeatures &f);
+	void addNodeParticle(LocalPlayer *player, v3s16 pos,
+		const MapNode &n);
 
 	void reserveParticleSpace(size_t max_estimate);
 
@@ -242,11 +241,11 @@ public:
 	}
 
 protected:
-	static bool getNodeParticleParams(const MapNode &n, const ContentFeatures &f,
+	static bool getNodeParticleParams(Client *client, const MapNode &n,
 		ParticleParameters &p, video::ITexture **texture, v2f &texpos,
 		v2f &texsize, video::SColor *color, u8 tilenum = 0);
 
-	static video::SMaterial getMaterialForParticle(const ClientParticleTexRef &texture);
+	static video::SMaterial getMaterialForParticle(const Particle *texture);
 
 	bool addParticle(std::unique_ptr<Particle> toadd);
 

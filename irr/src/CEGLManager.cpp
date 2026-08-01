@@ -10,19 +10,13 @@
 #include "irrArray.h"
 #include "os.h"
 
-namespace irr
-{
 namespace video
 {
 
 CEGLManager::CEGLManager() :
 		IContextManager(), EglWindow(0), EglDisplay(EGL_NO_DISPLAY),
 		EglSurface(EGL_NO_SURFACE), EglContext(EGL_NO_CONTEXT), EglConfig(0), MajorVersion(0), MinorVersion(0)
-{
-#ifdef _DEBUG
-	setDebugName("CEGLManager");
-#endif
-}
+{}
 
 CEGLManager::~CEGLManager()
 {
@@ -41,18 +35,8 @@ bool CEGLManager::initialize(const SIrrlichtCreationParameters &params, const SE
 		return true;
 
 		// Window is depend on platform.
-#if defined(_IRR_COMPILE_WITH_WINDOWS_DEVICE_)
-	EglWindow = (NativeWindowType)Data.OpenGLWin32.HWnd;
-	Data.OpenGLWin32.HDc = GetDC((HWND)EglWindow);
-	EglDisplay = eglGetDisplay((NativeDisplayType)Data.OpenGLWin32.HDc);
-#elif defined(_IRR_EMSCRIPTEN_PLATFORM_)
+#if defined(_IRR_EMSCRIPTEN_PLATFORM_)
 	EglWindow = 0;
-	EglDisplay = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-#elif defined(_IRR_COMPILE_WITH_X11_DEVICE_)
-	EglWindow = (NativeWindowType)Data.OpenGLLinux.X11Window;
-	EglDisplay = eglGetDisplay((NativeDisplayType)Data.OpenGLLinux.X11Display);
-#elif defined(_IRR_COMPILE_WITH_FB_DEVICE_)
-	EglWindow = (NativeWindowType)Data.OpenGLFB.Window;
 	EglDisplay = eglGetDisplay(EGL_DEFAULT_DISPLAY);
 #endif
 
@@ -88,13 +72,6 @@ void CEGLManager::terminate()
 		eglTerminate(EglDisplay);
 		EglDisplay = EGL_NO_DISPLAY;
 	}
-
-#if defined(_IRR_COMPILE_WITH_WINDOWS_DEVICE_)
-	if (Data.OpenGLWin32.HDc) {
-		ReleaseDC((HWND)EglWindow, (HDC)Data.OpenGLWin32.HDc);
-		Data.OpenGLWin32.HDc = 0;
-	}
-#endif
 
 	MajorVersion = 0;
 	MinorVersion = 0;
@@ -152,9 +129,6 @@ EGLConfig CEGLManager::chooseConfig(EConfigStyle confStyle)
 	// Find proper OpenGL BIT.
 	EGLint eglOpenGLBIT = 0;
 	switch (Params.DriverType) {
-	case EDT_OGLES1:
-		eglOpenGLBIT = EGL_OPENGL_ES_BIT;
-		break;
 	case EDT_OGLES2:
 	case EDT_WEBGL1:
 		eglOpenGLBIT = EGL_OPENGL_ES2_BIT;
@@ -304,7 +278,7 @@ EGLConfig CEGLManager::chooseConfig(EConfigStyle confStyle)
 	return configResult;
 }
 
-irr::s32 CEGLManager::rateConfig(EGLConfig config, EGLint eglOpenGLBIT, bool log)
+s32 CEGLManager::rateConfig(EGLConfig config, EGLint eglOpenGLBIT, bool log)
 {
 	// some values must be there or we ignore the config
 #ifdef EGL_VERSION_1_3
@@ -459,9 +433,6 @@ bool CEGLManager::generateContext()
 	EGLint OpenGLESVersion = 0;
 
 	switch (Params.DriverType) {
-	case EDT_OGLES1:
-		OpenGLESVersion = 1;
-		break;
 	case EDT_OGLES2:
 	case EDT_WEBGL1:
 		OpenGLESVersion = 2;
@@ -529,7 +500,8 @@ bool CEGLManager::swapBuffers()
 
 bool CEGLManager::testEGLError()
 {
-#if defined(EGL_VERSION_1_0) && defined(_DEBUG)
+	if (!Params.DriverDebug)
+		return false;
 	EGLint status = eglGetError();
 
 	switch (status) {
@@ -582,12 +554,8 @@ bool CEGLManager::testEGLError()
 	};
 
 	return true;
-#else
-	return false;
-#endif
 }
 
-}
 }
 
 #endif

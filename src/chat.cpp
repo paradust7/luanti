@@ -1,30 +1,13 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "chat.h"
 
 #include <algorithm>
-#include <cctype>
-#include <sstream>
 
-#include "config.h"
 #include "debug.h"
+#include "settings.h"
 #include "util/strfnd.h"
 #include "util/string.h"
 #include "util/numeric.h"
@@ -48,7 +31,7 @@ ChatBuffer::ChatBuffer(u32 scrollback):
 	}
 }
 
-void ChatBuffer::addLine(const std::wstring &name, const std::wstring &text)
+void ChatBuffer::addLine(const EnrichedString &name, const EnrichedString &text)
 {
 	m_lines_modified = true;
 
@@ -374,6 +357,13 @@ u32 ChatBuffer::formatChatLine(const ChatLine &line, u32 cols,
 						delim_chars.find(tempchar) == std::wstring::npos) {
 					++frag_length;
 					tempchar = linestring[in_pos+frag_length];
+				}
+
+				// Remove tailing punctuation characters
+				static const std::wstring tailing_chars = L",.";
+				tempchar = linestring[in_pos+frag_length - 1];
+				if (tailing_chars.find(tempchar) != std::wstring::npos) {
+					frag_length--;
 				}
 
 				space_pos = frag_length - 1;
@@ -784,13 +774,15 @@ ChatBackend::ChatBackend():
 void ChatBackend::addMessage(const std::wstring &name, std::wstring text)
 {
 	// Note: A message may consist of multiple lines, for example the MOTD.
-	text = translate_string(text);
-	WStrfnd fnd(text);
-	while (!fnd.at_end())
-	{
-		std::wstring line = fnd.next(L"\n");
-		m_console_buffer.addLine(name, line);
-		m_recent_buffer.addLine(name, line);
+	EnrichedString ename(name);
+	EnrichedString etext(text);
+
+	size_t str_pos = 0;
+	while (str_pos < etext.size()) {
+		EnrichedString line = etext.getNextLine(&str_pos);
+
+		m_console_buffer.addLine(ename, line);
+		m_recent_buffer.addLine(ename, line);
 	}
 }
 

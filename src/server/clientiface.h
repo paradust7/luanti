@@ -1,45 +1,29 @@
-/*
-Minetest
-Copyright (C) 2010-2014 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2014 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
 #include "irr_v3d.h"                   // for irrlicht datatypes
 
-#include "constants.h"
-#include "serialization.h"             // for SER_FMT_VER_INVALID
-#include "network/networkpacket.h"
-#include "network/networkprotocol.h"
 #include "network/address.h"
-#include "porting.h"
+#include "network/networkprotocol.h" // session_t
 #include "threading/mutex_auto_lock.h"
 #include "clientdynamicinfo.h"
+#include "constants.h" // PEER_ID_INEXISTENT
 
-#include <list>
-#include <vector>
-#include <set>
-#include <unordered_set>
 #include <memory>
 #include <mutex>
+#include <set>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
-class MapBlock;
-class ServerEnvironment;
 class EmergeManager;
+class MapBlock;
+class NetworkPacket;
+class ServerEnvironment;
 
 /*
  * State Transitions
@@ -126,7 +110,7 @@ class EmergeManager;
 | TOCLIENT_INVENTORY          |                |                 |                     |
 | TOCLIENT_HP (opt)           |                \-----------------/                     |
 | TOCLIENT_BREATH             |                                                        |
-| TOCLIENT_DEATHSCREEN        |                                                        |
+| TOCLIENT_DEATHSCREEN_LEGACY |                                                        |
 +-----------------------------+                                                        |
               |                                                                        |
               v                                                                        |
@@ -168,7 +152,7 @@ class EmergeManager;
 
 */
 namespace con {
-	class Connection;
+	class IConnection;
 }
 
 
@@ -233,7 +217,7 @@ public:
 	//       Also, the client must be moved to some other container.
 	session_t peer_id = PEER_ID_INEXISTENT;
 	// The serialization version to use with the client
-	u8 serialization_version = SER_FMT_VER_INVALID;
+	u8 serialization_version;
 	//
 	u16 net_proto_version = 0;
 
@@ -266,8 +250,8 @@ public:
 
 	void SentBlock(v3s16 p);
 
-	void SetBlockNotSent(v3s16 p);
-	void SetBlocksNotSent(const std::vector<v3s16> &blocks);
+	void SetBlockNotSent(v3s16 p, bool low_priority = false);
+	void SetBlocksNotSent(const std::vector<v3s16> &blocks, bool low_priority = false);
 
 	/**
 	 * tell client about this block being modified right now.
@@ -291,12 +275,12 @@ public:
 
 	void PrintInfo(std::ostream &o)
 	{
-		o<<"RemoteClient "<<peer_id<<": "
-				<<"m_blocks_sent.size()="<<m_blocks_sent.size()
-				<<", m_blocks_sending.size()="<<m_blocks_sending.size()
-				<<", m_nearest_unsent_d="<<m_nearest_unsent_d
-				<<", m_excess_gotblocks="<<m_excess_gotblocks
-				<<std::endl;
+		o << "RemoteClient " << peer_id << ": "
+			<<"blocks_sent=" << m_blocks_sent.size()
+			<<", blocks_sending=" << m_blocks_sending.size()
+			<<", nearest_unsent_d=" << m_nearest_unsent_d
+			<<", map_send_completion_timer=" << (int)(m_map_send_completion_timer + 0.5f)
+			<<", excess_gotblocks=" << m_excess_gotblocks;
 		m_excess_gotblocks = 0;
 	}
 
@@ -321,14 +305,11 @@ public:
 	void setPendingSerializationVersion(u8 version)
 		{ m_pending_serialization_version = version; }
 
-	void setDeployedCompressionMode(u16 byteFlag)
-		{ m_deployed_compression = byteFlag; }
-
 	void confirmSerializationVersion()
 		{ serialization_version = m_pending_serialization_version; }
 
 	/* get uptime */
-	u64 uptime() const { return porting::getTimeS() - m_connection_time; }
+	u64 uptime() const;
 
 	/* set version information */
 	void setVersionInfo(u8 major, u8 minor, u8 patch, const std::string &full);
@@ -350,7 +331,7 @@ public:
 
 private:
 	// Version is stored in here after INIT before INIT2
-	u8 m_pending_serialization_version = SER_FMT_VER_INVALID;
+	u8 m_pending_serialization_version;
 
 	/* current state of client */
 	ClientState m_state = CS_Created;
@@ -406,19 +387,8 @@ private:
 		- The size of this list is limited to some value
 		Block is added when it is sent with BLOCKDATA.
 		Block is removed when GOTBLOCKS is received.
-		Value is time from sending. (not used at the moment)
 	*/
-	std::unordered_map<v3s16, float> m_blocks_sending;
-
-	/*
-		Blocks that have been modified since blocks were
-		sent to the client last (getNextBlocks()).
-		This is used to reset the unsent distance, so that
-		modified blocks are resent to the client.
-
-		List of block positions.
-	*/
-	std::unordered_set<v3s16> m_blocks_modified;
+	std::unordered_set<v3s16> m_blocks_sending;
 
 	/*
 		Count of excess GotBlocks().
@@ -449,12 +419,10 @@ private:
 
 	std::string m_full_version = "unknown";
 
-	u16 m_deployed_compression = 0;
-
 	/*
 		time this client was created
 	 */
-	const u64 m_connection_time = porting::getTimeS();
+	const u64 m_connection_time;
 };
 
 typedef std::unordered_map<u16, RemoteClient*> RemoteClientMap;
@@ -464,7 +432,7 @@ public:
 
 	friend class Server;
 
-	ClientInterface(const std::shared_ptr<con::Connection> &con);
+	ClientInterface(const std::shared_ptr<con::IConnection> &con);
 	~ClientInterface();
 
 	/* run sync step */
@@ -474,9 +442,9 @@ public:
 	std::vector<session_t> getClientIDs(ClientState min_state=CS_Active);
 
 	/* mark blocks as not sent on all active clients */
-	void markBlocksNotSent(const std::vector<v3s16> &positions);
+	void markBlocksNotSent(const std::vector<v3s16> &positions, bool low_priority = false);
 
-	/* verify is server user limit was reached */
+	/* verify if server user limit was reached */
 	bool isUserLimitReached();
 
 	/* get list of client player names */
@@ -489,7 +457,7 @@ public:
 	void sendCustom(session_t peer_id, u8 channel, NetworkPacket *pkt, bool reliable);
 
 	/* send to all clients */
-	void sendToAll(NetworkPacket *pkt);
+	void sendToAll(NetworkPacket *pkt, ClientState state_min = CS_Active);
 
 	/* delete a client */
 	void DeleteClient(session_t peer_id);
@@ -506,15 +474,8 @@ public:
 	/* get state of client by id*/
 	ClientState getClientState(session_t peer_id);
 
-	/* set client playername */
-	void setPlayerName(session_t peer_id, const std::string &name);
-
 	/* get protocol version of client */
 	u16 getProtocolVersion(session_t peer_id);
-
-	/* set client version */
-	void setClientVersion(session_t peer_id, u8 major, u8 minor, u8 patch,
-			const std::string &full);
 
 	/* event to update client state */
 	void event(session_t peer_id, ClientStateEvent event);
@@ -526,7 +487,8 @@ public:
 		m_env = env;
 	}
 
-	static std::string state2Name(ClientState state);
+	static const char *state2Name(ClientState state);
+
 protected:
 	class AutoLock {
 	public:
@@ -543,19 +505,25 @@ private:
 	void UpdatePlayerList();
 
 	// Connection
-	std::shared_ptr<con::Connection> m_con;
+	std::shared_ptr<con::IConnection> m_con;
+
+	// FIXME?: as far as I can tell this lock is pointless because only the server
+	// thread ever touches the clients. Consider how getClientNoEx() returns
+	// a raw pointer too.
 	std::recursive_mutex m_clients_mutex;
-	// Connected clients (behind the con mutex)
+	// Connected clients (behind the mutex)
 	RemoteClientMap m_clients;
-	std::vector<std::string> m_clients_names; //for announcing masterserver
+	std::vector<std::string> m_clients_names; // for announcing to server list
 
 	// Environment
-	ServerEnvironment *m_env;
+	ServerEnvironment *m_env = nullptr;
 
 	float m_print_info_timer = 0;
 	float m_check_linger_timer = 0;
 
 	static const char *statenames[];
 
-	static constexpr int LINGER_TIMEOUT = 10;
+	// Note that this puts a fixed timeout on the init & auth phase for a client.
+	// (lingering is enforced until CS_InitDone)
+	static constexpr int LINGER_TIMEOUT = 12;
 };

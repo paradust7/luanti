@@ -1,32 +1,18 @@
-/*
-Minetest
-Copyright (C) 2019 rubenwardy
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2019 rubenwardy
 
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+#pragma once
 
 #include "client/texturesource.h"
 #include "client/fontengine.h"
 #include "debug.h"
-#include "irrlichttypes_extrabloated.h"
+#include "irrlichttypes_bloated.h"
 #include "util/string.h"
 #include <algorithm>
 #include <array>
 #include <vector>
 
-#pragma once
 
 class StyleSpec
 {
@@ -250,25 +236,25 @@ public:
 		return def;
 	}
 
-	irr::core::rect<s32> getRect(Property prop, irr::core::rect<s32> def) const
+	core::rect<s32> getRect(Property prop, core::rect<s32> def) const
 	{
 		const auto &val = properties[prop];
 		if (val.empty())
 			return def;
 
-		irr::core::rect<s32> rect;
+		core::rect<s32> rect;
 		if (!parseRect(val, &rect))
 			return def;
 
 		return rect;
 	}
 
-	irr::core::rect<s32> getRect(Property prop) const
+	core::rect<s32> getRect(Property prop) const
 	{
 		const auto &val = properties[prop];
 		FATAL_ERROR_IF(val.empty(), "Unexpected missing property");
 
-		irr::core::rect<s32> rect;
+		core::rect<s32> rect;
 		parseRect(val, &rect);
 		return rect;
 	}
@@ -330,6 +316,8 @@ public:
 				spec.bold = true;
 			else if (modes[i] == "italic")
 				spec.italic = true;
+			else if (modes[i] == "_no_server_media") // for internal use only
+				spec.allow_server_media = false;
 		}
 
 		if (!size.empty()) {
@@ -428,25 +416,25 @@ private:
 		return true;
 	}
 
-	bool parseRect(const std::string &value, irr::core::rect<s32> *parsed_rect) const
+	bool parseRect(const std::string &value, core::rect<s32> *parsed_rect) const
 	{
-		irr::core::rect<s32> rect;
+		core::rect<s32> rect;
 		std::vector<std::string> v_rect = split(value, ',');
 
 		if (v_rect.size() == 1) {
 			s32 x = stoi(v_rect[0]);
-			rect.UpperLeftCorner = irr::core::vector2di(x, x);
-			rect.LowerRightCorner = irr::core::vector2di(-x, -x);
+			rect.UpperLeftCorner = core::vector2di(x, x);
+			rect.LowerRightCorner = core::vector2di(-x, -x);
 		} else if (v_rect.size() == 2) {
 			s32 x = stoi(v_rect[0]);
 			s32 y =	stoi(v_rect[1]);
-			rect.UpperLeftCorner = irr::core::vector2di(x, y);
-			rect.LowerRightCorner = irr::core::vector2di(-x, -y);
+			rect.UpperLeftCorner = core::vector2di(x, y);
+			rect.LowerRightCorner = core::vector2di(-x, -y);
 			// `-x` is interpreted as `w - x`
 		} else if (v_rect.size() == 4) {
-			rect.UpperLeftCorner = irr::core::vector2di(
+			rect.UpperLeftCorner = core::vector2di(
 					stoi(v_rect[0]), stoi(v_rect[1]));
-			rect.LowerRightCorner = irr::core::vector2di(
+			rect.LowerRightCorner = core::vector2di(
 					stoi(v_rect[2]), stoi(v_rect[3]));
 		} else {
 			warningstream << "Invalid rectangle string format: \"" << value

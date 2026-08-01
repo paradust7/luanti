@@ -1,26 +1,13 @@
-/*
-Minetest
-Copyright (C) 2022 x2048, Dmitry Kostenko <codeforsmile@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2022 x2048, Dmitry Kostenko <codeforsmile@gmail.com>
 
 #include "pipeline.h"
 #include "client/client.h"
 #include "client/hud.h"
+#include "gettext.h"
 #include "IRenderTarget.h"
+#include "SColor.h"
 
 #include <vector>
 #include <memory>
@@ -41,7 +28,7 @@ video::ITexture *TextureBuffer::getTexture(u8 index)
 }
 
 
-void TextureBuffer::setTexture(u8 index, core::dimension2du size, const std::string &name, video::ECOLOR_FORMAT format, bool clear)
+void TextureBuffer::setTexture(u8 index, core::dimension2du size, const std::string &name, video::ECOLOR_FORMAT format, bool clear, u8 msaa)
 {
 	assert(index != NO_DEPTH_TEXTURE);
 
@@ -56,9 +43,10 @@ void TextureBuffer::setTexture(u8 index, core::dimension2du size, const std::str
 	definition.name = name;
 	definition.format = format;
 	definition.clear = clear;
+	definition.msaa = msaa;
 }
 
-void TextureBuffer::setTexture(u8 index, v2f scale_factor, const std::string &name, video::ECOLOR_FORMAT format, bool clear)
+void TextureBuffer::setTexture(u8 index, v2f scale_factor, const std::string &name, video::ECOLOR_FORMAT format, bool clear, u8 msaa)
 {
 	assert(index != NO_DEPTH_TEXTURE);
 
@@ -73,6 +61,7 @@ void TextureBuffer::setTexture(u8 index, v2f scale_factor, const std::string &na
 	definition.name = name;
 	definition.format = format;
 	definition.clear = clear;
+	definition.msaa = msaa;
 }
 
 void TextureBuffer::reset(PipelineContext &context)
@@ -96,8 +85,13 @@ void TextureBuffer::reset(PipelineContext &context)
 	// change textures to match definitions
 	for (u32 i = 0; i < m_definitions.size(); i++) {
 		video::ITexture **ptr = &m_textures[i];
-
 		ensureTexture(ptr, m_definitions[i], context);
+		if (m_definitions[i].valid && !*ptr) {
+			throw ShaderException(
+				fmtgettext("Failed to create the texture \"%s\" for the rendering pipeline.",
+					m_definitions[i].name.c_str()) +
+				strgettext("\nCheck debug.txt for details."));
+		}
 		m_definitions[i].dirty = false;
 	}
 
@@ -135,23 +129,45 @@ bool TextureBuffer::ensureTexture(video::ITexture **texture, const TextureDefini
 	if (!modify)
 		return false;
 
-	if (*texture)
+	if (*texture) {
 		m_driver->removeTexture(*texture);
+		*texture = nullptr;
+	}
 
 	if (definition.valid) {
-		if (definition.clear) {
-			video::IImage *image = m_driver->createImage(definition.format, size);
-			// Cannot use image->fill because it's not implemented for all formats.
-			std::memset(image->getData(), 0, image->getDataSizeFromFormat(definition.format, size.Width, size.Height));
-			*texture = m_driver->addTexture(definition.name.c_str(), image);
-			image->drop();
+		if (!m_driver->queryTextureFormat(definition.format)) {
+			errorstream << "Failed to create texture \"" << definition.name
+				<< "\": unsupported format " << video::ColorFormatName(definition.format)
+				<< std::endl;
+			return false;
 		}
-		else {
+
+		const core::dimension2du max_size = m_driver->getMaxTextureSize();
+		if (size.Width > max_size.Width || size.Height > max_size.Height) {
+			errorstream << "Failed to create texture \"" << definition.name
+				<< "\": exceeds limit " << size.Width << "x" << size.Height
+				<< std::endl;
+			return false;
+		}
+
+		if (definition.clear) {
+			// We're not able to clear a render target texture
+			// We're not able to create a normal texture with MSAA
+			// (could be solved by more refactoring in Irrlicht, but not needed for now)
+			sanity_check(definition.msaa < 1);
+
+			*texture = m_driver->addTexture(size, definition.name.c_str(), definition.format);
+		} else if (definition.msaa > 0) {
+			*texture = m_driver->addRenderTargetTextureMs(size, definition.msaa, definition.name.c_str(), definition.format);
+		} else {
 			*texture = m_driver->addRenderTargetTexture(size, definition.name.c_str(), definition.format);
 		}
-	}
-	else {
-		*texture = nullptr;
+
+		if (!*texture) {
+			errorstream << "Failed to create texture \"" << definition.name
+				<< "\"" << std::endl;
+			return false;
+		}
 	}
 
 	return true;
@@ -192,23 +208,24 @@ void TextureBufferOutput::activate(PipelineContext &context)
 			size = texture->getSize();
 	}
 
-	// Use legacy call when there's single texture without depth texture
-	// This binds default depth buffer to the FBO
-	if (textures.size() == 1 && depth_stencil == NO_DEPTH_TEXTURE) {
-		driver->setRenderTarget(textures[0], m_clear, m_clear, context.clear_color);
-		return;
-	}
-
 	video::ITexture *depth_texture = nullptr;
 	if (depth_stencil != NO_DEPTH_TEXTURE)
 		depth_texture = buffer->getTexture(depth_stencil);
 
-	render_target->setTexture(textures, depth_texture);
+	if (render_target) {
+		render_target->setTexture(textures, depth_texture);
 
-	driver->setRenderTargetEx(render_target, m_clear ? video::ECBF_ALL : video::ECBF_NONE, context.clear_color);
-	driver->OnResize(size);
+		driver->setRenderTargetEx(render_target, m_clear ? video::ECBF_ALL : video::ECBF_NONE, context.clear_color);
+		driver->OnResize(size);
+	}
 
 	RenderTarget::activate(context);
+}
+
+video::IRenderTarget *TextureBufferOutput::getIrrRenderTarget(PipelineContext &context)
+{
+	activate(context); // Needed to make sure that render_target is set up.
+	return render_target;
 }
 
 u8 DynamicSource::getTextureCount()
@@ -226,7 +243,7 @@ video::ITexture *DynamicSource::getTexture(u8 index)
 void ScreenTarget::activate(PipelineContext &context)
 {
 	auto driver = context.device->getVideoDriver();
-	driver->setRenderTarget(nullptr, m_clear, m_clear, context.clear_color);
+	driver->setRenderTargetEx(nullptr, m_clear ? video::ECBF_ALL : video::ECBF_NONE, context.clear_color);
 	driver->OnResize(size);
 	RenderTarget::activate(context);
 }

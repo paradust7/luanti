@@ -23,13 +23,9 @@
 #include "CGUIComboBox.h"
 
 #include "IWriteFile.h"
-#ifdef IRR_ENABLE_BUILTIN_FONT
 #include "BuiltInFont.h"
-#endif
 #include "os.h"
 
-namespace irr
-{
 namespace gui
 {
 
@@ -50,13 +46,9 @@ CGUIEnvironment::CGUIEnvironment(io::IFileSystem *fs, video::IVideoDriver *drive
 	if (Operator)
 		Operator->grab();
 
-#ifdef _DEBUG
-	IGUIEnvironment::setDebugName("CGUIEnvironment");
-#endif
-
 	loadBuiltInFont();
 
-	IGUISkin *skin = createSkin(gui::EGST_WINDOWS_METALLIC);
+	IGUISkin *skin = createSkin();
 	setSkin(skin);
 	skin->drop();
 
@@ -132,7 +124,6 @@ CGUIEnvironment::~CGUIEnvironment()
 
 void CGUIEnvironment::loadBuiltInFont()
 {
-#ifdef IRR_ENABLE_BUILTIN_FONT
 	io::IReadFile *file = FileSystem->createMemoryReadFile(BuiltInFontData,
 			BuiltInFontDataSize, DefaultFontName, false);
 
@@ -150,7 +141,6 @@ void CGUIEnvironment::loadBuiltInFont()
 	Fonts.push_back(f);
 
 	file->drop();
-#endif
 }
 
 //! draws all gui elements
@@ -588,13 +578,13 @@ void CGUIEnvironment::setSkin(IGUISkin *skin)
 		CurrentSkin->grab();
 }
 
-//! Creates a new GUI Skin based on a template.
+//! Creates a new GUI Skin.
 /** \return Returns a pointer to the created skin.
 If you no longer need the skin, you should call IGUISkin::drop().
 See IReferenceCounted::drop() for more information. */
-IGUISkin *CGUIEnvironment::createSkin(EGUI_SKIN_TYPE type)
+IGUISkin *CGUIEnvironment::createSkin()
 {
-	IGUISkin *skin = new CGUISkin(type, Driver);
+	IGUISkin *skin = new CGUISkin(Driver);
 
 	IGUIFont *builtinfont = getBuiltInFont();
 	IGUIFontBitmap *bitfont = 0;
@@ -629,7 +619,7 @@ IGUIButton *CGUIEnvironment::addButton(const core::rect<s32> &rectangle, IGUIEle
 //! adds a scrollbar. The returned pointer must not be dropped.
 IGUIScrollBar *CGUIEnvironment::addScrollBar(bool horizontal, const core::rect<s32> &rectangle, IGUIElement *parent, s32 id)
 {
-	IGUIScrollBar *bar = new CGUIScrollBar(horizontal, this, parent ? parent : this, id, rectangle);
+	IGUIScrollBar *bar = new CGUIScrollBar(this, parent ? parent : this, id, rectangle, horizontal);
 	bar->drop();
 	return bar;
 }
@@ -952,7 +942,7 @@ IGUIElement *CGUIEnvironment::getNextElement(bool reverse, bool group)
 			// this element is not part of the tab cycle,
 			// but its parent might be...
 			IGUIElement *el = Focus;
-			while (el && el->getParent() && startOrder == -1) {
+			while (el->getParent() && startOrder == -1) {
 				el = el->getParent();
 				startOrder = el->getTabOrder();
 			}
@@ -996,4 +986,3 @@ IGUIEnvironment *createGUIEnvironment(io::IFileSystem *fs,
 }
 
 } // end namespace gui
-} // end namespace irr

@@ -1,27 +1,11 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "httpfetch.h"
 #include "porting.h" // for sleep_ms(), get_sysinfo(), secure_rand_fill_buf()
 #include <list>
 #include <unordered_map>
-#include <cerrno>
 #include <mutex>
 #include "threading/event.h"
 #include "config.h"
@@ -31,19 +15,25 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "porting.h"
 #include "util/container.h"
 #include "util/thread.h"
+#include "util/numeric.h"
 #include "version.h"
 #include "settings.h"
-#include "noise.h"
 
 static std::mutex g_httpfetch_mutex;
 static std::unordered_map<u64, std::queue<HTTPFetchResult>>
 	g_httpfetch_results;
-static PcgRandom g_callerid_randomness;
+
+static std::string default_user_agent()
+{
+	std::string ret(PROJECT_NAME_C "/");
+	ret.append(g_version_string).append(" (").append(porting::get_sysinfo()).append(")");
+	return ret;
+}
 
 HTTPFetchRequest::HTTPFetchRequest() :
 	timeout(g_settings->getS32("curl_timeout")),
 	connect_timeout(10 * 1000),
-	useragent(std::string(PROJECT_NAME_C "/") + g_version_hash + " (" + porting::get_sysinfo() + ")")
+	useragent(default_user_agent())
 {
 	timeout = std::max(timeout, MIN_HTTPFETCH_TIMEOUT_INTERACTIVE);
 }
@@ -86,18 +76,18 @@ u64 httpfetch_caller_alloc_secure()
 	// Generate random caller IDs and make sure they're not
 	// already used or reserved.
 	// Give up after 100 tries to prevent infinite loop
-	size_t tries = 100;
+	int tries = 100;
 	u64 caller;
 
 	do {
-		caller = (((u64) g_callerid_randomness.next()) << 32) |
-				g_callerid_randomness.next();
+		// Global RNG is seeded securely, so we can use it.
+		myrand_bytes(&caller, sizeof(caller));
 
 		if (--tries < 1) {
 			FATAL_ERROR("httpfetch_caller_alloc_secure: ran out of caller IDs");
 			return HTTPFETCH_DISCARD;
 		}
-	} while (caller >= HTTPFETCH_CID_START &&
+	} while (caller < HTTPFETCH_CID_START ||
 		g_httpfetch_results.find(caller) != g_httpfetch_results.end());
 
 	verbosestream << "httpfetch_caller_alloc_secure: allocating "
@@ -229,19 +219,21 @@ HTTPFetchOngoing::HTTPFetchOngoing(const HTTPFetchRequest &request_,
 		return;
 
 	// Set static cURL options
-	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1);
-	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1);
-	curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 3);
+	curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+	curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+	curl_easy_setopt(curl, CURLOPT_MAXREDIRS, 3L);
 	curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, ""); // = all supported ones
 
 	std::string bind_address = g_settings->get("bind_address");
-	if (!bind_address.empty()) {
-		curl_easy_setopt(curl, CURLOPT_INTERFACE, bind_address.c_str());
-	}
+	curl_easy_setopt(curl, CURLOPT_INTERFACE,
+		bind_address.empty() ? nullptr : bind_address.c_str());
 
-	if (!g_settings->getBool("enable_ipv6")) {
-		curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
-	}
+	std::string proxy = g_settings->get("secure.curl_proxy");
+	curl_easy_setopt(curl, CURLOPT_PROXY, proxy.empty() ? nullptr : proxy.c_str());
+
+	bool enable_ipv6 = g_settings->getBool("enable_ipv6");
+	curl_easy_setopt(curl, CURLOPT_IPRESOLVE,
+		 enable_ipv6 ? CURL_IPRESOLVE_WHATEVER : CURL_IPRESOLVE_V4);
 
 	// Restrict protocols so that curl vulnerabilities in
 	// other protocols don't affect us.
@@ -269,8 +261,8 @@ HTTPFetchOngoing::HTTPFetchOngoing(const HTTPFetchRequest &request_,
 	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS,
 			request.connect_timeout);
 
-	if (!request.useragent.empty())
-		curl_easy_setopt(curl, CURLOPT_USERAGENT, request.useragent.c_str());
+	curl_easy_setopt(curl, CURLOPT_USERAGENT,
+		request.useragent.empty() ? nullptr : request.useragent.c_str());
 
 	// Set up a write callback that writes to the
 	// result struct, unless the data is to be discarded
@@ -284,8 +276,35 @@ HTTPFetchOngoing::HTTPFetchOngoing(const HTTPFetchRequest &request_,
 		curl_easy_setopt(curl, CURLOPT_WRITEDATA, &result.data);
 	}
 
+	// Configure the method
+	switch (request.method) {
+	default:
+		assert(false);
+	case HTTP_GET:
+		curl_easy_setopt(curl, CURLOPT_HTTPGET, 1L);
+		break;
+	case HTTP_HEAD:
+		// This is kinda pointless right now, since we don't return response headers (TODO?)
+		curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+		break;
+	case HTTP_POST:
+		curl_easy_setopt(curl, CURLOPT_POST, 1L);
+		break;
+	case HTTP_PUT:
+		curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
+		break;
+	case HTTP_PATCH:
+		curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PATCH");
+		break;
+	case HTTP_DELETE:
+		curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "DELETE");
+		break;
+	}
+	const bool has_request_body = request.method != HTTP_GET && request.method != HTTP_HEAD;
+
 	// Set data from fields or raw_data
 	if (request.multipart) {
+		assert(has_request_body);
 		multipart_mime = curl_mime_init(curl);
 		for (auto &it : request.fields) {
 			curl_mimepart *part = curl_mime_addpart(multipart_mime);
@@ -293,52 +312,36 @@ HTTPFetchOngoing::HTTPFetchOngoing(const HTTPFetchRequest &request_,
 			curl_mime_data(part, it.second.c_str(), it.second.size());
 		}
 		curl_easy_setopt(curl, CURLOPT_MIMEPOST, multipart_mime);
-	} else {
-		switch (request.method) {
-		case HTTP_GET:
-			curl_easy_setopt(curl, CURLOPT_HTTPGET, 1);
-			break;
-		case HTTP_POST:
-			curl_easy_setopt(curl, CURLOPT_POST, 1);
-			break;
-		case HTTP_PUT:
-			curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PUT");
-			break;
-		case HTTP_DELETE:
-			curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "DELETE");
-			break;
-		}
-		if (request.method != HTTP_GET) {
-			if (!request.raw_data.empty()) {
-				curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE,
-						request.raw_data.size());
-				curl_easy_setopt(curl, CURLOPT_POSTFIELDS,
-						request.raw_data.c_str());
-			} else if (!request.fields.empty()) {
-				std::string str;
-				for (auto &field : request.fields) {
-					if (!str.empty())
-						str += "&";
-					str += urlencode(field.first);
-					str += "=";
-					str += urlencode(field.second);
-				}
-				curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE,
-						str.size());
-				curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS,
-						str.c_str());
+	} else if (has_request_body) {
+		if (request.fields.empty()) {
+			// Note that we need to set this to an empty buffer (not NULL)
+			// even if no data is to be sent.
+			curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE,
+					request.raw_data.size());
+			curl_easy_setopt(curl, CURLOPT_POSTFIELDS,
+					request.raw_data.c_str());
+		} else {
+			std::string str;
+			for (auto &field : request.fields) {
+				if (!str.empty())
+					str += "&";
+				str += urlencode(field.first);
+				str += "=";
+				str += urlencode(field.second);
 			}
+			curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, str.size());
+			curl_easy_setopt(curl, CURLOPT_COPYPOSTFIELDS, str.c_str());
 		}
 	}
+
 	// Set additional HTTP headers
-	for (const std::string &extra_header : request.extra_headers) {
-		http_header = curl_slist_append(http_header, extra_header.c_str());
+	for (const auto &s : request.extra_headers) {
+		http_header = curl_slist_append(http_header, s.c_str());
 	}
 	curl_easy_setopt(curl, CURLOPT_HTTPHEADER, http_header);
 
-	if (!g_settings->getBool("curl_verify_cert")) {
-		curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, false);
-	}
+	curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER,
+		g_settings->getBool("curl_verify_cert") ? 1L : 0L);
 }
 
 CURLcode HTTPFetchOngoing::start(CURLM *multi_)
@@ -376,20 +379,22 @@ const HTTPFetchResult * HTTPFetchOngoing::complete(CURLcode res)
 		result.response_code = 0;
 	}
 
-	if (res != CURLE_OK) {
-		errorstream << "HTTPFetch for " << request.url << " failed: "
-			<< curl_easy_strerror(res);
-		if (result.timeout)
-			errorstream << " (timeout = " << request.timeout << "ms)" << std::endl;
-		errorstream << std::endl;
-	} else if (result.response_code >= 400) {
-		errorstream << "HTTPFetch for " << request.url
-			<< " returned response code " << result.response_code
-			<< std::endl;
-		if (result.caller == HTTPFETCH_PRINT_ERR && !result.data.empty()) {
-			errorstream << "Response body:" << std::endl;
-			safe_print_string(errorstream, result.data);
+	if (!request.quiet) {
+		if (res != CURLE_OK) {
+			errorstream << "HTTPFetch for " << request.url << " failed: "
+				<< curl_easy_strerror(res);
+			if (result.timeout)
+				errorstream << " (timeout = " << request.timeout << "ms)" << std::endl;
 			errorstream << std::endl;
+		} else if (result.response_code >= 400) {
+			errorstream << "HTTPFetch for " << request.url
+				<< " returned response code " << result.response_code
+				<< std::endl;
+			if (result.caller == HTTPFETCH_PRINT_BODY && !result.data.empty()) {
+				errorstream << "Response body:" << std::endl;
+				safe_print_string(errorstream, result.data);
+				errorstream << std::endl;
+			}
 		}
 	}
 
@@ -399,6 +404,8 @@ const HTTPFetchResult * HTTPFetchOngoing::complete(CURLcode res)
 HTTPFetchOngoing::~HTTPFetchOngoing()
 {
 	if (multi) {
+		// Note: this can block if curl is stuck waiting for DNS, see
+		// <https://github.com/luanti-org/luanti/issues/16272>
 		CURLMcode mres = curl_multi_remove_handle(multi, curl);
 		if (mres != CURLM_OK) {
 			errorstream << "curl_multi_remove_handle"
@@ -410,7 +417,6 @@ HTTPFetchOngoing::~HTTPFetchOngoing()
 	// Set safe options for the reusable cURL handle
 	curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION,
 			httpfetch_discardfunction);
-	curl_easy_setopt(curl, CURLOPT_USERAGENT, nullptr);
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, nullptr);
 	curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, nullptr);
 	curl_easy_setopt(curl, CURLOPT_POSTFIELDS, nullptr);
@@ -632,6 +638,8 @@ protected:
 		while (!stopRequested()) {
 			BEGIN_DEBUG_EXCEPTION_HANDLER
 
+			const u64 t0 = porting::getTimeMs();
+
 			/*
 				Handle new async requests
 			*/
@@ -663,6 +671,16 @@ protected:
 					msg = curl_multi_info_read(m_multi, &msgs_in_queue);
 				}
 			}
+
+			/*
+				If we took suspiciously long, warn.
+			*/
+			const u64 tdelta = porting::getTimeMs() - t0;
+			if (tdelta > 300) {
+				warningstream << "CurlFetchThread blocked for " << tdelta << "ms"
+					<< std::endl;
+			}
+
 
 			/*
 				If there are ongoing requests, wait for data
@@ -710,11 +728,6 @@ void httpfetch_init(int parallel_limit)
 	FATAL_ERROR_IF(res != CURLE_OK, "cURL init failed");
 
 	g_httpfetch_thread = std::make_unique<CurlFetchThread>(parallel_limit);
-
-	// Initialize g_callerid_randomness for httpfetch_caller_alloc_secure
-	u64 randbuf[2];
-	porting::secure_rand_fill_buf(randbuf, sizeof(u64) * 2);
-	g_callerid_randomness = PcgRandom(randbuf[0], randbuf[1]);
 }
 
 void httpfetch_cleanup()
@@ -740,32 +753,13 @@ void httpfetch_async(const HTTPFetchRequest &fetch_request)
 
 static void httpfetch_request_clear(u64 caller)
 {
-	if (g_httpfetch_thread->isRunning()) {
-		Event event;
-		g_httpfetch_thread->requestClear(caller, &event);
-		event.wait();
-	} else {
-		g_httpfetch_thread->requestClear(caller, nullptr);
-	}
-}
-
-static void httpfetch_sync(const HTTPFetchRequest &fetch_request,
-		HTTPFetchResult &fetch_result)
-{
-	// Create ongoing fetch data and make a cURL handle
-	// Set cURL options based on HTTPFetchRequest
-	CurlHandlePool pool;
-	HTTPFetchOngoing ongoing(fetch_request, &pool);
-	// Do the fetch (curl_easy_perform)
-	CURLcode res = ongoing.start(nullptr);
-	// Update fetch result
-	fetch_result = *ongoing.complete(res);
+	g_httpfetch_thread->requestClear(caller, nullptr);
 }
 
 bool httpfetch_sync_interruptible(const HTTPFetchRequest &fetch_request,
 		HTTPFetchResult &fetch_result, long interval)
 {
-	if (Thread *thread = Thread::getCurrentThread()) {
+	if (const Thread *thread = Thread::getCurrentThread()) {
 		HTTPFetchRequest req = fetch_request;
 		req.caller = httpfetch_caller_alloc_secure();
 		httpfetch_async(req);
@@ -779,7 +773,8 @@ bool httpfetch_sync_interruptible(const HTTPFetchRequest &fetch_request,
 		} while (!httpfetch_async_get(req.caller, fetch_result));
 		httpfetch_caller_free(req.caller);
 	} else {
-		httpfetch_sync(fetch_request, fetch_result);
+		throw ModError(std::string("You have tried to execute a synchronous HTTP request on the main thread! "
+				"This offense shall be punished. (").append(fetch_request.url).append(")"));
 	}
 	return true;
 }

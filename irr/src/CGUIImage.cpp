@@ -8,8 +8,6 @@
 #include "IGUIEnvironment.h"
 #include "IVideoDriver.h"
 
-namespace irr
-{
 namespace gui
 {
 
@@ -17,11 +15,7 @@ namespace gui
 CGUIImage::CGUIImage(IGUIEnvironment *environment, IGUIElement *parent, s32 id, core::rect<s32> rectangle) :
 		IGUIImage(environment, parent, id, rectangle), Texture(0), Color(255, 255, 255, 255),
 		UseAlphaChannel(false), ScaleImage(false), DrawBounds(0.f, 0.f, 1.f, 1.f), DrawBackground(true)
-{
-#ifdef _DEBUG
-	setDebugName("CGUIImage");
-#endif
-}
+{}
 
 //! destructor
 CGUIImage::~CGUIImage()
@@ -161,4 +155,3 @@ core::rect<f32> CGUIImage::getDrawBounds() const
 }
 
 } // end namespace gui
-} // end namespace irr

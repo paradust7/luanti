@@ -5,10 +5,8 @@
 #pragma once
 
 #include "IBillboardSceneNode.h"
-#include "SMeshBuffer.h"
+#include "CMeshBuffer.h"
 
-namespace irr
-{
 namespace scene
 {
 
@@ -68,7 +66,7 @@ public:
 			video::SColor &bottomColor) const override;
 
 	//! Get the real boundingbox used by the billboard (which depends on the active camera)
-	const core::aabbox3d<f32> &getTransformedBillboardBoundingBox(const irr::scene::ICameraSceneNode *camera) override;
+	const core::aabbox3d<f32> &getTransformedBillboardBoundingBox(const scene::ICameraSceneNode *camera) override;
 
 	//! Get the amount of mesh buffers.
 	u32 getMeshBufferCount() const override
@@ -91,7 +89,7 @@ public:
 	ISceneNode *clone(ISceneNode *newParent = 0, ISceneManager *newManager = 0) override;
 
 protected:
-	void updateMesh(const irr::scene::ICameraSceneNode *camera);
+	void updateMesh(const scene::ICameraSceneNode *camera);
 
 private:
 	//! Size.Width is the bottom edge width
@@ -104,10 +102,9 @@ private:
 	/** Note that we can't use the real boundingbox for culling because at that point
 		the camera which is used to calculate the billboard is not yet updated. So we only
 		know the real boundingbox after rendering - which is too late for culling. */
-	core::aabbox3d<f32> BBoxSafe;
+	core::aabbox3d<f32> BBoxSafe{{0.0f, 0.0f, 0.0f}};
 
 	scene::SMeshBuffer *Buffer;
 };
 
 } // end namespace scene
-} // end namespace irr

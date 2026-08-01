@@ -1,4 +1,4 @@
-# Minetest World Format 22...29
+# Luanti World Format 22...29
 
 This applies to a world format carrying the block serialization version
 22...27, used at least in
@@ -152,6 +152,8 @@ World metadata.
     mod_storage_backend = sqlite3 - which DB backend to use for mod storage
     server_announce = false       - whether the server is publicly announced or not
     load_mod_<mod> = false        - whether <mod> is to be loaded in this world
+    world_name = Sol III          - name of the world (if not set, the world folder name will be used)
+                                    shown in the main menu and used as a technical identifier
 
 For `load_mod_<mod>`, the possible values are:
 
@@ -161,7 +163,7 @@ For `load_mod_<mod>`, the possible values are:
     * Must be one of the following:
         * `mods/`: mods in the user path's mods folder (ex. `/home/user/.minetest/mods`)
         * `share/`: mods in the share's mods folder (ex. `/usr/share/minetest/mods`)
-        * `/path/to/env`: you can use absolute paths to mods inside folders specified with the `MINETEST_MOD_PATH` `env` variable.
+        * `/path/to/env`: you can use absolute paths to mods inside folders specified with the `LUANTI_MOD_PATH` `env` variable.
     * Other locations and absolute paths are not supported.
     * Note that `moddir` is the directory name, not the mod name specified in mod.conf.
 
@@ -249,14 +251,14 @@ Example content:
 
 # Map File Format
 
-Minetest maps consist of `MapBlock`s, chunks of 16x16x16 nodes.
+Luanti maps consist of `MapBlock`s, each holds 16x16x16 nodes.
 
 In addition to the bulk node data, `MapBlock`s stored on disk also contain
 other things.
 
 ## History
 
-Initially, Minetest stored maps in a format called the "sectors" format.
+Initially, Luanti stored maps in a format called the "sectors" format.
 It was a directory/file structure like this:
 
     sectors2/XXX/ZZZ/YYYY
@@ -265,7 +267,7 @@ For example, the `MapBlock` at `(0, 1, -2)` was this file:
 
     sectors2/000/ffd/0001
 
-Eventually Minetest outgrew this directory structure, as filesystems were
+Eventually Luanti outgrew this directory structure, as filesystems were
 struggling under the number of files and directories.
 
 Large servers seriously needed a new format, and thus the base of the
@@ -281,46 +283,61 @@ storing coordinates separately), but the format has been kept unchanged for
 that part.
 
 ## `map.sqlite`
-`map.sqlite` is a `SQLite3` database, containing a single table, called
+`map.sqlite` is an `SQLite3` database, containing a single table, called
 `blocks`. It looks like this:
+
+```sql
+CREATE TABLE `blocks` (
+    `x` INTEGER, `y` INTEGER, `z` INTEGER,
+    `data` BLOB NOT NULL,
+    PRIMARY KEY (`x`, `z`, `y`)
+);
+```
+
+Before 5.12.0 it looked like this:
 
 ```sql
 CREATE TABLE `blocks` (`pos` INT NOT NULL PRIMARY KEY, `data` BLOB);
 ```
 
-## Position Hashing
+## Position Encoding
 
-`pos` (a node position hash) is created from the three coordinates of a
-`MapBlock` using this algorithm, defined here in Python:
+Applies to the pre-5.12.0 schema:
 
-```python
-def getBlockAsInteger(p):
-    return int64(p[2]*16777216 + p[1]*4096 + p[0])
+`pos` (a node position encoding) is created from the three coordinates of a
+`MapBlock` using the following simple equation:
 
-def int64(u):
-    while u >= 2**63:
-        u -= 2**64
-    while u <= -2**63:
-        u += 2**64
-    return u
+```C
+pos = (z << 24) + (y << 12) + x;
+```
+or, equivalently, `pos = (z * 0x1000000) + (y * 0x1000) + x`.
+
+A position can be decoded using:
+
+```C
+pos = pos + 0x800800800;
+x = (pos & 0xFFF) - 0x800;
+y = ((pos >> 12) & 0xFFF) - 0x800;
+z = ((pos >> 24) & 0xFFF) - 0x800;
 ```
 
-It can be converted the other way by using this code:
+Positions are sequential along the x axis (as easily seen from the position equation above).
+It is possible to retrieve all blocks from an interval using the following SQL statement:
 
-```python
-def getIntegerAsBlock(i):
-    x = unsignedToSigned(i % 4096, 2048)
-    i = int((i - x) / 4096)
-    y = unsignedToSigned(i % 4096, 2048)
-    i = int((i - y) / 4096)
-    z = unsignedToSigned(i % 4096, 2048)
-    return x,y,z
-
-def unsignedToSigned(i, max_positive):
-    if i < max_positive:
-        return i
-    else:
-        return i - 2*max_positive
+```sql
+SELECT
+`pos`,
+`data`,
+( (`pos` + 0x800800800)        & 0xFFF) - 0x800 as x,
+(((`pos` + 0x800800800) >> 12) & 0xFFF) - 0x800 as y,
+(((`pos` + 0x800800800) >> 24) & 0xFFF) - 0x800 as z
+FROM `blocks` WHERE
+( (`pos` + 0x800800800)        & 0xFFF) - 0x800 >= ? AND -- minx
+( (`pos` + 0x800800800)        & 0xFFF) - 0x800 <= ? AND -- maxx
+(((`pos` + 0x800800800) >> 12) & 0xFFF) - 0x800 >= ? AND -- miny
+(((`pos` + 0x800800800) >> 12) & 0xFFF) - 0x800 <= ? AND -- maxy
+`pos` >= (? << 24) - 0x800800 AND -- minz
+`pos` <= (? << 24) + 0x7FF7FF; -- maxz
 ```
 
 ## Blob
@@ -335,8 +352,8 @@ See below for description.
 >  * NOTE: Byte order is MSB first (big-endian).
 >  * NOTE: Zlib data is in such a format that Python's `zlib` at least can
 >          directly decompress.
->  * NOTE: Since version 29 zstd is used instead of zlib. In addition, the entire
->          block is first serialized and then compressed (except the version byte).
+>  * NOTE: Since version 29 zstd is used instead of zlib. In addition, the
+>          **entire block** is first serialized and then compressed (except version byte).
 
 `u8` version
 * map format version number, see serialization.h for the latest number
@@ -370,7 +387,7 @@ See below for description.
 * Indicates if the light is correct at the sides of a map block.
   Lighting may not be correct if the light changed, but a neighbor
   block was not loaded at that time.
-  If these flags are false, Minetest will automatically recompute light
+  If these flags are false, Luanti will automatically recompute light
   when both this block and its required neighbor are loaded.
 
 * The bit order is:
@@ -383,10 +400,10 @@ See below for description.
   to indicate if direct sunlight spreading is finished.
 
 * Example: if the block at `(0, 0, 0)` has `lighting_complete = 0b1111111111111110`,
-  Minetest will correct lighting in the day light bank when the block at
+  Luanti will correct lighting in the day light bank when the block at
   `(1, 0, 0)` is also loaded.
 
-Timestamp and node ID mappings were introduced in map format version 29.
+Timestamp and node ID mappings come here if map format version >= 29.
 * `u32` timestamp
     * Timestamp when last saved, as seconds from starting the game.
     * `0xffffffff` = invalid/unknown timestamp, nothing should be done with the time
@@ -394,7 +411,7 @@ Timestamp and node ID mappings were introduced in map format version 29.
 
 * `u8` `name_id_mapping_version`
     * Should be zero for map format version 29.
-  
+
 * `u16` `num_name_id_mappings`
     * foreach `num_name_id_mappings`:
         * `u16` `id`
@@ -467,13 +484,7 @@ Timestamp and node ID mappings were introduced in map format version 29.
             * `s32` timeout * 1000
             * `s32` elapsed * 1000
 
-* Since map format version 25:
-    * `u8` length of the data of a single timer (always 2+4+4=10)
-    * `u16` `num_of_timers`
-    * foreach `num_of_timers`:
-        * `u16` timer position (`(z*16*16 + y*16 + x)`)
-        * `s32` timeout * 1000
-        * `s32` elapsed * 1000
+* Map format version >= 25: see below
 
 `u8` static object version:
 * Always 0
@@ -500,6 +511,14 @@ Before map format version 29:
         * `u16` `id`
         * `u16` `name_len`
         * `u8[name_len]` `name`
+
+Since map format version 25, node timers come here:
+    * `u8` length of the data of a single timer (always 2+4+4=10)
+    * `u16` `num_of_timers`
+    * foreach `num_of_timers`:
+        * `u16` timer position (`(z*16*16 + y*16 + x)`)
+        * `s32` timeout * 1000
+        * `s32` elapsed * 1000
 
 End of File (EOF).
 
@@ -579,9 +598,11 @@ Object types:
 * `s32` yaw * 1000
 
 Since protocol version 37:
-* `u8` `version2` (=1)
+* `u8` `version2` (=1 or 2)
 * `s32` pitch * 1000
 * `s32` roll * 1000
+* if version2 >= 2:
+  * `u8[16]` guid
 
 # Itemstring Format
 

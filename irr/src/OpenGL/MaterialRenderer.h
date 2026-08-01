@@ -4,17 +4,15 @@
 
 #pragma once
 
+#include <string>
+#include <vector>
 #include "EMaterialTypes.h"
 #include "IMaterialRenderer.h"
 #include "IMaterialRendererServices.h"
 #include "IGPUProgrammingServices.h"
-#include "irrArray.h"
-#include "irrString.h"
 
 #include "Common.h"
 
-namespace irr
-{
 namespace video
 {
 
@@ -28,6 +26,7 @@ public:
 			s32 &outMaterialTypeNr,
 			const c8 *vertexShaderProgram = 0,
 			const c8 *pixelShaderProgram = 0,
+			const c8 *debugName = nullptr,
 			IShaderConstantSetCallBack *callback = 0,
 			E_MATERIAL_TYPE baseMaterial = EMT_SOLID,
 			s32 userData = 0);
@@ -37,15 +36,15 @@ public:
 	GLuint getProgram() const;
 
 	virtual void OnSetMaterial(const SMaterial &material, const SMaterial &lastMaterial,
-			bool resetAllRenderstates, IMaterialRendererServices *services);
+			bool resetAllRenderstates, IMaterialRendererServices *services) override;
 
-	virtual bool OnRender(IMaterialRendererServices *service, E_VERTEX_TYPE vtxtype);
+	virtual bool OnRender(IMaterialRendererServices *service, E_VERTEX_TYPE vtxtype) override;
 
-	virtual void OnUnsetMaterial();
+	virtual void OnUnsetMaterial() override;
 
-	virtual bool isTransparent() const;
+	virtual bool isTransparent() const override;
 
-	virtual s32 getRenderCapability() const;
+	virtual s32 getRenderCapability() const override;
 
 	void setBasicRenderStates(const SMaterial &material, const SMaterial &lastMaterial, bool resetAllRenderstates) override;
 
@@ -66,7 +65,9 @@ protected:
 			E_MATERIAL_TYPE baseMaterial = EMT_SOLID,
 			s32 userData = 0);
 
-	void init(s32 &outMaterialTypeNr, const c8 *vertexShaderProgram, const c8 *pixelShaderProgram, bool addMaterial = true);
+	void init(s32 &outMaterialTypeNr, const c8 *vertexShaderProgram,
+		const c8 *pixelShaderProgram, const c8 *debugName = nullptr,
+		bool addMaterial = true);
 
 	bool createShader(GLenum shaderType, const char *shader);
 	bool linkProgram();
@@ -76,18 +77,18 @@ protected:
 
 	bool Alpha;
 	bool Blending;
+	bool Skinning = false;
 
 	struct SUniformInfo
 	{
-		core::stringc name;
+		std::string name;
 		GLenum type;
 		GLint location;
 	};
 
 	GLuint Program;
-	core::array<SUniformInfo> UniformInfo;
+	std::vector<SUniformInfo> UniformInfo;
 	s32 UserData;
 };
 
-}
 }

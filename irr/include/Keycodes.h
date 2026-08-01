@@ -3,19 +3,12 @@
 // For conditions of distribution and use, see copyright notice in irrlicht.h
 
 #pragma once
-
-namespace irr
-{
+#include <variant>
 
 enum EKEY_CODE
 {
 	KEY_UNKNOWN = 0x0,
-	KEY_LBUTTON = 0x01,           // Left mouse button
-	KEY_RBUTTON = 0x02,           // Right mouse button
 	KEY_CANCEL = 0x03,            // Control-break processing
-	KEY_MBUTTON = 0x04,           // Middle mouse button (three-button mouse)
-	KEY_XBUTTON1 = 0x05,          // Windows 2000/XP: X1 mouse button
-	KEY_XBUTTON2 = 0x06,          // Windows 2000/XP: X2 mouse button
 	KEY_BACK = 0x08,              // BACKSPACE key
 	KEY_TAB = 0x09,               // TAB key
 	KEY_CLEAR = 0x0C,             // CLEAR key
@@ -182,4 +175,28 @@ enum EKEY_CODE
 	KEY_KEY_CODES_COUNT = 0x100 // this is not a key, but the amount of keycodes there are.
 };
 
-} // end namespace irr
+// A Keycode is either a character produced by the key or one of Irrlicht's codes (EKEY_CODE)
+class Keycode : public std::variant<EKEY_CODE, wchar_t> {
+	using super = std::variant<EKEY_CODE, wchar_t>;
+public:
+	Keycode() : Keycode(KEY_KEY_CODES_COUNT, L'\0') {}
+
+	Keycode(EKEY_CODE code, wchar_t ch)
+	{
+		emplace(code, ch);
+	}
+
+	using super::emplace;
+	void emplace(EKEY_CODE code, wchar_t ch)
+	{
+		if (isValid(code))
+			emplace<EKEY_CODE>(code);
+		else
+			emplace<wchar_t>(ch);
+	}
+
+	static bool isValid(EKEY_CODE code)
+	{
+		return code > 0 && code < KEY_KEY_CODES_COUNT;
+	}
+};

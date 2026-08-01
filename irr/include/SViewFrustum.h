@@ -9,10 +9,8 @@
 #include "line3d.h"
 #include "aabbox3d.h"
 #include "matrix4.h"
-#include "IVideoDriver.h"
+#include "EVideoTypes.h"
 
-namespace irr
-{
 namespace scene
 {
 
@@ -117,7 +115,7 @@ struct SViewFrustum
 	core::plane3d<f32> planes[VF_PLANE_COUNT];
 
 	//! bounding box around the view frustum
-	core::aabbox3d<f32> boundingBox;
+	core::aabbox3d<f32> boundingBox{{0, 0, 0}};
 
 private:
 	//! Hold a copy of important transform matrices
@@ -446,4 +444,3 @@ inline void SViewFrustum::recalculateBoundingSphere()
 }
 
 } // end namespace scene
-} // end namespace irr

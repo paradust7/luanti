@@ -1,28 +1,11 @@
-/*
-Minetest
-Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "camera.h"
-#include "debug.h"
 #include "client.h"
-#include "config.h"
-#include "map.h"
 #include "clientmap.h"     // MapDrawControl
+#include "localplayer.h"
 #include "player.h"
 #include <cmath>
 #include "client/renderingengine.h"
@@ -37,17 +20,29 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "fontengine.h"
 #include "script/scripting_client.h"
 #include "gettext.h"
+
+#include <ICameraSceneNode.h>
+#include <IGUIFont.h>
+#include <ISceneNode.h>
+#include <IVideoDriver.h>
 #include <SViewFrustum.h>
 
-#define CAMERA_OFFSET_STEP 200
+static constexpr f32 CAMERA_OFFSET_STEP = 200;
+
 #define WIELDMESH_OFFSET_X 55.0f
 #define WIELDMESH_OFFSET_Y -35.0f
 #define WIELDMESH_AMPLITUDE_X 7.0f
 #define WIELDMESH_AMPLITUDE_Y 10.0f
 
+static const char *setting_names[] = {
+	"view_bobbing_amount", "fov", "arm_inertia",
+	"show_nametag_backgrounds",
+};
+
 Camera::Camera(MapDrawControl &draw_control, Client *client, RenderingEngine *rendering_engine):
 	m_draw_control(draw_control),
 	m_client(client),
+	m_camera_mode(CAMERA_MODE_FIRST),
 	m_player_light_color(0xFFFFFFFF)
 {
 	auto smgr = rendering_engine->get_scene_manager();
@@ -62,7 +57,7 @@ Camera::Camera(MapDrawControl &draw_control, Client *client, RenderingEngine *re
 	// all other 3D scene nodes and before the GUI.
 	m_wieldmgr = smgr->createNewSceneManager();
 	m_wieldmgr->addCameraSceneNode();
-	m_wieldnode = new WieldMeshSceneNode(m_wieldmgr, -1, false);
+	m_wieldnode = new WieldMeshSceneNode(m_wieldmgr, -1);
 	m_wieldnode->setItem(ItemStack(), m_client);
 	m_wieldnode->drop(); // m_wieldmgr grabbed it
 
@@ -80,28 +75,42 @@ Camera::Camera(MapDrawControl &draw_control, Client *client, RenderingEngine *re
 		shand.m_hand->setVisible(false);
 	}
 
-	/* TODO: Add a callback function so these can be updated when a setting
-	 *       changes.  At this point in time it doesn't matter (e.g. /set
-	 *       is documented to change server settings only)
-	 *
-	 * TODO: Local caching of settings is not optimal and should at some stage
+	m_nametags.clear();
+
+	readSettings();
+	for (auto name : setting_names)
+		g_settings->registerChangedCallback(name, settingChangedCallback, this);
+}
+
+void Camera::settingChangedCallback(const std::string &name, void *data)
+{
+	static_cast<Camera *>(data)->readSettings();
+}
+
+void Camera::readSettings()
+{
+	/* TODO: Local caching of settings is not optimal and should at some stage
 	 *       be updated to use a global settings object for getting thse values
 	 *       (as opposed to the this local caching). This can be addressed in
 	 *       a later release.
 	 */
-	m_cache_fall_bobbing_amount = g_settings->getFloat("fall_bobbing_amount", 0.0f, 100.0f);
 	m_cache_view_bobbing_amount = g_settings->getFloat("view_bobbing_amount", 0.0f, 7.9f);
 	// 45 degrees is the lowest FOV that doesn't cause the server to treat this
 	// as a zoom FOV and load world beyond the set server limits.
 	m_cache_fov                 = g_settings->getFloat("fov", 45.0f, 160.0f);
 	m_arm_inertia               = g_settings->getBool("arm_inertia");
-	m_nametags.clear();
 	m_show_nametag_backgrounds  = g_settings->getBool("show_nametag_backgrounds");
 }
 
 Camera::~Camera()
 {
+	g_settings->deregisterAllChangedCallbacks(this);
 	m_wieldmgr->drop();
+}
+
+v3f Camera::getHeadPosition() const
+{
+	return m_headnode->getAbsolutePosition();
 }
 
 void Camera::notifyFovChange()
@@ -111,38 +120,21 @@ void Camera::notifyFovChange()
 
 	PlayerFovSpec spec = player->getFov();
 
-	/*
-	 * Update m_old_fov_degrees first - it serves as the starting point of the
-	 * upcoming transition.
-	 *
-	 * If an FOV transition is already active, mark current FOV as the start of
-	 * the new transition. If not, set it to the previous transition's target FOV.
-	 */
-	if (m_fov_transition_active)
-		m_old_fov_degrees = m_curr_fov_degrees;
-	else
-		m_old_fov_degrees = m_server_sent_fov ? m_target_fov_degrees : m_cache_fov;
+	// Remember old FOV in case a transition is wanted
+	f32 m_old_fov_degrees = m_fov_transition_active
+		? m_curr_fov_degrees // FOV is overridden with transition
+		: m_server_sent_fov
+			? m_target_fov_degrees // FOV is overridden without transition
+			: m_cache_fov; // FOV is not overridden
 
-	/*
-	 * Update m_server_sent_fov next - it corresponds to the target FOV of the
-	 * upcoming transition.
-	 *
-	 * Set it to m_cache_fov, if server-sent FOV is 0. Otherwise check if
-	 * server-sent FOV is a multiplier, and multiply it with m_cache_fov instead
-	 * of overriding.
-	 */
-	if (spec.fov == 0.0f) {
-		m_server_sent_fov = false;
-		m_target_fov_degrees = m_cache_fov;
-	} else {
-		m_server_sent_fov = true;
-		m_target_fov_degrees = spec.is_multiplier ? m_cache_fov * spec.fov : spec.fov;
-	}
+	m_server_sent_fov = spec.fov > 0.0f;
+	m_target_fov_degrees = m_server_sent_fov
+		? spec.is_multiplier
+			? m_cache_fov * spec.fov // apply multiplier to client-set FOV
+			: spec.fov // absolute override
+		: m_cache_fov; // reset to client-set FOV
 
-	if (spec.transition_time > 0.0f)
-		m_fov_transition_active = true;
-
-	// If FOV smooth transition is active, initialize required variables
+	m_fov_transition_active = spec.transition_time > 0.0f;
 	if (m_fov_transition_active) {
 		m_transition_time = spec.transition_time;
 		m_fov_diff = m_target_fov_degrees - m_old_fov_degrees;
@@ -158,20 +150,10 @@ inline f32 my_modf(f32 x)
 
 void Camera::step(f32 dtime)
 {
-	if(m_view_bobbing_fall > 0)
-	{
-		m_view_bobbing_fall -= 3 * dtime;
-		if(m_view_bobbing_fall <= 0)
-			m_view_bobbing_fall = -1; // Mark the effect as finished
-	}
-
 	bool was_under_zero = m_wield_change_timer < 0;
 	m_wield_change_timer = MYMIN(m_wield_change_timer + dtime, 0.125);
 
 	if (m_wield_change_timer >= 0 && was_under_zero) {
-		m_wieldnode->setItem(m_wield_item_next, m_client);
-		m_wieldnode->setNodeLightColor(m_player_light_color);
-
 		// Right-hand
 		m_scene_hand[1].m_item->setItem(m_wield_item_next, m_client);
 		m_scene_hand[1].m_item->setNodeLightColor(m_player_light_color);
@@ -180,6 +162,7 @@ void Camera::step(f32 dtime)
 
 		m_scene_hand[0].m_hand->setItem(m_wield_hand_next, m_client);
 		m_scene_hand[0].m_hand->setNodeLightColor(m_player_light_color);
+		updateWieldedTool();
 	}
 
 	if (m_view_bobbing_state != 0)
@@ -334,6 +317,20 @@ void Camera::addArmInertia(f32 player_yaw)
 	}
 }
 
+void Camera::updateOffset()
+{
+	v3f cp = m_camera_position / BS;
+
+	// Update offset if too far away from the center of the map
+	m_camera_offset = v3s16(
+		floorf(cp.X / CAMERA_OFFSET_STEP) * CAMERA_OFFSET_STEP,
+		floorf(cp.Y / CAMERA_OFFSET_STEP) * CAMERA_OFFSET_STEP,
+		floorf(cp.Z / CAMERA_OFFSET_STEP) * CAMERA_OFFSET_STEP
+	);
+
+	// No need to update m_cameranode as that will be done before the next render.
+}
+
 void Camera::update(LocalPlayer* player, f32 frametime, f32 tool_reload_ratio)
 {
 	// Get player position
@@ -374,30 +371,14 @@ void Camera::update(LocalPlayer* player, f32 frametime, f32 tool_reload_ratio)
 	// Get camera tilt timer (hurt animation)
 	float cameratilt = fabs(fabs(player->hurt_tilt_timer-0.75)-0.75);
 
-	// Fall bobbing animation
-	float fall_bobbing = 0;
-	if(player->camera_impact >= 1 && m_camera_mode < CAMERA_MODE_THIRD)
-	{
-		if(m_view_bobbing_fall == -1) // Effect took place and has finished
-			player->camera_impact = m_view_bobbing_fall = 0;
-		else if(m_view_bobbing_fall == 0) // Initialize effect
-			m_view_bobbing_fall = 1;
-
-		// Convert 0 -> 1 to 0 -> 1 -> 0
-		fall_bobbing = m_view_bobbing_fall < 0.5 ? m_view_bobbing_fall * 2 : -(m_view_bobbing_fall - 0.5) * 2 + 1;
-		// Smoothen and invert the above
-		fall_bobbing = sin(fall_bobbing * 0.5 * M_PI) * -1;
-		// Amplify according to the intensity of the impact
-		if (player->camera_impact > 0.0f)
-			fall_bobbing *= (1 - rangelim(50 / player->camera_impact, 0, 1)) * 5;
-
-		fall_bobbing *= m_cache_fall_bobbing_amount;
-	}
-
 	// Calculate and translate the head SceneNode offsets
 	{
 		v3f eye_offset = player->getEyeOffset();
 		switch(m_camera_mode) {
+		case CAMERA_MODE_ANY:
+		case CameraMode_END:
+			assert(false);
+			break;
 		case CAMERA_MODE_FIRST:
 			eye_offset += player->eye_offset_first;
 			break;
@@ -412,12 +393,13 @@ void Camera::update(LocalPlayer* player, f32 frametime, f32 tool_reload_ratio)
 		}
 
 		// Set head node transformation
-		eye_offset.Y += cameratilt * -player->hurt_tilt_strength + fall_bobbing;
+		eye_offset.Y += cameratilt * -player->hurt_tilt_strength;
 		m_headnode->setPosition(eye_offset);
 		m_headnode->setRotation(v3f(pitch, 0,
 			cameratilt * player->hurt_tilt_strength));
 		m_headnode->updateAbsolutePosition();
 	}
+
 
 	// Compute relative camera position and target
 	v3f rel_cam_pos = v3f(0,0,0);
@@ -444,17 +426,17 @@ void Camera::update(LocalPlayer* player, f32 frametime, f32 tool_reload_ratio)
 
 	// Compute absolute camera position and target
 	m_headnode->getAbsoluteTransformation().transformVect(m_camera_position, rel_cam_pos);
-	m_headnode->getAbsoluteTransformation().rotateVect(m_camera_direction, rel_cam_target - rel_cam_pos);
+	m_camera_direction = m_headnode->getAbsoluteTransformation()
+			.rotateAndScaleVect(rel_cam_target - rel_cam_pos);
 
-	v3f abs_cam_up;
-	m_headnode->getAbsoluteTransformation().rotateVect(abs_cam_up, rel_cam_up);
-
-	// Separate camera position for calculation
-	v3f my_cp = m_camera_position;
+	v3f abs_cam_up = m_headnode->getAbsoluteTransformation()
+			.rotateAndScaleVect(rel_cam_up);
 
 	// Reposition the camera for third person view
 	if (m_camera_mode > CAMERA_MODE_FIRST)
 	{
+		v3f my_cp = m_camera_position;
+
 		if (m_camera_mode == CAMERA_MODE_THIRD_FRONT)
 			m_camera_direction *= -1;
 
@@ -486,27 +468,19 @@ void Camera::update(LocalPlayer* player, f32 frametime, f32 tool_reload_ratio)
 		// If node blocks camera position don't move y to heigh
 		if (abort && my_cp.Y > player_position.Y+BS*2)
 			my_cp.Y = player_position.Y+BS*2;
+
+		// update the camera position in third-person mode to render blocks behind player
+		// and correctly apply liquid post FX.
+		m_camera_position = my_cp;
 	}
 
-	// Update offset if too far away from the center of the map
-	m_camera_offset.X += CAMERA_OFFSET_STEP*
-			(((s16)(my_cp.X/BS) - m_camera_offset.X)/CAMERA_OFFSET_STEP);
-	m_camera_offset.Y += CAMERA_OFFSET_STEP*
-			(((s16)(my_cp.Y/BS) - m_camera_offset.Y)/CAMERA_OFFSET_STEP);
-	m_camera_offset.Z += CAMERA_OFFSET_STEP*
-			(((s16)(my_cp.Z/BS) - m_camera_offset.Z)/CAMERA_OFFSET_STEP);
-
 	// Set camera node transformation
-	m_cameranode->setPosition(my_cp-intToFloat(m_camera_offset, BS));
-	m_cameranode->updateAbsolutePosition();
+	m_cameranode->setPosition(m_camera_position - intToFloat(m_camera_offset, BS));
 	m_cameranode->setUpVector(abs_cam_up);
-	// *100.0 helps in large map coordinates
-	m_cameranode->setTarget(my_cp-intToFloat(m_camera_offset, BS) + 100 * m_camera_direction);
-
-	// update the camera position in third-person mode to render blocks behind player
-	// and correctly apply liquid post FX.
-	if (m_camera_mode != CAMERA_MODE_FIRST)
-		m_camera_position = my_cp;
+	m_cameranode->updateAbsolutePosition();
+	// *100 helps in large map coordinates
+	m_cameranode->setTarget(m_camera_position - intToFloat(m_camera_offset, BS)
+		+ 100 * m_camera_direction);
 
 	/*
 	 * Apply server-sent FOV, instantaneous or smooth transition.
@@ -592,7 +566,8 @@ void Camera::update(LocalPlayer* player, f32 frametime, f32 tool_reload_ratio)
 	m_wieldnode->setRotation(wield_rotation);
 
 	m_player_light_color = player->light_color;
-	m_wieldnode->setNodeLightColor(m_player_light_color);
+	m_wieldnode->setLightColorAndAnimation(m_player_light_color,
+			m_client->getAnimationTime());
 
 	// Set render distance
 	updateViewingRange();
@@ -626,26 +601,38 @@ void Camera::updateViewingRange()
 
 	m_cameranode->setNearValue(0.1f * BS);
 
-	m_draw_control.wanted_range = std::fmin(adjustDist(viewing_range, getFovMax()), 4000);
+	m_draw_control.wanted_range = std::fmin(adjustDist(viewing_range, getFovMax()), 6000);
 	if (m_draw_control.range_all) {
 		m_cameranode->setFarValue(100000.0);
 		return;
 	}
-	m_cameranode->setFarValue((viewing_range < 2000) ? 2000 * BS : viewing_range * BS);
+	m_cameranode->setFarValue(std::fmax(2000, m_draw_control.wanted_range) * BS);
 }
 
 void Camera::setDigging(s32 button)
 {
-	if (m_digging_button == -1)
+	// If placing, do not desynchronize the animation and placement sound.
+	if (button == 1) {
 		m_digging_button = button;
+		m_digging_anim = 0.0f;
+	} else if (m_digging_button == -1) {
+		// Any other action.
+		m_digging_button = button;
+	}
 }
 
-void Camera::wield(const ItemStack &item, const ItemStack &hand)
+void Camera::wield(const ItemStack &item, const ItemStack &hand, bool animate)
 {
 	if (item.name != m_wield_item_next.name ||
 			item.metadata != m_wield_item_next.metadata) {
 		m_wield_item_next = item;
 		m_wield_hand_next = hand;
+
+		if (!animate) {
+			updateWieldedTool();
+			return;
+		}
+
 		if (m_wield_change_timer > 0)
 			m_wield_change_timer = -m_wield_change_timer;
 		else if (m_wield_change_timer == 0)
@@ -653,7 +640,7 @@ void Camera::wield(const ItemStack &item, const ItemStack &hand)
 	}
 }
 
-void Camera::drawWieldedTool(irr::core::matrix4* translation)
+void Camera::drawWieldedTool(core::matrix4* translation)
 {
 	// Clear Z buffer so that the wielded tool stays in front of world geometry
 	m_wieldmgr->getVideoDriver()->clearBuffers(video::ECBF_DEPTH);
@@ -666,12 +653,12 @@ void Camera::drawWieldedTool(irr::core::matrix4* translation)
 	cam->setFarValue(1000);
 	if (translation != NULL)
 	{
-		irr::core::matrix4 startMatrix = cam->getAbsoluteTransformation();
-		irr::core::vector3df focusPoint = (cam->getTarget()
+		core::matrix4 startMatrix = cam->getAbsoluteTransformation();
+		core::vector3df focusPoint = (cam->getTarget()
 				- cam->getAbsolutePosition()).setLength(1)
 				+ cam->getAbsolutePosition();
 
-		irr::core::vector3df camera_pos =
+		core::vector3df camera_pos =
 				(startMatrix * *translation).getTranslation();
 		cam->setPosition(camera_pos);
 		cam->updateAbsolutePosition();
@@ -720,6 +707,15 @@ void Camera::disableSceneHands()
 	m_scene_hand[0].m_hand->setVisible(false);
 	m_scene_hand[1].m_item->setVisible(false);
 	m_scene_hand[1].m_hand->setVisible(false);
+
+void Camera::toggleCameraMode()
+{
+	if (m_camera_mode == CAMERA_MODE_FIRST)
+		m_camera_mode = CAMERA_MODE_THIRD;
+	else if (m_camera_mode == CAMERA_MODE_THIRD)
+		m_camera_mode = CAMERA_MODE_THIRD_FRONT;
+	else
+		m_camera_mode = CAMERA_MODE_FIRST;
 }
 
 void Camera::drawNametags()
@@ -727,61 +723,101 @@ void Camera::drawNametags()
 	core::matrix4 trans = m_cameranode->getProjectionMatrix();
 	trans *= m_cameranode->getViewMatrix();
 
-	gui::IGUIFont *font = g_fontengine->getFont();
+	// This isn't the actual size, just a placeholder so we can easily apply
+	// the user's font size preference...
+	const u32 default_font_size = 16;
+	// ...by multiplying this in.
+	const f32 font_size_mult = g_fontengine->getFontSize(FM_Unspecified) / (float)default_font_size;
+
+	// Minimum distance until z-scaled nametags actually become smaller
+	const f32 minimum_d = 3.0f * BS;
+	// Smoothing constant: larger = slower size falloff with distance
+	const f32 smoothing_k = 4.0f * BS;
+
 	video::IVideoDriver *driver = RenderingEngine::get_video_driver();
 	v2u32 screensize = driver->getScreenSize();
 
+	// Note: hidden nametags (e.g. GenericCAO) are removed from the array
 	for (const Nametag *nametag : m_nametags) {
-		// Nametags are hidden in GenericCAO::updateNametag()
-
 		v3f pos = nametag->parent_node->getAbsolutePosition() + nametag->pos * BS;
 		f32 transformed_pos[4] = { pos.X, pos.Y, pos.Z, 1.0f };
 		trans.multiplyWith1x4Matrix(transformed_pos);
-		if (transformed_pos[3] > 0) {
-			std::wstring nametag_colorless =
-				unescape_translate(utf8_to_wide(nametag->text));
-			core::dimension2d<u32> textsize = font->getDimension(
-				nametag_colorless.c_str());
-			f32 zDiv = transformed_pos[3] == 0.0f ? 1.0f :
-				core::reciprocal(transformed_pos[3]);
-			v2s32 screen_pos;
-			screen_pos.X = screensize.X *
-				(0.5 * transformed_pos[0] * zDiv + 0.5) - textsize.Width / 2;
-			screen_pos.Y = screensize.Y *
-				(0.5 - transformed_pos[1] * zDiv * 0.5) - textsize.Height / 2;
-			core::rect<s32> size(0, 0, textsize.Width, textsize.Height);
+		if (transformed_pos[3] <= 0) // negative Z means behind camera
+			continue;
+		f32 zDiv = transformed_pos[3] == 0.0f ? 1.0f : (1.0f / transformed_pos[3]);
 
-			auto bgcolor = nametag->getBgColor(m_show_nametag_backgrounds);
-			if (bgcolor.getAlpha() != 0) {
-				core::rect<s32> bg_size(-2, 0, textsize.Width + 2, textsize.Height);
-				driver->draw2DRectangle(bgcolor, bg_size + screen_pos);
-			}
-
-			font->draw(
-				translate_string(utf8_to_wide(nametag->text)).c_str(),
-				size + screen_pos, nametag->textcolor);
+		u32 font_size = 0;
+		if (nametag->scale_z) {
+			// Higher default since nametag should be reasonably visible
+			// even at distance.
+			u32 base_size = nametag->textsize.value_or(default_font_size * 3.2f);
+			f32 adjusted_d = std::max(transformed_pos[3] - minimum_d, 0.0f);
+			// Normalized for base_size * BS
+			f32 scale = (smoothing_k / (adjusted_d + smoothing_k)) / BS;
+			font_size = myround(font_size_mult *
+				rangelim(base_size * BS * scale, 0, base_size));
+		} else {
+			font_size = myround(font_size_mult * nametag->textsize.value_or(default_font_size));
 		}
+		if (font_size <= 1)
+			continue;
+		// TODO: This is quite primitive. It would be better to let the GPU handle
+		// scaling (draw to RTT first?).
+		{
+			// Because the current approach puts a high load on the font engine
+			// we quantize the font size and set an arbitrary maximum...
+			font_size = MYMIN(font_size, 256);
+			if (font_size > 128)
+				font_size &= ~(1|2|4);
+			else if (font_size > 64)
+				font_size &= ~(1|2);
+			else if (font_size > 32)
+				font_size &= ~1;
+		}
+		auto *font = g_fontengine->getFont(font_size);
+		assert(font);
+
+		const auto wtext = utf8_to_wide(nametag->text);
+		// Measure dimensions with escapes removed
+		core::dimension2du textsize = font->getDimension(unescape_translate(wtext).c_str());
+		v2s32 screen_pos;
+		screen_pos.X = screensize.X *
+			(0.5f + transformed_pos[0] * zDiv * 0.5f) - textsize.Width / 2;
+		screen_pos.Y = screensize.Y *
+			(0.5f - transformed_pos[1] * zDiv * 0.5f) - textsize.Height / 2;
+		core::rect<s32> size(0, 0, textsize.Width, textsize.Height);
+
+		auto bgcolor = nametag->getBgColor(m_show_nametag_backgrounds);
+		if (bgcolor.getAlpha() != 0) {
+			core::rect<s32> bg_size(-2, 0, textsize.Width + 2, textsize.Height);
+			driver->draw2DRectangle(bgcolor, bg_size + screen_pos);
+		}
+
+		// but draw text with escapes
+		font->draw(translate_string(wtext).c_str(),
+			size + screen_pos, nametag->textcolor);
 	}
 }
 
-Nametag *Camera::addNametag(scene::ISceneNode *parent_node,
-		const std::string &text, video::SColor textcolor,
-		std::optional<video::SColor> bgcolor, const v3f &pos)
+Nametag *Camera::addNametag(const Nametag &params)
 {
-	Nametag *nametag = new Nametag(parent_node, text, textcolor, bgcolor, pos);
+	assert(params.parent_node);
+	auto *nametag = new Nametag(params);
 	m_nametags.push_back(nametag);
 	return nametag;
 }
 
 void Camera::removeNametag(Nametag *nametag)
 {
-	m_nametags.remove(nametag);
+	auto it = std::find(m_nametags.begin(), m_nametags.end(), nametag);
+	assert(it != m_nametags.end());
+	m_nametags.erase(it);
 	delete nametag;
 }
 
 std::array<core::plane3d<f32>, 4> Camera::getFrustumCullPlanes() const
 {
-	using irr::scene::SViewFrustum;
+	using scene::SViewFrustum;
 	const auto &frustum_planes = m_cameranode->getViewFrustum()->planes;
 	return {
 		frustum_planes[SViewFrustum::VF_LEFT_PLANE],
@@ -789,4 +825,10 @@ std::array<core::plane3d<f32>, 4> Camera::getFrustumCullPlanes() const
 		frustum_planes[SViewFrustum::VF_BOTTOM_PLANE],
 		frustum_planes[SViewFrustum::VF_TOP_PLANE],
 	};
+}
+
+void Camera::updateWieldedTool()
+{
+	m_wieldnode->setItem(m_wield_item_next, m_client);
+	m_wieldnode->setLightColorAndAnimation(m_player_light_color, m_client->getAnimationTime());
 }

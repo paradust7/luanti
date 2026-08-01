@@ -1,28 +1,13 @@
-/*
-Minetest
-Copyright (C) 2020 Hugues Ross <hugues.ross@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2020 Hugues Ross <hugues.ross@gmail.com>
 
 #include "texture_override.h"
 
 #include "log.h"
+#include "filesys.h"
 #include "util/string.h"
-#include <algorithm>
-#include <fstream>
+#include <map>
 
 #define override_cast static_cast<override_t>
 
@@ -41,14 +26,23 @@ static const std::map<std::string, OverrideTarget> override_LUT = {
 	{ "special4", OverrideTarget::SPECIAL_4 },
 	{ "special5", OverrideTarget::SPECIAL_5 },
 	{ "special6", OverrideTarget::SPECIAL_6 },
+	{ "overlay_top", OverrideTarget::OVERLAY_TOP },
+	{ "overlay_bottom", OverrideTarget::OVERLAY_BOTTOM },
+	{ "overlay_left", OverrideTarget::OVERLAY_LEFT },
+	{ "overlay_right", OverrideTarget::OVERLAY_RIGHT },
+	{ "overlay_front", OverrideTarget::OVERLAY_FRONT },
+	{ "overlay_back", OverrideTarget::OVERLAY_BACK },
 	{ "sides", OverrideTarget::SIDES },
 	{ "all", OverrideTarget::ALL_FACES },
-	{ "*", OverrideTarget::ALL_FACES }
+	{ "*", OverrideTarget::ALL_FACES },
+	{ "overlay_sides", OverrideTarget::OVERLAY_SIDES },
+	{ "overlay_all",   OverrideTarget::OVERLAY_ALL },
+	{ "overlay_*",     OverrideTarget::OVERLAY_ALL },
 };
 
 TextureOverrideSource::TextureOverrideSource(const std::string &filepath)
 {
-	std::ifstream infile(filepath.c_str());
+	auto infile = open_ifstream(filepath.c_str(), false);
 	std::string line;
 	int line_index = 0;
 	while (std::getline(infile, line)) {

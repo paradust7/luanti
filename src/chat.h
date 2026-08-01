@@ -1,32 +1,16 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
+#include <set>
 #include <string>
 #include <vector>
-#include <list>
 #include <optional>
 
 #include "irrlichttypes.h"
 #include "util/enriched_string.h"
-#include "settings.h"
 
 // Chat console related classes
 
@@ -80,7 +64,7 @@ public:
 
 	// Append chat line
 	// Removes oldest chat line if scrollback size is reached
-	void addLine(const std::wstring &name, const std::wstring &text);
+	void addLine(const EnrichedString &name, const EnrichedString &text);
 
 	// Remove all chat lines
 	void clear();
@@ -127,7 +111,8 @@ public:
 
 	void resize(u32 scrollback);
 
-protected:
+	// Get the current scroll position
+	s32 getScrollPosition() const { return m_scroll; }
 	s32 getTopScrollPos() const;
 	s32 getBottomScrollPos() const;
 
@@ -151,7 +136,7 @@ private:
 	// Enable clickable chat weblinks
 	bool m_cache_clickable_chat_weblinks;
 	// Color of clickable chat weblinks
-	irr::video::SColor m_cache_chat_weblink_color;
+	video::SColor m_cache_chat_weblink_color;
 
 	// Whether the lines were modified since last markLinesUnchanged()
 	// Is always set to true when m_unformatted is modified, because that's what

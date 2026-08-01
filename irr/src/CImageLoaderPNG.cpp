@@ -7,11 +7,10 @@
 #include <png.h> // use system lib png
 
 #include "CImage.h"
-#include "CReadFile.h"
+#include "IReadFile.h"
+#include "coreutil.h"
 #include "os.h"
 
-namespace irr
-{
 namespace video
 {
 
@@ -250,5 +249,4 @@ IImageLoader *createImageLoaderPNG()
 	return new CImageLoaderPng();
 }
 
-} // end namespace irr
 } // end namespace video

@@ -1,31 +1,20 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-Copyright (C) 2022 TurkeyMcMac, Jude Melton-Houghton <jwmhjwmh@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
+// Copyright (C) 2022 TurkeyMcMac, Jude Melton-Houghton <jwmhjwmh@gmail.com>
 
 #pragma once
 
 #include "gamedef.h"
 #include "itemdef.h"
+#include <memory>
 #include "nodedef.h"
 #include "craftdef.h"
 #include "content/mods.h"
 #include "database/database-dummy.h"
+#if CHECK_CLIENT_BUILD()
+#include "client/node_visuals.h"
+#endif
 
 class DummyGameDef : public IGameDef {
 public:
@@ -45,6 +34,7 @@ public:
 		delete m_itemdef;
 	}
 
+	bool isClient() override { return false; }
 	IItemDefManager *getItemDefManager() override { return m_itemdef; }
 	const NodeDefManager *getNodeDefManager() override { return m_nodedef; }
 	NodeDefManager* getWritableNodeDefManager() { return m_nodedef; }
@@ -76,4 +66,18 @@ protected:
 	NodeDefManager *m_nodedef = nullptr;
 	ICraftDefManager *m_craftdef = nullptr;
 	ModStorageDatabase *m_mod_storage_database = nullptr;
+
+#if CHECK_CLIENT_BUILD()
+	static std::unique_ptr<NodeVisuals> constructNodeVisuals(ContentFeatures *f)
+	{
+		return std::unique_ptr<NodeVisuals>(new NodeVisuals(f));
+	}
+	static void setNodeVisuals(ContentFeatures &f, std::unique_ptr<NodeVisuals> v = nullptr)
+	{
+		if (v == nullptr)
+			v = constructNodeVisuals(&f);
+		v->f = &f;
+		f.visuals = v.release(); // Destructed by ~ContentFeatures
+	}
+#endif
 };

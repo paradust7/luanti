@@ -4,11 +4,8 @@
 
 #pragma once
 
-#include "irrString.h"
 #include "path.h"
 
-namespace irr
-{
 namespace core
 {
 
@@ -63,7 +60,7 @@ inline io::path &getFileNameExtension(io::path &dest, const io::path &source)
 }
 
 //! delete path from filename
-inline io::path &deletePathFromFilename(io::path &filename)
+inline io::path deletePathFromFilename(const io::path &filename)
 {
 	// delete path from filename
 	const fschar_t *s = filename.c_str();
@@ -73,11 +70,10 @@ inline io::path &deletePathFromFilename(io::path &filename)
 	while (*p != '/' && *p != '\\' && p != s)
 		p--;
 
-	if (p != s) {
+	if (p != s)
 		++p;
-		filename = p;
-	}
-	return filename;
+
+	return p;
 }
 
 //! trim paths
@@ -191,4 +187,3 @@ inline bool isupper(s32 c)
 }
 
 } // end namespace core
-} // end namespace irr

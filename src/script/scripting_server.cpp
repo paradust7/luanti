@@ -1,21 +1,6 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "scripting_server.h"
 #include "server.h"
@@ -24,6 +9,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "filesys.h"
 #include "cpp_api/s_internal.h"
 #include "lua_api/l_areastore.h"
+#include "lua_api/l_async.h"
 #include "lua_api/l_auth.h"
 #include "lua_api/l_base.h"
 #include "lua_api/l_craft.h"
@@ -46,6 +32,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "lua_api/l_settings.h"
 #include "lua_api/l_http.h"
 #include "lua_api/l_storage.h"
+#include "lua_api/l_ipc.h"
 
 extern "C" {
 #include <lualib.h>
@@ -53,7 +40,7 @@ extern "C" {
 
 ServerScripting::ServerScripting(Server* server):
 		ScriptApiBase(ScriptingType::Server),
-		asyncEngine(server)
+		ScriptApiAsync(server)
 {
 	setGameDef(server);
 
@@ -75,6 +62,9 @@ ServerScripting::ServerScripting(Server* server):
 
 	lua_newtable(L);
 	lua_setfield(L, -2, "object_refs");
+
+	lua_newtable(L);
+	lua_setfield(L, -2, "objects_by_guid");
 
 	lua_newtable(L);
 	lua_setfield(L, -2, "luaentities");
@@ -121,23 +111,12 @@ void ServerScripting::initAsync()
 	asyncEngine.registerStateInitializer(ModApiCraft::InitializeAsync);
 	asyncEngine.registerStateInitializer(ModApiItem::InitializeAsync);
 	asyncEngine.registerStateInitializer(ModApiServer::InitializeAsync);
+	asyncEngine.registerStateInitializer(ModApiIPC::Initialize);
 	// not added: ModApiMapgen is a minefield for thread safety
 	// not added: ModApiHttp async api can't really work together with our jobs
 	// not added: ModApiStorage is probably not thread safe(?)
 
 	asyncEngine.initialize(0);
-}
-
-void ServerScripting::stepAsync()
-{
-	asyncEngine.step(getStack());
-}
-
-u32 ServerScripting::queueAsync(std::string &&serialized_func,
-	PackedValue *param, const std::string &mod_origin)
-{
-	return asyncEngine.queueAsyncJob(std::move(serialized_func),
-			param, mod_origin);
 }
 
 void ServerScripting::InitializeModApi(lua_State *L, int top)
@@ -147,8 +126,8 @@ void ServerScripting::InitializeModApi(lua_State *L, int top)
 	ItemStackMetaRef::Register(L);
 	LuaAreaStore::Register(L);
 	LuaItemStack::Register(L);
-	LuaPerlinNoise::Register(L);
-	LuaPerlinNoiseMap::Register(L);
+	LuaValueNoise::Register(L);
+	LuaValueNoiseMap::Register(L);
 	LuaPseudoRandom::Register(L);
 	LuaPcgRandom::Register(L);
 	LuaRaycast::Register(L);
@@ -163,6 +142,7 @@ void ServerScripting::InitializeModApi(lua_State *L, int top)
 	ModChannelRef::Register(L);
 
 	// Initialize mod api modules
+	ModApiAsync::Initialize(L, top);
 	ModApiAuth::Initialize(L, top);
 	ModApiCraft::Initialize(L, top);
 	ModApiEnv::Initialize(L, top);
@@ -176,6 +156,7 @@ void ServerScripting::InitializeModApi(lua_State *L, int top)
 	ModApiHttp::Initialize(L, top);
 	ModApiStorage::Initialize(L, top);
 	ModApiChannels::Initialize(L, top);
+	ModApiIPC::Initialize(L, top);
 }
 
 void ServerScripting::InitializeAsync(lua_State *L, int top)
@@ -184,8 +165,8 @@ void ServerScripting::InitializeAsync(lua_State *L, int top)
 	ItemStackMetaRef::Register(L);
 	LuaAreaStore::Register(L);
 	LuaItemStack::Register(L);
-	LuaPerlinNoise::Register(L);
-	LuaPerlinNoiseMap::Register(L);
+	LuaValueNoise::Register(L);
+	LuaValueNoiseMap::Register(L);
 	LuaPseudoRandom::Register(L);
 	LuaPcgRandom::Register(L);
 	LuaSecureRandom::Register(L);

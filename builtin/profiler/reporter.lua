@@ -1,19 +1,6 @@
---Minetest
---Copyright (C) 2016 T4im
---
---This program is free software; you can redistribute it and/or modify
---it under the terms of the GNU Lesser General Public License as published by
---the Free Software Foundation; either version 2.1 of the License, or
---(at your option) any later version.
---
---This program is distributed in the hope that it will be useful,
---but WITHOUT ANY WARRANTY; without even the implied warranty of
---MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
---GNU Lesser General Public License for more details.
---
---You should have received a copy of the GNU Lesser General Public License along
---with this program; if not, write to the Free Software Foundation, Inc.,
---51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+-- Luanti
+-- Copyright (C) 2016 T4im
+-- SPDX-License-Identifier: LGPL-2.1-or-later
 
 local S = core.get_translator("__builtin")
 -- Note: In this file, only messages are translated
@@ -181,7 +168,7 @@ local CsvFormatter = Formatter:new {
 	end
 }
 
-local function format_statistics(profile, format, filter)
+local function format_statistics(profile, format, filter, enable_translation)
 	local formatter
 	if format == "csv" then
 		formatter = CsvFormatter:new {
@@ -193,16 +180,20 @@ local function format_statistics(profile, format, filter)
 		}
 	end
 	formatter:format(filter)
-	return formatter:flush()
+	local out = formatter:flush()
+	if not enable_translation then
+		out = core.strip_escapes(out)
+	end
+	return out
 end
 
 ---
 -- Format the profile ready for display and
 -- @return string to be printed to the console
 --
-function reporter.print(profile, filter)
+function reporter.print(profile, filter, enable_translation)
 	if filter == "" then filter = nil end
-	return format_statistics(profile, "txt", filter)
+	return format_statistics(profile, "txt", filter, enable_translation)
 end
 
 ---
@@ -228,7 +219,7 @@ local function serialize_profile(profile, format, filter)
 		end
 	end
 	-- Fall back to textual formats.
-	return format_statistics(profile, format, filter)
+	return format_statistics(profile, format, filter, false)
 end
 
 local worldpath = core.get_worldpath()

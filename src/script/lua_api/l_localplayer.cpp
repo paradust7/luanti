@@ -1,28 +1,13 @@
-/*
-Minetest
-Copyright (C) 2017 Dumbeldor, Vincent Glize <vincent.glize@live.fr>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2017 Dumbeldor, Vincent Glize <vincent.glize@live.fr>
 
 #include "l_localplayer.h"
 #include "l_internal.h"
 #include "lua_api/l_item.h"
 #include "script/common/c_converter.h"
 #include "client/localplayer.h"
-#include "hud.h"
+#include "hud_element.h"
 #include "common/c_content.h"
 #include "client/content_cao.h"
 
@@ -72,7 +57,7 @@ int LuaLocalPlayer::l_get_name(lua_State *L)
 {
 	LocalPlayer *player = getobject(L, 1);
 
-	lua_pushstring(L, player->getName());
+	lua_pushstring(L, player->getName().c_str());
 	return 1;
 }
 
@@ -81,7 +66,7 @@ int LuaLocalPlayer::l_get_wield_index(lua_State *L)
 {
 	LocalPlayer *player = getobject(L, 1);
 
-	lua_pushinteger(L, player->getWieldIndex());
+	lua_pushinteger(L, player->getWieldIndex() + 1);
 	return 1;
 }
 
@@ -198,6 +183,15 @@ int LuaLocalPlayer::l_get_physics_override(lua_State *L)
 	lua_pushnumber(L, phys.acceleration_air);
 	lua_setfield(L, -2, "acceleration_air");
 
+	lua_pushnumber(L, phys.speed_fast);
+	lua_setfield(L, -2, "speed_fast");
+
+	lua_pushnumber(L, phys.acceleration_fast);
+	lua_setfield(L, -2, "acceleration_fast");
+
+	lua_pushnumber(L, phys.speed_walk);
+	lua_setfield(L, -2, "speed_walk");
+
 	return 1;
 }
 
@@ -251,12 +245,13 @@ int LuaLocalPlayer::l_get_control(lua_State *L)
 	set("zoom",  c.zoom);
 	set("dig",   c.dig);
 	set("place", c.place);
-	// Player movement in polar coordinates and non-binary speed
-	lua_pushnumber(L, c.movement_speed);
-	lua_setfield(L, -2, "movement_speed");
-	lua_pushnumber(L, c.movement_direction);
-	lua_setfield(L, -2, "movement_direction");
-	// Provide direction keys to ensure compatibility
+
+	v2f movement = c.getMovement();
+	lua_pushnumber(L, movement.X);
+	lua_setfield(L, -2, "movement_x");
+	lua_pushnumber(L, movement.Y);
+	lua_setfield(L, -2, "movement_y");
+
 	set("up",    c.direction_keys & (1 << 0));
 	set("down",  c.direction_keys & (1 << 1));
 	set("left",  c.direction_keys & (1 << 2));
@@ -430,15 +425,14 @@ int LuaLocalPlayer::l_hud_get_all(lua_State *L)
 		return 0;
 
 	lua_newtable(L);
-	player->hudApply([&](const std::vector<HudElement*>& hud) {
-		for (std::size_t id = 0; id < hud.size(); ++id) {
-			HudElement *elem = hud[id];
-			if (elem != nullptr) {
-				push_hud_element(L, elem);
-				lua_rawseti(L, -2, id);
-			}
+	u32 id = 0;
+	for (HudElement *elem : player->getHudElements()) {
+		if (elem != nullptr) {
+			push_hud_element(L, elem);
+			lua_rawseti(L, -2, id);
 		}
-	});
+		++id;
+	}
 	return 1;
 }
 
@@ -469,7 +463,7 @@ void LuaLocalPlayer::Register(lua_State *L)
 		{"__gc", gc_object},
 		{0, 0}
 	};
-	registerClass(L, className, methods, metamethods);
+	registerClass<LuaLocalPlayer>(L, methods, metamethods);
 }
 
 const char LuaLocalPlayer::className[] = "LocalPlayer";

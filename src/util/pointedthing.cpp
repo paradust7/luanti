@@ -1,52 +1,12 @@
-/*
-Minetest
-Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "pointedthing.h"
 
 #include "serialize.h"
 #include "exceptions.h"
 #include <sstream>
-
-PointedThing::PointedThing(const v3s16 &under, const v3s16 &above,
-	const v3s16 &real_under, const v3f &point, const v3f &normal,
-	u16 box_id, f32 distSq, PointabilityType pointab):
-	type(POINTEDTHING_NODE),
-	node_undersurface(under),
-	node_abovesurface(above),
-	node_real_undersurface(real_under),
-	intersection_point(point),
-	intersection_normal(normal),
-	box_id(box_id),
-	distanceSq(distSq),
-	pointability(pointab)
-{}
-
-PointedThing::PointedThing(u16 id, const v3f &point, const v3f &normal,
-	const v3f &raw_normal, f32 distSq, PointabilityType pointab) :
-	type(POINTEDTHING_OBJECT),
-	object_id(id),
-	intersection_point(point),
-	intersection_normal(normal),
-	raw_intersection_normal(raw_normal),
-	distanceSq(distSq),
-	pointability(pointab)
-{}
 
 std::string PointedThing::dump() const
 {
@@ -130,9 +90,4 @@ bool PointedThing::operator==(const PointedThing &pt2) const
 			return false;
 	}
 	return true;
-}
-
-bool PointedThing::operator!=(const PointedThing &pt2) const
-{
-	return !(*this == pt2);
 }

@@ -1,4 +1,5 @@
 _G.vector = {}
+dofile("builtin/common/math.lua")
 dofile("builtin/common/vector.lua")
 
 describe("vector", function()
@@ -113,11 +114,34 @@ describe("vector", function()
 		assert.equal(vector.new(0, 1, -1), a:round())
 	end)
 
+	it("ceil()", function()
+		local a = vector.new(0.1, 0.9, -0.5)
+		assert.equal(vector.new(1, 1, 0), vector.ceil(a))
+		assert.equal(vector.new(1, 1, 0), a:ceil())
+	end)
+
+	it("sign()", function()
+		local a = vector.new(-120.3, 0, 231.5)
+		assert.equal(vector.new(-1, 0, 1), vector.sign(a))
+		assert.equal(vector.new(-1, 0, 1), a:sign())
+		assert.equal(vector.new(0, 0, 1), vector.sign(a, 200))
+		assert.equal(vector.new(0, 0, 1), a:sign(200))
+	end)
+
+	it("abs()", function()
+		local a = vector.new(-123.456, 0, 13)
+		assert.equal(vector.new(123.456, 0, 13), vector.abs(a))
+		assert.equal(vector.new(123.456, 0, 13), a:abs())
+	end)
+
 	it("apply()", function()
 		local i = 0
 		local f = function(x)
 			i = i + 1
 			return x + i
+		end
+		local f2 = function(x, opt1, opt2, opt3)
+			return x + opt1 + opt2 + opt3
 		end
 		local a = vector.new(0.1, 0.9, -0.5)
 		assert.equal(vector.new(1, 1, 0), vector.apply(a, math.ceil))
@@ -126,6 +150,9 @@ describe("vector", function()
 		assert.equal(vector.new(0.1, 0.9, 0.5), a:apply(math.abs))
 		assert.equal(vector.new(1.1, 2.9, 2.5), vector.apply(a, f))
 		assert.equal(vector.new(4.1, 5.9, 5.5), a:apply(f))
+		local b = vector.new(1, 2, 3)
+		assert.equal(vector.new(4, 5, 6), vector.apply(b, f2, 1, 1, 1))
+		assert.equal(vector.new(4, 5, 6), b:apply(f2, 1, 1, 1))
 	end)
 
 	it("combine()", function()
@@ -405,7 +432,32 @@ describe("vector", function()
 			assert.True(almost_equal({x = 1, y = 0, z = 0},
 				vector.rotate({x = 1, y = 0, z = 0}, {x = math.pi / 123, y = 0, z = 0})))
 		end)
-		it("is counterclockwise", function()
+		it("rotation order is Z-X-Y", function()
+			local r = vector.new(1, 2, 3)
+			for _, v in ipairs({
+				vector.new(1, 0, 0),
+				vector.new(0, 1, 0),
+				vector.new(0, 0, 1),
+			}) do
+				local expected = v:rotate(r)
+				local function try(order)
+					local rotated = v
+					for axis in order:gmatch(".") do
+						local r_axis = vector.zero()
+						r_axis[axis] = r[axis]
+						rotated = vector.rotate(rotated, r_axis)
+					end
+					return almost_equal(rotated, expected)
+				end
+				assert.False(try("xyz"))
+				assert.False(try("xzy"))
+				assert.False(try("yxz"))
+				assert.False(try("yzx"))
+				assert.True(try("zxy"))
+				assert.False(try("zyx"))
+			end
+		end)
+		it("is right handed", function()
 			local v_before1 = {x = 0, y = 1, z = -1}
 			local v_after1 = vector.rotate(v_before1, {x = math.pi / 4, y = 0, z = 0})
 			assert.True(almost_equal(vector.normalize(vector.cross(v_after1, v_before1)), {x = 1, y = 0, z = 0}))
@@ -468,5 +520,14 @@ describe("vector", function()
 		assert.True(vector.in_area(vector.new(-2, 5, -8), vector.new(-10, -10, -10), vector.new(10, 10, 10)))
 		assert.True(vector.in_area(vector.new(-10, -10, -10), vector.new(-10, -10, -10), vector.new(10, 10, 10)))
 		assert.False(vector.in_area(vector.new(-10, -10, -10), vector.new(10, 10, 10), vector.new(-11, -10, -10)))
+	end)
+
+	it("random_in_area()", function()
+		local min = vector.new(-100, -100, -100)
+		local max = vector.new(100, 100, 100)
+		for i = 1, 1000 do
+			local random = vector.random_in_area(min, max)
+			assert.True(vector.in_area(random, min, max))
+		end
 	end)
 end)

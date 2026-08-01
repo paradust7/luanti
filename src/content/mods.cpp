@@ -1,21 +1,6 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include <cctype>
 #include <fstream>
@@ -25,11 +10,9 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "database/database.h"
 #include "filesys.h"
 #include "log.h"
-#include "content/subgames.h"
 #include "settings.h"
-#include "porting.h"
-#include "convert_json.h"
 #include "script/common/c_internal.h"
+#include "exceptions.h"
 
 void ModSpec::checkAndLog() const
 {
@@ -78,30 +61,51 @@ bool parseModContents(ModSpec &spec)
 	spec.is_modpack = false;
 	spec.modpack_content.clear();
 
+	std::string conf_filename;
+
 	// Handle modpacks (defined by containing modpack.txt)
-	if (fs::IsFile(spec.path + DIR_DELIM + "modpack.txt") ||
-			fs::IsFile(spec.path + DIR_DELIM + "modpack.conf")) {
+	if (fs::IsFile(spec.path + DIR_DELIM + "modpack.conf")) {
 		spec.is_modpack = true;
-		spec.modpack_content = getModsInPath(spec.path, spec.virtual_path, true);
-		return true;
+		conf_filename = "modpack.conf";
+	} else if (fs::IsFile(spec.path + DIR_DELIM + "modpack.txt")) {
+		spec.is_modpack = true;
 	} else if (!fs::IsFile(spec.path + DIR_DELIM + "init.lua")) {
 		return false;
+	} else {
+		// Is a mod
+		conf_filename = "mod.conf";
 	}
 
+	if (spec.is_modpack)
+		spec.modpack_content = getModsInPath(spec.path, spec.virtual_path, spec.modpack_depth + 1);
 
 	Settings info;
-	info.readConfigFile((spec.path + DIR_DELIM + "mod.conf").c_str());
+	if (!conf_filename.empty())
+		info.readConfigFile((spec.path + DIR_DELIM + conf_filename).c_str());
 
-	if (info.exists("name"))
+	if (info.exists("name")) {
 		spec.name = info.get("name");
-	else
+		spec.is_name_explicit = true;
+	} else if (!spec.is_modpack) {
 		spec.deprecation_msgs.push_back("Mods not having a mod.conf file with the name is deprecated.");
+	}
+
+	if (info.exists("description"))
+		spec.desc = info.get("description");
+	else if (fs::ReadFile(spec.path + DIR_DELIM + "description.txt", spec.desc))
+		spec.deprecation_msgs.push_back("description.txt is deprecated, please use mod[pack].conf instead.");
 
 	if (info.exists("author"))
 		spec.author = info.get("author");
 
 	if (info.exists("release"))
 		spec.release = info.getS32("release");
+
+
+	// The subsequent fields are not available for modpacks
+	if (spec.is_modpack)
+		return true;
+
 
 	// Attempt to load dependencies from mod.conf
 	bool mod_conf_has_depends = false;
@@ -152,16 +156,11 @@ bool parseModContents(ModSpec &spec)
 		}
 	}
 
-	if (info.exists("description"))
-		spec.desc = info.get("description");
-	else if (fs::ReadFile(spec.path + DIR_DELIM + "description.txt", spec.desc))
-		spec.deprecation_msgs.push_back("description.txt is deprecated, please use mod.conf instead.");
-
 	return true;
 }
 
 std::map<std::string, ModSpec> getModsInPath(
-		const std::string &path, const std::string &virtual_path, bool part_of_modpack)
+		const std::string &path, const std::string &virtual_path, int modpack_depth)
 {
 	// NOTE: this function works in mutual recursion with parseModContents
 
@@ -182,31 +181,33 @@ std::map<std::string, ModSpec> getModsInPath(
 
 		mod_path.clear();
 		mod_path.append(path).append(DIR_DELIM).append(modname);
+		mod_path = fs::AbsolutePath(mod_path);
 
 		mod_virtual_path.clear();
 		// Intentionally uses / to keep paths same on different platforms
 		mod_virtual_path.append(virtual_path).append("/").append(modname);
 
-		ModSpec spec(modname, mod_path, part_of_modpack, mod_virtual_path);
-		parseModContents(spec);
-		result.insert(std::make_pair(modname, spec));
+		ModSpec spec(modname, mod_path, modpack_depth, mod_virtual_path);
+		if (parseModContents(spec)) {
+			result[modname] = std::move(spec);
+		}
 	}
 	return result;
 }
 
-std::vector<ModSpec> flattenMods(const std::map<std::string, ModSpec> &mods)
+std::vector<ModSpec> flattenMods(const std::map<std::string, ModSpec> &mods,
+		bool discard_modpacks)
 {
 	std::vector<ModSpec> result;
 	for (const auto &it : mods) {
 		const ModSpec &mod = it.second;
+		if (!mod.is_modpack || !discard_modpacks) {
+			result.push_back(mod);
+		}
 		if (mod.is_modpack) {
-			std::vector<ModSpec> content = flattenMods(mod.modpack_content);
+			std::vector<ModSpec> content = flattenMods(mod.modpack_content, discard_modpacks);
 			result.reserve(result.size() + content.size());
 			result.insert(result.end(), content.begin(), content.end());
-
-		} else // not a modpack
-		{
-			result.push_back(mod);
 		}
 	}
 	return result;

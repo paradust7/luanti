@@ -1,5 +1,5 @@
 --[[
-Minetest
+Luanti
 Copyright (C) 2018-2020 SmallJoker, 2022 rubenwardy
 
 This program is free software; you can redistribute it and/or modify
@@ -25,8 +25,10 @@ end
 
 local function version_info_formspec(data)
 	local cur_ver = core.get_version()
+	-- TRANSLATORS: $1 = name of the engine
 	local title = fgettext("A new $1 version is available", cur_ver.project)
 	local message =
+		-- TRANSLATORS: $1 and $2 are version numbers, $3 is a URL
 		fgettext("Installed version: $1\nNew version: $2\n" ..
 				"Visit $3 to find out how to get the newest version and stay up to date" ..
 				" with features and bugfixes.",

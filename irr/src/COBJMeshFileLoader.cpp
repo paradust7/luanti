@@ -6,16 +6,17 @@
 #include "IMeshManipulator.h"
 #include "IVideoDriver.h"
 #include "SMesh.h"
-#include "SMeshBuffer.h"
-#include "SAnimatedMesh.h"
+#include "CMeshBuffer.h"
 #include "IReadFile.h"
-#include "IAttributes.h"
-#include "fast_atof.h"
 #include "coreutil.h"
 #include "os.h"
 
-namespace irr
+static inline f32 my_atof(const char *p)
 {
+	// FIXME: should we check the endptr??
+	return (f32)strtod(p, nullptr);
+}
+
 namespace scene
 {
 
@@ -26,11 +27,7 @@ namespace scene
 //! Constructor
 COBJMeshFileLoader::COBJMeshFileLoader(scene::ISceneManager *smgr) :
 		SceneManager(smgr)
-{
-#ifdef _DEBUG
-	setDebugName("COBJMeshFileLoader");
-#endif
-}
+{}
 
 //! destructor
 COBJMeshFileLoader::~COBJMeshFileLoader()
@@ -78,26 +75,16 @@ IAnimatedMesh *COBJMeshFileLoader::createMesh(io::IReadFile *file)
 	const c8 *bufPtr = buf;
 	core::stringc grpName, mtlName;
 	bool mtlChanged = false;
-	bool useGroups = !SceneManager->getParameters()->getAttributeAsBool(OBJ_LOADER_IGNORE_GROUPS);
-	bool useMaterials = !SceneManager->getParameters()->getAttributeAsBool(OBJ_LOADER_IGNORE_MATERIAL_FILES);
-	[[maybe_unused]] irr::u32 lineNr = 1; // only counts non-empty lines, still useful in debugging to locate errors
+	[[maybe_unused]] u32 lineNr = 1; // only counts non-empty lines, still useful in debugging to locate errors
 	core::array<int> faceCorners;
 	faceCorners.reallocate(32); // should be large enough
 	const core::stringc TAG_OFF = "off";
-	irr::u32 degeneratedFaces = 0;
+	u32 degeneratedFaces = 0;
 
 	while (bufPtr != bufEnd) {
 		switch (bufPtr[0]) {
 		case 'm': // mtllib (material)
-		{
-			if (useMaterials) {
-				c8 name[WORD_BUFFER_LENGTH];
-				bufPtr = goAndCopyNextWord(name, bufPtr, WORD_BUFFER_LENGTH, bufEnd);
-#ifdef _IRR_DEBUG_OBJ_LOADER_
-				os::Printer::log("Ignoring material file", name);
-#endif
-			}
-		} break;
+			break; // not supported
 
 		case 'v': // v, vn, vt
 			switch (bufPtr[1]) {
@@ -131,12 +118,7 @@ IAnimatedMesh *COBJMeshFileLoader::createMesh(io::IReadFile *file)
 #ifdef _IRR_DEBUG_OBJ_LOADER_
 			os::Printer::log("Loaded group start", grp, ELL_DEBUG);
 #endif
-			if (useGroups) {
-				if (0 != grp[0])
-					grpName = grp;
-				else
-					grpName = "default";
-			}
+			grpName = ('\0' != grp[0]) ? grp : "default";
 			mtlChanged = true;
 		} break;
 
@@ -150,7 +132,7 @@ IAnimatedMesh *COBJMeshFileLoader::createMesh(io::IReadFile *file)
 			if (TAG_OFF == smooth)
 				smoothingGroup = 0;
 			else
-				smoothingGroup = core::strtoul10(smooth);
+				smoothingGroup = strtoul(smooth, nullptr, 10);
 
 			(void)smoothingGroup; // disable unused variable warnings
 		} break;
@@ -182,7 +164,7 @@ IAnimatedMesh *COBJMeshFileLoader::createMesh(io::IReadFile *file)
 				mtlChanged = false;
 			}
 			if (currMtl)
-				v.Color = currMtl->Meshbuffer->Material.DiffuseColor;
+				v.Color = video::SColorf(0.8f, 0.8f, 0.8f, 1.0f).toSColor();
 
 			// get all vertices data in this face (current line of obj file)
 			const core::stringc wordBuffer = copyLine(bufPtr, bufEnd);
@@ -192,6 +174,7 @@ IAnimatedMesh *COBJMeshFileLoader::createMesh(io::IReadFile *file)
 			faceCorners.set_used(0); // fast clear
 
 			// read in all vertices
+			auto &Vertices = currMtl->Meshbuffer->Vertices->Data;
 			linePtr = goNextWord(linePtr, endPtr);
 			while (0 != linePtr[0]) {
 				// Array to communicate with retrieveVertexIndices()
@@ -204,7 +187,7 @@ IAnimatedMesh *COBJMeshFileLoader::createMesh(io::IReadFile *file)
 				u32 wlength = copyWord(vertexWord, linePtr, WORD_BUFFER_LENGTH, endPtr);
 				// this function will also convert obj's 1-based index to c++'s 0-based index
 				retrieveVertexIndices(vertexWord, Idx, vertexWord + wlength + 1, vertexBuffer.size(), textureCoordBuffer.size(), normalsBuffer.size());
-				if (Idx[0] >= 0 && Idx[0] < (irr::s32)vertexBuffer.size())
+				if (Idx[0] >= 0 && Idx[0] < (s32)vertexBuffer.size())
 					v.Pos = vertexBuffer[Idx[0]];
 				else {
 					os::Printer::log("Invalid vertex index in this line", wordBuffer.c_str(), ELL_ERROR);
@@ -212,11 +195,11 @@ IAnimatedMesh *COBJMeshFileLoader::createMesh(io::IReadFile *file)
 					cleanUp();
 					return 0;
 				}
-				if (Idx[1] >= 0 && Idx[1] < (irr::s32)textureCoordBuffer.size())
+				if (Idx[1] >= 0 && Idx[1] < (s32)textureCoordBuffer.size())
 					v.TCoords = textureCoordBuffer[Idx[1]];
 				else
 					v.TCoords.set(0.0f, 0.0f);
-				if (Idx[2] >= 0 && Idx[2] < (irr::s32)normalsBuffer.size())
+				if (Idx[2] >= 0 && Idx[2] < (s32)normalsBuffer.size())
 					v.Normal = normalsBuffer[Idx[2]];
 				else {
 					v.Normal.set(0.0f, 0.0f, 0.0f);
@@ -228,8 +211,8 @@ IAnimatedMesh *COBJMeshFileLoader::createMesh(io::IReadFile *file)
 				if (n != currMtl->VertMap.end()) {
 					vertLocation = n->second;
 				} else {
-					currMtl->Meshbuffer->Vertices.push_back(v);
-					vertLocation = currMtl->Meshbuffer->Vertices.size() - 1;
+					Vertices.push_back(v);
+					vertLocation = Vertices.size() - 1;
 					currMtl->VertMap.emplace(v, vertLocation);
 				}
 
@@ -247,15 +230,16 @@ IAnimatedMesh *COBJMeshFileLoader::createMesh(io::IReadFile *file)
 			}
 
 			// triangulate the face
+			auto &Indices = currMtl->Meshbuffer->Indices->Data;
 			const int c = faceCorners[0];
 			for (u32 i = 1; i < faceCorners.size() - 1; ++i) {
 				// Add a triangle
 				const int a = faceCorners[i + 1];
 				const int b = faceCorners[i];
 				if (a != b && a != c && b != c) { // ignore degenerated faces. We can get them when we merge vertices above in the VertMap.
-					currMtl->Meshbuffer->Indices.push_back(a);
-					currMtl->Meshbuffer->Indices.push_back(b);
-					currMtl->Meshbuffer->Indices.push_back(c);
+					Indices.push_back(a);
+					Indices.push_back(b);
+					Indices.push_back(c);
 				} else {
 					++degeneratedFaces;
 				}
@@ -272,9 +256,9 @@ IAnimatedMesh *COBJMeshFileLoader::createMesh(io::IReadFile *file)
 	} // end while(bufPtr && (bufPtr-buf<filesize))
 
 	if (degeneratedFaces > 0) {
-		irr::core::stringc log(degeneratedFaces);
+		core::stringc log(degeneratedFaces);
 		log += " degenerated faces removed in ";
-		log += irr::core::stringc(fullName);
+		log += core::stringc(fullName);
 		os::Printer::log(log.c_str(), ELL_INFORMATION);
 	}
 
@@ -290,23 +274,19 @@ IAnimatedMesh *COBJMeshFileLoader::createMesh(io::IReadFile *file)
 		}
 	}
 
-	// Create the Animated mesh if there's anything in the mesh
-	SAnimatedMesh *animMesh = 0;
-	if (0 != mesh->getMeshBufferCount()) {
-		mesh->recalculateBoundingBox();
-		animMesh = new SAnimatedMesh();
-		animMesh->Type = EAMT_OBJ;
-		animMesh->addMesh(mesh);
-		animMesh->recalculateBoundingBox();
-	}
-
 	// Clean up the allocate obj file contents
 	delete[] buf;
 	// more cleaning up
 	cleanUp();
-	mesh->drop();
 
-	return animMesh;
+	// Nothing in the mesh
+	if (mesh->getMeshBufferCount() == 0) {
+		mesh->drop();
+		return nullptr;
+	}
+
+	mesh->recalculateBoundingBox();
+	return mesh;
 }
 
 //! Read RGB color
@@ -316,11 +296,11 @@ const c8 *COBJMeshFileLoader::readColor(const c8 *bufPtr, video::SColor &color, 
 	c8 colStr[COLOR_BUFFER_LENGTH];
 
 	bufPtr = goAndCopyNextWord(colStr, bufPtr, COLOR_BUFFER_LENGTH, bufEnd);
-	color.setRed((u32)core::round32(core::fast_atof(colStr) * 255.f));
+	color.setRed((u32)core::round32(my_atof(colStr) * 255.f));
 	bufPtr = goAndCopyNextWord(colStr, bufPtr, COLOR_BUFFER_LENGTH, bufEnd);
-	color.setGreen((u32)core::round32(core::fast_atof(colStr) * 255.f));
+	color.setGreen((u32)core::round32(my_atof(colStr) * 255.f));
 	bufPtr = goAndCopyNextWord(colStr, bufPtr, COLOR_BUFFER_LENGTH, bufEnd);
-	color.setBlue((u32)core::round32(core::fast_atof(colStr) * 255.f));
+	color.setBlue((u32)core::round32(my_atof(colStr) * 255.f));
 	return bufPtr;
 }
 
@@ -331,11 +311,11 @@ const c8 *COBJMeshFileLoader::readVec3(const c8 *bufPtr, core::vector3df &vec, c
 	c8 wordBuffer[WORD_BUFFER_LENGTH];
 
 	bufPtr = goAndCopyNextWord(wordBuffer, bufPtr, WORD_BUFFER_LENGTH, bufEnd);
-	vec.X = -core::fast_atof(wordBuffer); // change handedness
+	vec.X = -my_atof(wordBuffer); // change handedness
 	bufPtr = goAndCopyNextWord(wordBuffer, bufPtr, WORD_BUFFER_LENGTH, bufEnd);
-	vec.Y = core::fast_atof(wordBuffer);
+	vec.Y = my_atof(wordBuffer);
 	bufPtr = goAndCopyNextWord(wordBuffer, bufPtr, WORD_BUFFER_LENGTH, bufEnd);
-	vec.Z = core::fast_atof(wordBuffer);
+	vec.Z = my_atof(wordBuffer);
 	return bufPtr;
 }
 
@@ -346,9 +326,9 @@ const c8 *COBJMeshFileLoader::readUV(const c8 *bufPtr, core::vector2df &vec, con
 	c8 wordBuffer[WORD_BUFFER_LENGTH];
 
 	bufPtr = goAndCopyNextWord(wordBuffer, bufPtr, WORD_BUFFER_LENGTH, bufEnd);
-	vec.X = core::fast_atof(wordBuffer);
+	vec.X = my_atof(wordBuffer);
 	bufPtr = goAndCopyNextWord(wordBuffer, bufPtr, WORD_BUFFER_LENGTH, bufEnd);
-	vec.Y = 1 - core::fast_atof(wordBuffer); // change handedness
+	vec.Y = 1 - my_atof(wordBuffer); // change handedness
 	return bufPtr;
 }
 
@@ -493,7 +473,7 @@ bool COBJMeshFileLoader::retrieveVertexIndices(c8 *vertexData, s32 *idx, const c
 			// number is completed. Convert and store it
 			word[i] = '\0';
 			// if no number was found index will become 0 and later on -1 by decrement
-			idx[idxType] = core::strtol10(word);
+			idx[idxType] = strtoul(word, nullptr, 10);
 			if (idx[idxType] < 0) {
 				switch (idxType) {
 				case 0:
@@ -546,4 +526,3 @@ void COBJMeshFileLoader::cleanUp()
 }
 
 } // end namespace scene
-} // end namespace irr

@@ -1,30 +1,16 @@
-/*
-Minetest
-Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
 #include <cassert>
 #include <unordered_set>
+#include <optional>
+#include <queue>
 #include "irrlichttypes_bloated.h"
 #include "activeobject.h"
 #include "itemgroup.h"
-#include "util/container.h"
 
 
 /*
@@ -73,16 +59,11 @@ public:
 	void markForRemoval();
 	void markForDeactivation();
 
-	// Create a certain type of ServerActiveObject
-	static ServerActiveObject* create(ActiveObjectType type,
-			ServerEnvironment *env, u16 id, v3f pos,
-			const std::string &data);
-
 	/*
 		Some simple getters/setters
 	*/
 	v3f getBasePosition() const { return m_base_position; }
-	void setBasePosition(v3f pos){ m_base_position = pos; }
+	void setBasePosition(v3f pos);
 	ServerEnvironment* getEnv(){ return m_env; }
 
 	/*
@@ -148,7 +129,7 @@ public:
 
 	// Returns added tool wear
 	virtual u32 punch(v3f dir,
-			const ToolCapabilities *toolcap = nullptr,
+			const ToolCapabilities &toolcap,
 			ServerActiveObject *puncher = nullptr,
 			float time_from_last_punch = 1000000.0f,
 			u16 initial_wear = 0)
@@ -159,6 +140,10 @@ public:
 	{}
 	virtual u16 getHP() const
 	{ return 0; }
+
+	/// @brief Returns an unique ID for this object (persistent across unload, server restarts).
+	/// @note Because these strings are very short, copying them is not expensive.
+	virtual std::string getGUID() const = 0;
 
 	virtual void setArmorGroups(const ItemGroupList &armor_groups)
 	{}
@@ -176,8 +161,8 @@ public:
 	{ BoneOverride props; return props; }
 	virtual const BoneOverrideMap &getBoneOverrides() const
 	{ static BoneOverrideMap rv; return rv; }
-	virtual const std::unordered_set<int> &getAttachmentChildIds() const
-	{ static std::unordered_set<int> rv; return rv; }
+	virtual const std::unordered_set<object_t> &getAttachmentChildIds() const
+	{ static std::unordered_set<object_t> rv; return rv; }
 	virtual ServerActiveObject *getParent() const { return nullptr; }
 	virtual ObjectProperties *accessObjectProperties()
 	{ return NULL; }
@@ -241,15 +226,29 @@ public:
 	*/
 	v3s16 m_static_block = v3s16(1337,1337,1337);
 
+	// Names of players to whom the object is to be sent, not considering parents.
+	using Observers = std::optional<std::unordered_set<std::string>>;
+	Observers m_observers;
+
+	/// Invalidate final observer cache. This needs to be done whenever
+	/// the observers of this object or any of its ancestors may have changed.
+	void invalidateEffectiveObservers();
+	/// Cache `m_effective_observers` with the names of all observers,
+	/// also indirect observers (object attachment chain).
+	const Observers &getEffectiveObservers();
+	/// Force a recalculation of final observers (including all parents).
+	const Observers &recalculateEffectiveObservers();
+	/// Whether the object is sent to `player_name`
+	bool isEffectivelyObservedBy(const std::string &player_name);
+
 protected:
+	// Cached intersection of m_observers of this object and all its parents.
+	std::optional<Observers> m_effective_observers;
+
 	virtual void onMarkedForDeactivation() {}
 	virtual void onMarkedForRemoval() {}
 
-	virtual void onAttach(int parent_id) {}
-	virtual void onDetach(int parent_id) {}
-
 	ServerEnvironment *m_env;
-	v3f m_base_position;
 	std::unordered_set<u32> m_attached_particle_spawners;
 
 	/*
@@ -277,4 +276,7 @@ protected:
 		Queue of messages to be sent to the client
 	*/
 	std::queue<ActiveObjectMessage> m_messages_out;
+
+private:
+	v3f m_base_position; // setBasePosition updates index and MUST be called
 };

@@ -4,33 +4,20 @@
 
 #pragma once
 
-#include "IReadFile.h"
-#include "IFileList.h"
-
-namespace irr
-{
+#include "IReferenceCounted.h"
+#include "path.h"
 
 namespace io
 {
 
-//! FileSystemType: which filesystem should be used for e.g. browsing
-enum EFileSystemType
-{
-	FILESYSTEM_NATIVE = 0, // Native OS FileSystem
-	FILESYSTEM_VIRTUAL     // Virtual FileSystem
-};
+class IReadFile;
+class IFileList;
 
 //! Contains the different types of archives
 enum E_FILE_ARCHIVE_TYPE
 {
 	//! A PKZIP archive
 	EFAT_ZIP = MAKE_IRR_ID('Z', 'I', 'P', 0),
-
-	//! A gzip archive
-	EFAT_GZIP = MAKE_IRR_ID('g', 'z', 'i', 'p'),
-
-	//! An Android asset file archive
-	EFAT_ANDROID_ASSET = MAKE_IRR_ID('A', 'S', 'S', 'E'),
 
 	//! The type of this archive is unknown
 	EFAT_UNKNOWN = MAKE_IRR_ID('u', 'n', 'k', 'n')
@@ -73,13 +60,6 @@ public:
 	but checks if file exists will fail.
 	*/
 	virtual void addDirectoryToFileList(const io::path &filename) {}
-
-	//! An optionally used password string
-	/** This variable is publicly accessible from the interface in order to
-	avoid single access patterns to this place, and hence allow some more
-	obscurity.
-	*/
-	core::stringc Password;
 };
 
 //! Class which is able to create an archive from a file.
@@ -124,4 +104,3 @@ public:
 };
 
 } // end namespace io
-} // end namespace irr

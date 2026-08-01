@@ -1,5 +1,5 @@
-Minetest Lua Mainmenu API Reference 5.9.0
-=========================================
+Luanti Lua Mainmenu API Reference 5.16.1
+========================================
 
 Introduction
 -------------
@@ -8,13 +8,25 @@ The main menu is defined as a formspec by Lua in `builtin/mainmenu/`
 Description of formspec language to show your menu is in `lua_api.md`
 
 
+Images and 3D models
+------
+
+Directory delimiters change according to the OS (e.g. on Unix-like systems
+is `/`, on Windows is `\`). When putting an image or a 3D model inside a formspec,
+be sure to sanitize it first with `core.formspec_escape(img)`; otherwise,
+any resource located in a subpath won't be displayed on OSs using `\` as delimiter.
+
+
 Callbacks
 ---------
 
 * `core.button_handler(fields)`: called when a button is pressed.
   * `fields` = `{name1 = value1, name2 = value2, ...}`
 * `core.event_handler(event)`
-  * `event`: `"MenuQuit"`, `"KeyEnter"`, `"ExitButton"` or `"EditBoxEnter"`
+  * `event`: `"MenuQuit"` (derived from `quit`) or `"FullscreenChange"`
+    The main menu may issue custom events, such as `"Refresh"` (server list).
+* `core.on_before_close()`: called before the menu is closed, either to exit or
+  to join a game
 
 
 Gamedata
@@ -47,7 +59,10 @@ Functions
   * returns the maximum supported network protocol version
 * `core.open_url(url)`
   * opens the URL in a web browser, returns false on failure.
-  * Must begin with http:// or https://
+  * `url` must begin with http:// or https://
+* `core.open_url_dialog(url)`
+  * shows a dialog to allow the user to choose whether to open a URL.
+  * `url` must begin with http:// or https://
 * `core.open_dir(path)`
   * opens the path in the system file browser/explorer, returns false on failure.
   * Must be an existing directory.
@@ -55,11 +70,19 @@ Functions
   * Android only. Shares file using the share popup
 * `core.get_version()` (possible in async calls)
   * returns current core version
+* `core.get_formspec_version()`
+  * returns maximum supported formspec version
 
 
 
 Filesystem
 ----------
+
+To access specific subpaths, use `DIR_DELIM` as a directory delimiter instead
+of manually putting one, as different OSs use different delimiters. E.g.
+```lua
+"my" .. DIR_DELIM .. "custom" .. DIR_DELIM .. "path" -- and not my/custom/path
+```
 
 * `core.get_builtin_path()`
   * returns path to builtin root
@@ -84,11 +107,6 @@ Filesystem
   * `spec` = `SimpleSoundSpec` (see `lua_api.md`)
   * `looped` = bool
 * `handle:stop()` or `core.sound_stop(handle)`
-* `core.get_video_drivers()`
-  * get list of video drivers supported by engine (not all modes are guaranteed to work)
-  * returns list of available video drivers' settings name and 'friendly' display name
-    e.g. `{ {name="opengl", friendly_name="OpenGL"}, {name="software", friendly_name="Software Renderer"} }`
-  * first element of returned list is guaranteed to be the NULL driver
 * `core.get_mapgen_names([include_hidden=false])` -> table of map generator algorithms
     registered in the core (possible in async calls)
 * `core.get_cache_path()` -> path of cache
@@ -107,7 +125,7 @@ HTTP Requests
     * returns `HTTPApiTable` containing http functions.
     * The returned table contains the functions `fetch_sync`, `fetch_async` and
       `fetch_async_get` described below.
-    * Function only exists if minetest server was built with cURL support.
+    * Function only exists if Luanti server was built with cURL support.
 * `HTTPApiTable.fetch_sync(HTTPRequest req)`: returns HTTPRequestResult
     * Performs given request synchronously
 * `HTTPApiTable.fetch_async(HTTPRequest req)`: returns handle
@@ -134,7 +152,7 @@ Used by `HTTPApiTable.fetch` and `HTTPApiTable.fetch_async`.
     -- If post_data is not specified, a GET request is performed instead.
 
     user_agent = "ExampleUserAgent",
-    -- Optional, if specified replaces the default minetest user agent with
+    -- Optional, if specified replaces the default Luanti user agent with
     -- given string
 
     extra_headers = { "Accept-Language: en-us", "Accept-Charset: utf-8" },
@@ -200,8 +218,11 @@ GUI
   * `minsize`: minimum tile size, images are scaled to at least this size prior
    doing tiling (background only)
 * `core.set_clouds(<true/false>)`
+* `core.set_clouds_color(colorString)`
+* `core.set_sky_color(colorString)`
+  * `colorString`: `"#RRGGBB"` format
 * `core.set_topleft_text(text)`
-* `core.show_keys_menu()`
+* `core.show_touchscreen_layout()`
 * `core.show_path_select_dialog(formname, caption, is_file_select)`
   * shows a path select dialog
   * `formname` is base name of dialog response returned in fields
@@ -236,9 +257,9 @@ GUI
           y = 577,
       },
 
-      -- Estimated maximum formspec size before Minetest will start shrinking the
-      -- formspec to fit. For a fullscreen formspec, use a size 10-20% larger than
-      -- this and `padding[-0.01,-0.01]`.
+      -- Estimated maximum formspec size before Luanti will start shrinking the
+      -- formspec to fit. For a fullscreen formspec, use this formspec size and
+      -- `padding[0,0]`. `bgcolor[;true]` is also recommended.
       max_formspec_size = {
           x = 20,
           y = 11.25
@@ -274,14 +295,14 @@ Package - content which is downloadable from the content db, may or may not be i
 * `core.get_modpaths()` (possible in async calls)
     * returns table of virtual path to global modpaths, where mods have been installed
       The difference with `core.get_modpath` is that no mods should be installed in these
-      directories by Minetest -- they might be read-only.
+      directories by Luanti -- they might be read-only.
 
       Ex:
 
       ```lua
       {
           mods = "/home/user/.minetest/mods",
-          share = "/usr/share/minetest/mods",
+          share = "/usr/share/minetest/mods", -- only provided when RUN_IN_PLACE=0
 
           -- Custom dirs can be specified by the MINETEST_MOD_DIR env variable
           ["/path/to/custom/dir"] = "/path/to/custom/dir",
@@ -305,6 +326,7 @@ Package - content which is downloadable from the content db, may or may not be i
           title            = <title of game>,
           menuicon_path    = <full path to menuicon>,
           author           = "author",
+          aliases          = {<alias> = true,},
           --DEPRECATED:
           addon_mods_paths = {[1] = <path>,},
       }
@@ -314,7 +336,7 @@ Package - content which is downloadable from the content db, may or may not be i
       ```lua
       {
           name             = "technical_id",
-          type             = "mod" or "modpack" or "game" or "txp",
+          type             = "mod" or "modpack" or "game" or "txp" or "unknown",
           title            = "Human readable title",
           description      = "description",
           author           = "author",
@@ -324,6 +346,10 @@ Package - content which is downloadable from the content db, may or may not be i
           optional_depends = {"mod", "names"}, -- mods only
       }
       ```
+* `core.get_mod_list(path, virtual_path)`
+    * Returns a flat list of mod and modpack information found within the specified path.
+    * Each entry consists of the fields `name`, `author`, `release`, `description`,
+      `path`, `virtual_path`, `is_name_explicit`, `is_modpack`, `modpack_depth`.
 * `core.check_mod_configuration(world_path, mod_paths)`
     * Checks whether configuration is valid.
     * `world_path`: path to the world
@@ -365,7 +391,7 @@ Settings
 * `core.settings:save()` -> nil, save all settings to config file
 
 For a complete list of methods of the `Settings` object see
-[lua_api.md](https://github.com/minetest/minetest/blob/master/doc/lua_api.md)
+[lua_api.md](./lua_api.md)
 
 
 Worlds

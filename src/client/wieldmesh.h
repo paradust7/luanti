@@ -1,38 +1,42 @@
-/*
-Minetest
-Copyright (C) 2010-2014 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2014 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
 #include <string>
 #include <vector>
-#include "irrlichttypes_extrabloated.h"
+#include "irr_aabb3d.h"
+#include "irr_v3d.h"
+#include <EMaterialTypes.h>
+#include <IMeshSceneNode.h>
+#include <SColor.h>
+#include <memory>
+#include "tile.h"
+#include "nodedef.h"
+
+namespace scene
+{
+	class ISceneManager;
+	class IMesh;
+	struct SMesh;
+}
+
 
 struct ItemStack;
+struct TileDef;
 class Client;
 class ITextureSource;
-struct ContentFeatures;
+struct ItemDefinition;
+struct TileAnimationParams;
+class IShaderSource;
 class ShadowRenderer;
 
 /*
- * Holds color information of an item mesh's buffer.
+ * Holds information of an item mesh's buffer.
+ * Used for coloring and animation.
  */
-class ItemPartColor
+class ItemMeshBufferInfo
 {
 	/*
 	 * Optional color that overrides the global base color.
@@ -49,11 +53,22 @@ class ItemPartColor
 
 public:
 
-	ItemPartColor() = default;
+	ItemMeshBufferInfo(int layer) : layer(layer) {}
 
-	ItemPartColor(bool override, video::SColor color) :
-		override_color(color), override_color_set(override)
+	ItemMeshBufferInfo(int layer, bool override, video::SColor color) :
+		override_color(color), override_color_set(override),
+		layer(layer)
 	{}
+
+	ItemMeshBufferInfo(int layer, const AnimationInfo *animation,
+			bool override_c = false, video::SColor color = {}) :
+		override_color(color), override_color_set(override_c), layer(layer)
+	{
+		if (animation)
+			animation_info = std::make_unique<AnimationInfo>(*animation);
+	}
+
+	ItemMeshBufferInfo(int layer_num, const TileLayer &layer);
 
 	void applyOverride(video::SColor &dest) const {
 		if (override_color_set)
@@ -67,15 +82,21 @@ public:
 		last_colorized = target;
 		return true;
 	}
+
+	// Index of the tile layer this mesh buffer belongs to
+	u8 layer;
+
+	// Null for no animated parts
+	std::unique_ptr<AnimationInfo> animation_info;
 };
 
 struct ItemMesh
 {
 	scene::IMesh *mesh = nullptr;
 	/*
-	 * Stores the color of each mesh buffer.
+	 * Stores draw information of each mesh buffer.
 	 */
-	std::vector<ItemPartColor> buffer_colors;
+	std::vector<ItemMeshBufferInfo> buffer_info;
 	/*
 	 * If false, all faces of the item should have the same brightness.
 	 * Disables shading based on normal vectors.
@@ -91,12 +112,16 @@ struct ItemMesh
 class WieldMeshSceneNode : public scene::ISceneNode
 {
 public:
-	WieldMeshSceneNode(scene::ISceneManager *mgr, s32 id = -1, bool lighting = false);
+	WieldMeshSceneNode(scene::ISceneManager *mgr, s32 id = -1);
 	virtual ~WieldMeshSceneNode();
 
-	void setCube(const ContentFeatures &f, v3f wield_scale);
-	void setExtruded(const std::string &imagename, const std::string &overlay_image,
-			v3f wield_scale, ITextureSource *tsrc, u8 num_frames);
+	// Set appearance from node def
+	// d0, l0 = base tile
+	// d1, l1 = overlay tile
+	void setExtruded(const TileDef &d0, const TileLayer &l0,
+			const TileDef &d1, const TileLayer &l1,
+			v3f wield_scale, ITextureSource *tsrc);
+
 	void setItem(const ItemStack &item, Client *client,
 			bool check_wield_image = true);
 
@@ -104,7 +129,7 @@ public:
 	// Must only be used if the constructor was called with lighting = false
 	void setColor(video::SColor color);
 
-	void setNodeLightColor(video::SColor color);
+	void setLightColorAndAnimation(video::SColor color, float animation_time);
 
 	scene::IMesh *getMesh() { return m_meshnode->getMesh(); }
 
@@ -113,50 +138,70 @@ public:
 	virtual const aabb3f &getBoundingBox() const { return m_bounding_box; }
 
 private:
+	void setExtruded(video::ITexture *base, video::ITexture *overlay,
+			v3f wield_scale);
+
 	void changeToMesh(scene::IMesh *mesh);
 
 	// Child scene node with the current wield mesh
 	scene::IMeshSceneNode *m_meshnode = nullptr;
+	// Material types used as fallback
 	video::E_MATERIAL_TYPE m_material_type;
 
-	// True if SMaterial::Lighting should be enabled.
-	bool m_lighting;
-
-	bool m_enable_shaders;
 	bool m_anisotropic_filter;
 	bool m_bilinear_filter;
 	bool m_trilinear_filter;
 	/*!
-	 * Stores the colors of the mesh's mesh buffers.
+	 * Stores the colors and animation data of the mesh's mesh buffers.
 	 * This does not include lighting.
 	 */
-	std::vector<ItemPartColor> m_colors;
+	std::vector<ItemMeshBufferInfo> m_buffer_info;
 	/*!
 	 * The base color of this mesh. This is the default
 	 * for all mesh buffers.
 	 */
 	video::SColor m_base_color;
 
+	// Empty if wield image is empty or not animated
+	// Owned by this class to get AnimationInfo for the mesh buffer info
+	std::vector<FrameSpec> m_wield_image_frames;
+	std::vector<FrameSpec> m_wield_overlay_frames;
+
 	// Bounding box culling is disabled for this type of scene node,
 	// so this variable is just required so we can implement
 	// getBoundingBox() and is set to an empty box.
-	aabb3f m_bounding_box;
+	const aabb3f m_bounding_box{{0, 0, 0}};
 
 	ShadowRenderer *m_shadow;
 };
 
-void getItemMesh(Client *client, const ItemStack &item, ItemMesh *result);
+std::vector<FrameSpec> createAnimationFrames(ITextureSource *tsrc,
+		const std::string &image_name, const TileAnimationParams &animation,
+		int& result_frame_length_ms);
 
-scene::SMesh *getExtrudedMesh(ITextureSource *tsrc, const std::string &imagename,
-		const std::string &overlay_name);
+scene::SMesh *getExtrudedMesh(video::ITexture *texture,
+	video::ITexture *overlay_texture = nullptr);
 
-/*!
- * Applies overlays, textures and optionally materials to the given mesh and
- * extracts tile colors for colorization.
- * \param mattype overrides the buffer's material type, but can also
- * be NULL to leave the original material.
- * \param colors returns the colors of the mesh buffers in the mesh.
+/**
+ * Replace the material's shader with a custom one while respecting the usual
+ * things expected of node rendering (texture type, alpha mode, overlay).
+ * Call this after `TileLayer::applyMaterialOptions`.
+ * @param mat material to modify
+ * @param shdsrc shader source
+ * @param shader name of shader
+ * @param mode alpha mode from nodedef
+ * @param layer index of this layer
  */
-void postProcessNodeMesh(scene::SMesh *mesh, const ContentFeatures &f, bool use_shaders,
-		bool set_material, const video::E_MATERIAL_TYPE *mattype,
-		std::vector<ItemPartColor> *colors, bool apply_scale = false);
+void getAdHocNodeShader(video::SMaterial &mat, IShaderSource *shdsrc,
+		const char *shader, AlphaMode mode, int layer);
+
+/**
+ * NOTE: The item mesh is only suitable for inventory rendering (due to its
+ * material types). In-world rendering of items must go through WieldMeshSceneNode.
+ */
+// This is only used to initially generate an ItemMesh
+// To get the mesh, use ItemVisualsManager::getItemMesh(item, client) instead
+void createItemMesh(Client *client, const ItemDefinition &def,
+		const AnimationInfo &animation_normal,
+		const AnimationInfo &animation_overlay,
+		ItemMesh *result);

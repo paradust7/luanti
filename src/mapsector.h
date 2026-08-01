@@ -1,30 +1,13 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
 #include "irrlichttypes.h"
 #include "irr_v2d.h"
 #include "mapblock.h"
-#include <ostream>
-#include <map>
-#include <vector>
+#include <memory>
 
 class Map;
 class IGameDef;
@@ -43,7 +26,9 @@ public:
 	MapSector(Map *parent, v2s16 pos, IGameDef *gamedef);
 	virtual ~MapSector();
 
-	void deleteBlocks();
+	/// @brief Deletes all blocks (regardless of reference count).
+	/// @param used_count output: number of blocks which were still ref'd
+	void deleteBlocks(size_t *used_count = nullptr);
 
 	v2s16 getPos() const
 	{
@@ -74,7 +59,8 @@ public:
 
 	bool empty() const { return m_blocks.empty(); }
 
-	int size() const { return m_blocks.size(); }
+	size_t size() const { return m_blocks.size(); }
+
 protected:
 
 	// The pile of MapBlocks

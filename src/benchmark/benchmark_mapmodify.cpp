@@ -1,23 +1,8 @@
-/*
-Minetest
-Copyright (C) 2023 sfan5
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2023 sfan5
 
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
-
-#include "benchmark_setup.h"
+#include "catch.h"
 #include "util/container.h"
 
 // Testing the standard library is not useful except to compare
@@ -93,6 +78,7 @@ TEST_CASE("ModifySafeMap") {
 	BENCH_REMOVE(1000)
 }
 
+#ifdef TEST_STDLIB
 using TestMap2 = std::map<u16, void*>;
 
 static inline void fill2(TestMap2 &map, size_t n)
@@ -139,7 +125,6 @@ static inline void remove2(TestMap2 &map, size_t offset, size_t count)
 		}); \
 	};
 
-#ifdef TEST_STDLIB
 TEST_CASE("std::map") {
 	BENCH2_ITERATE(50)
 	BENCH2_ITERATE(400)

@@ -8,8 +8,6 @@
 #include "plane3d.h"
 #include "line3d.h"
 
-namespace irr
-{
 namespace core
 {
 
@@ -20,9 +18,7 @@ template <class T>
 class aabbox3d
 {
 public:
-	//! Default Constructor.
-	constexpr aabbox3d() :
-			MinEdge(-1, -1, -1), MaxEdge(1, 1, 1) {}
+	constexpr aabbox3d() = delete;
 	//! Constructor with min edge and max edge.
 	constexpr aabbox3d(const vector3d<T> &min, const vector3d<T> &max) :
 			MinEdge(min), MaxEdge(max) {}
@@ -386,4 +382,3 @@ typedef aabbox3d<f32> aabbox3df;
 typedef aabbox3d<s32> aabbox3di;
 
 } // end namespace core
-} // end namespace irr

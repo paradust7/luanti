@@ -1,75 +1,130 @@
-/*
-Minetest
-Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
-#include "exceptions.h"
 #include "irrlichttypes.h"
-#include "Keycodes.h"
+#include "keys.h"
+#include <Keycodes.h>
 #include <IEventReceiver.h>
 #include <string>
+#include <variant>
+#include <vector>
 
-class UnknownKeycode : public BaseException
-{
-public:
-	UnknownKeycode(const char *s) :
-		BaseException(s) {};
-};
-
-/* A key press, consisting of either an Irrlicht keycode
-   or an actual char */
-
+/* A key press, consisting of a scancode or a keycode.
+ * This fits into 64 bits, so prefer passing this by value.
+*/
 class KeyPress
 {
 public:
+	enum class InputType {
+		KEYBOARD, // Keyboard input (scancodes)
+		MOUSE_BUTTON, // Mouse button input
+		GAME_ACTION, // GameKeyType input passed by touchscreen buttons
+	};
+
 	KeyPress() = default;
 
-	KeyPress(const char *name);
+	KeyPress(const std::string &name);
 
-	KeyPress(const irr::SEvent::SKeyInput &in, bool prefer_character = false);
+	KeyPress(const SEvent::SKeyInput &in);
 
-	bool operator==(const KeyPress &o) const
+	KeyPress(const SEvent::SMouseInput &in);
+
+	KeyPress(GameKeyType key) : value(key) {}
+
+	// Get a string representation that is suitable for use in minetest.conf
+	std::string sym() const;
+
+	// Get a human-readable string representation
+	std::string name() const;
+
+	// Get the scancode or 0 is one is not available
+	u32 getScancode() const
 	{
-		return (Char > 0 && Char == o.Char) || (valid_kcode(Key) && Key == o.Key);
+		if (auto pv = getIf<InputType::KEYBOARD>())
+			return *pv;
+		return 0;
 	}
 
-	const char *sym() const;
-	const char *name() const;
-
-protected:
-	static bool valid_kcode(irr::EKEY_CODE k)
-	{
-		return k > 0 && k < irr::KEY_KEY_CODES_COUNT;
+	bool operator==(KeyPress o) const {
+		return value == o.value;
+	}
+	bool operator!=(KeyPress o) const {
+		return !(*this == o);
 	}
 
-	irr::EKEY_CODE Key = irr::KEY_KEY_CODES_COUNT;
-	wchar_t Char = L'\0';
-	std::string m_name = "";
+	// Used for e.g. std::set
+	bool operator<(KeyPress o) const {
+		return value < o.value;
+	}
+
+	// Get the type of input
+	InputType getType() const {
+		return static_cast<InputType>(value.index());
+	}
+
+	// Check whether the keypress is valid
+	operator bool() const;
+
+	static KeyPress getSpecialKey(const std::string &name);
+
+private:
+	// The same data type may be used for different variants, so this should be indexed using InputType.
+	// The get, getIf, and emplace methods are wrappers for their std::variant counterparts. This allows using
+	// InputType enum values instead of numeric indices.
+	using value_type = std::variant<u32, u32, GameKeyType>;
+
+	template<InputType I>
+	using value_alternative_t = std::variant_alternative_t<static_cast<size_t>(I), value_type>;
+
+	template<InputType I>
+	bool loadUnsignedFromPrefix(const std::string &name, const std::string &prefix);
+	bool loadFromScancode(const std::string &name);
+	void loadFromKey(EKEY_CODE keycode, wchar_t keychar);
+
+	value_type value;
+
+	template<InputType I>
+	value_alternative_t<I> get() const {
+		return std::get<static_cast<size_t>(I)>(value);
+	}
+
+	template<InputType I>
+	std::add_pointer_t<const value_alternative_t<I>> getIf() const {
+		return std::get_if<static_cast<size_t>(I)>(&value);
+	}
+
+	template<InputType I>
+	void emplace(value_alternative_t<I> newValue) {
+		value.emplace<static_cast<size_t>(I)>(newValue);
+	}
+
+	friend std::hash<KeyPress>;
 };
 
-extern const KeyPress EscapeKey;
-extern const KeyPress CancelKey;
+template <>
+struct std::hash<KeyPress>
+{
+	size_t operator()(KeyPress kp) const noexcept {
+		return std::hash<KeyPress::value_type>{}(kp.value);
+	}
+};
+
+// Global defines for convenience
+// This implementation defers creation of the objects to make sure that the
+// IrrlichtDevice is initialized.
+#define EscapeKey KeyPress::getSpecialKey("KEY_ESCAPE")
 
 // Key configuration getter
-KeyPress getKeySetting(const char *settingname);
+// Note that the reference may be invalidated by a next call to getKeySetting
+// or a related function, so the value should either be used immediately or
+// copied elsewhere before calling this again.
+const std::vector<KeyPress> &getKeySetting(const std::string &settingname);
+
+// Check whether the key setting includes a key.
+bool keySettingHasMatch(const std::string &settingname, KeyPress kp);
 
 // Clear fast lookup cache
 void clearKeyCache();
-
-irr::EKEY_CODE keyname_to_keycode(const char *name);

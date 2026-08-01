@@ -224,10 +224,10 @@ register_builtin_hud_element("breath", {
 				-- The breathbar stays for some time and then gets removed.
 				breathbar_removal_jobs[player_name] = core.after(1, function()
 					local player = core.get_player_by_name(player_name)
-					local id = hud_ids[player_name].breath
-					if player and id then
-						player:hud_remove(id)
-						hud_ids[player_name].breath = nil
+					local player_hud_ids = hud_ids[player_name]
+					if player and player_hud_ids and player_hud_ids.breath then
+						player:hud_remove(player_hud_ids.breath)
+						player_hud_ids.breath = nil
 					end
 					breathbar_removal_jobs[player_name] = nil
 				end)
@@ -251,11 +251,31 @@ register_builtin_hud_element("minimap", {
 		position = {x = 1, y = 0},
 		alignment = {x = -1, y = 1},
 		offset = {x = -10, y = 10},
-		size = {x = 256, y = 256},
+		size = {x = 0, y = -25},
 	},
 	show_elem = function(player, flags)
+		local proto_ver = core.get_player_information(player:get_player_name()).protocol_version
 		-- Don't add a minimap for clients which already have it hardcoded in C++.
-		return flags.minimap and
-				core.get_player_information(player:get_player_name()).protocol_version >= 44
+		return flags.minimap and proto_ver >= 44
+	end,
+	update_def = function(player, elem_def)
+		local proto_ver = core.get_player_information(player:get_player_name()).protocol_version
+		-- Only use percentage when the client supports it.
+		elem_def.size = proto_ver >= 45 and {x = 0, y = -25} or {x = 256, y = 256}
+	end,
+})
+
+--- Hotbar
+
+register_builtin_hud_element("hotbar", {
+	elem_def = {
+		type = "hotbar",
+		position = {x = 0.5, y = 1},
+		direction = 0,
+		alignment = {x = 0, y = -1},
+		offset = {x = 0, y = -4}, -- Extra padding below.
+	},
+	show_elem = function(player, flags)
+		return flags.hotbar
 	end,
 })

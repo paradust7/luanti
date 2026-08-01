@@ -1,22 +1,7 @@
-/*
-Minetest
-Copyright (C) 2017-2019 vlapsley, Vaughan Lapsley <vlapsley@gmail.com>
-Copyright (C) 2017-2019 paramat
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2017-2019 vlapsley, Vaughan Lapsley <vlapsley@gmail.com>
+// Copyright (C) 2017-2019 paramat
 
 #pragma once
 
@@ -25,9 +10,8 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #define MGCARPATHIAN_CAVERNS 0x01
 #define MGCARPATHIAN_RIVERS  0x02
 
-class BiomeManager;
 
-extern FlagDesc flagdesc_mapgen_carpathian[];
+extern const FlagDesc flagdesc_mapgen_carpathian[];
 
 
 struct MapgenCarpathianParams : public MapgenParams
@@ -93,18 +77,18 @@ private:
 	float river_depth;
 	float valley_width;
 
-	Noise *noise_height1;
-	Noise *noise_height2;
-	Noise *noise_height3;
-	Noise *noise_height4;
-	Noise *noise_hills_terrain;
-	Noise *noise_ridge_terrain;
-	Noise *noise_step_terrain;
-	Noise *noise_hills;
-	Noise *noise_ridge_mnt;
-	Noise *noise_step_mnt;
+	Noise *noise_height1 = nullptr;
+	Noise *noise_height2 = nullptr;
+	Noise *noise_height3 = nullptr;
+	Noise *noise_height4 = nullptr;
+	Noise *noise_hills_terrain = nullptr;
+	Noise *noise_ridge_terrain = nullptr;
+	Noise *noise_step_terrain = nullptr;
+	Noise *noise_hills = nullptr;
+	Noise *noise_ridge_mnt = nullptr;
+	Noise *noise_step_mnt = nullptr;
 	Noise *noise_rivers = nullptr;
-	Noise *noise_mnt_var;
+	Noise *noise_mnt_var = nullptr;
 
 	s32 grad_wl;
 

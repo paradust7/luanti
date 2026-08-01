@@ -1,5 +1,5 @@
 --
--- This file contains built-in stuff in Minetest implemented in Lua.
+-- This file contains built-in stuff in Luanti implemented in Lua.
 --
 -- It is always loaded and executed after registration of the C API,
 -- before loading and running any mods.
@@ -42,7 +42,9 @@ local scriptdir = core.get_builtin_path()
 local commonpath = scriptdir .. "common" .. DIR_DELIM
 local asyncpath = scriptdir .. "async" .. DIR_DELIM
 
+dofile(commonpath .. "math.lua")
 dofile(commonpath .. "vector.lua")
+dofile(commonpath .. "vector2.lua")
 dofile(commonpath .. "strict.lua")
 dofile(commonpath .. "serialize.lua")
 dofile(commonpath .. "misc_helpers.lua")
@@ -75,8 +77,14 @@ elseif INIT == "async_game" then
 	dofile(asyncpath .. "game.lua")
 elseif INIT == "client" then
 	dofile(scriptdir .. "client" .. DIR_DELIM .. "init.lua")
+elseif INIT == "sscsm" and core.get_current_modname() == "*client_builtin*" then
+	dofile(scriptdir .. "sscsm_client" .. DIR_DELIM .. "init.lua")
+elseif INIT == "sscsm" and core.get_current_modname() == "*server_builtin*" then
+	dofile(scriptdir .. "sscsm_server" .. DIR_DELIM .. "init.lua")
 elseif INIT == "emerge" then
 	dofile(scriptdir .. "emerge" .. DIR_DELIM .. "init.lua")
+elseif INIT == "pause_menu" then
+	dofile(scriptdir .. "pause_menu" .. DIR_DELIM .. "init.lua")
 else
 	error(("Unrecognized builtin initialization type %s!"):format(tostring(INIT)))
 end

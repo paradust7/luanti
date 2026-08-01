@@ -1,31 +1,18 @@
-/*
-Minetest
-Copyright (C) 2010-2020 celeron55, Perttu Ahola <celeron55@gmail.com>
-Copyright (C) 2015-2020 paramat
-Copyright (C) 2013-2016 kwolekr, Ryan Kwolek <kwolekr@minetest.net>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2020 celeron55, Perttu Ahola <celeron55@gmail.com>
+// Copyright (C) 2015-2020 paramat
+// Copyright (C) 2013-2016 kwolekr, Ryan Kwolek <kwolekr@minetest.net>
 
 #pragma once
 
+#include "constants.h"
 #include "noise.h"
 #include "nodedef.h"
 #include "util/string.h"
 #include "util/container.h"
 #include <utility>
+#include <set>
 
 #define MAPGEN_DEFAULT MAPGEN_V7
 #define MAPGEN_DEFAULT_NAME "v7"
@@ -44,20 +31,15 @@ class Settings;
 class MMVManip;
 class NodeDefManager;
 
-extern FlagDesc flagdesc_mapgen[];
-extern FlagDesc flagdesc_gennotify[];
+extern const FlagDesc flagdesc_mapgen[];
+extern const FlagDesc flagdesc_gennotify[];
 
-class Biome;
 class BiomeGen;
 struct BiomeParams;
 class BiomeManager;
 class EmergeParams;
-class EmergeManager;
-class MapBlock;
-class VoxelManipulator;
 struct BlockMakeData;
 class VoxelArea;
-class Map;
 
 enum MapgenObject {
 	MGOBJ_VMANIP,
@@ -105,7 +87,7 @@ private:
 	u32 m_notify_on = 0;
 	const std::set<u32> *m_notify_on_deco_ids = nullptr;
 	const std::set<std::string> *m_notify_on_custom = nullptr;
-	std::list<GenNotifyEvent> m_notify_events;
+	std::vector<GenNotifyEvent> m_notify_events;
 	StringMap m_notify_custom;
 
 	inline bool shouldNotifyOn(GenNotifyType type) const {
@@ -131,7 +113,7 @@ struct MapgenParams {
 	virtual ~MapgenParams();
 
 	MapgenType mgtype = MAPGEN_DEFAULT;
-	s16 chunksize = 5;
+	v3s16 chunksize = v3s16(5);
 	u64 seed = 0;
 	s16 water_level = 1;
 	s16 mapgen_limit = MAX_MAP_GENERATION_LIMIT;
@@ -141,9 +123,6 @@ struct MapgenParams {
 
 	BiomeParams *bparams = nullptr;
 
-	s16 mapgen_edge_min = -MAX_MAP_GENERATION_LIMIT;
-	s16 mapgen_edge_max = MAX_MAP_GENERATION_LIMIT;
-
 	virtual void readParams(const Settings *settings);
 	virtual void writeParams(Settings *settings) const;
 	// Default settings for g_settings such as flags
@@ -151,8 +130,8 @@ struct MapgenParams {
 
 	s32 getSpawnRangeMax();
 
-private:
-	bool m_mapgen_edges_calculated = false;
+	// Mostly arbitrary limit
+	constexpr static u32 MAX_CHUNK_VOLUME = 2000;
 };
 
 
@@ -167,6 +146,7 @@ private:
 */
 class Mapgen {
 public:
+	// Seed used for noises (truncated from the map seed)
 	s32 seed = 0;
 	int water_level = 0;
 	int mapgen_limit = 0;
@@ -180,9 +160,11 @@ public:
 	EmergeParams *m_emerge = nullptr;
 	const NodeDefManager *ndef = nullptr;
 
+	// Chunk-specific seed used to place ores and decorations
 	u32 blockseed;
 	s16 *heightmap = nullptr;
 	biome_t *biomemap = nullptr;
+	// Chunk size in nodes
 	v3s16 csize;
 
 	BiomeGen *biomegen = nullptr;
@@ -274,7 +256,7 @@ private:
 	// isLiquidHorizontallyFlowable() is a helper function for updateLiquid()
 	// that checks whether there are floodable nodes without liquid beneath
 	// the node at index vi.
-	inline bool isLiquidHorizontallyFlowable(u32 vi, v3s16 em);
+	inline bool isLiquidHorizontallyFlowable(u32 vi, v3s32 em);
 };
 
 /*
@@ -304,9 +286,9 @@ public:
 	virtual void generateDungeons(s16 max_stone_y);
 
 protected:
-	BiomeManager *m_bmgr;
+	BiomeManager *m_bmgr = nullptr;
 
-	Noise *noise_filler_depth;
+	Noise *noise_filler_depth = nullptr;
 
 	v3s16 node_min;
 	v3s16 node_max;
@@ -346,4 +328,4 @@ protected:
 
 // Calculate exact edges of the outermost mapchunks that are within the set
 // mapgen_limit. Returns the minimum and maximum edges in nodes in that order.
-std::pair<s16, s16> get_mapgen_edges(s16 mapgen_limit, s16 chunksize);
+std::pair<v3s16, v3s16> get_mapgen_edges(s16 mapgen_limit, v3s16 chunksize);

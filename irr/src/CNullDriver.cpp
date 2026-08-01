@@ -3,27 +3,27 @@
 // For conditions of distribution and use, see copyright notice in irrlicht.h
 
 #include "CNullDriver.h"
+#include "IIndexBuffer.h"
+#include "IVertexBuffer.h"
+#include "IVideoDriver.h"
+#include "SMaterial.h"
 #include "os.h"
 #include "CImage.h"
-#include "CAttributes.h"
 #include "IReadFile.h"
 #include "IWriteFile.h"
 #include "IImageLoader.h"
 #include "IImageWriter.h"
 #include "IMaterialRenderer.h"
-#include "IAnimatedMeshSceneNode.h"
+#include "AnimatedMeshSceneNode.h"
 #include "CMeshManipulator.h"
 #include "CColorConverter.h"
 #include "IReferenceCounted.h"
 #include "IRenderTarget.h"
 
-namespace irr
-{
+#include <cassert>
+
 namespace video
 {
-
-//! creates a loader which is able to load windows bitmaps
-IImageLoader *createImageLoaderBMP();
 
 //! creates a loader which is able to load jpeg images
 IImageLoader *createImageLoaderJPG();
@@ -40,47 +40,17 @@ IImageWriter *createImageWriterJPG();
 //! creates a writer which is able to save png images
 IImageWriter *createImageWriterPNG();
 
-namespace
-{
-//! no-op material renderer
-class CDummyMaterialRenderer : public IMaterialRenderer
-{
-public:
-	CDummyMaterialRenderer() {}
-};
-}
-
 //! constructor
 CNullDriver::CNullDriver(io::IFileSystem *io, const core::dimension2d<u32> &screenSize) :
 		SharedRenderTarget(0), CurrentRenderTarget(0), CurrentRenderTargetSize(0, 0), FileSystem(io), MeshManipulator(0),
-		ViewPort(0, 0, 0, 0), ScreenSize(screenSize), PrimitivesDrawn(0), MinVertexCountForVBO(500),
+		ViewPort(0, 0, 0, 0), ScreenSize(screenSize), MinVertexCountForVBO(500),
 		TextureCreationFlags(0), OverrideMaterial2DEnabled(false), AllowZWriteOnTransparent(false)
 {
-#ifdef _DEBUG
-	setDebugName("CNullDriver");
-#endif
-
-	DriverAttributes = new io::CAttributes();
-	DriverAttributes->addInt("MaxTextures", MATERIAL_MAX_TEXTURES);
-	DriverAttributes->addInt("MaxSupportedTextures", MATERIAL_MAX_TEXTURES);
-	DriverAttributes->addInt("MaxAnisotropy", 1);
-	//	DriverAttributes->addInt("MaxUserClipPlanes", 0);
-	//	DriverAttributes->addInt("MaxAuxBuffers", 0);
-	DriverAttributes->addInt("MaxMultipleRenderTargets", 1);
-	DriverAttributes->addInt("MaxIndices", -1);
-	DriverAttributes->addInt("MaxTextureSize", -1);
-	//	DriverAttributes->addInt("MaxGeometryVerticesOut", 0);
-	//	DriverAttributes->addFloat("MaxTextureLODBias", 0.f);
-	DriverAttributes->addInt("Version", 1);
-	//	DriverAttributes->addInt("ShaderLanguageVersion", 0);
-	//	DriverAttributes->addInt("AntiAlias", 0);
-
 	setFog();
 
 	setTextureCreationFlag(ETCF_ALWAYS_32_BIT, true);
 	setTextureCreationFlag(ETCF_CREATE_MIP_MAPS, true);
-	setTextureCreationFlag(ETCF_AUTO_GENERATE_MIP_MAPS, true);
-	setTextureCreationFlag(ETCF_ALLOW_MEMORY_COPY, true);
+	setTextureCreationFlag(ETCF_ALLOW_MEMORY_COPY, false);
 
 	ViewPort = core::rect<s32>(core::position2d<s32>(0, 0), core::dimension2di(screenSize));
 
@@ -94,7 +64,6 @@ CNullDriver::CNullDriver(io::IFileSystem *io, const core::dimension2d<u32> &scre
 	SurfaceLoader.push_back(video::createImageLoaderTGA());
 	SurfaceLoader.push_back(video::createImageLoaderPNG());
 	SurfaceLoader.push_back(video::createImageLoaderJPG());
-	SurfaceLoader.push_back(video::createImageLoaderBMP());
 
 	SurfaceWriter.push_back(video::createImageWriterJPG());
 	SurfaceWriter.push_back(video::createImageWriterPNG());
@@ -105,14 +74,19 @@ CNullDriver::CNullDriver(io::IFileSystem *io, const core::dimension2d<u32> &scre
 		FeatureEnabled[i] = true;
 
 	InitMaterial2D.AntiAliasing = video::EAAM_OFF;
-	InitMaterial2D.Lighting = false;
 	InitMaterial2D.ZWriteEnable = video::EZW_OFF;
 	InitMaterial2D.ZBuffer = video::ECFN_DISABLED;
 	InitMaterial2D.UseMipMaps = false;
-	InitMaterial2D.forEachTexture([](auto &tex) {
-		// Using ETMINF_LINEAR_MIPMAP_NEAREST (bilinear) for 2D graphics looks
-		// much better and doesn't have any downsides (e.g. regarding pixel art).
-		tex.MinFilter = video::ETMINF_LINEAR_MIPMAP_NEAREST;
+	InitMaterial2D.forEachTexture([](video::SMaterialLayer &tex) {
+		// Best preset for 2D pixel-perfect graphics
+		tex.MinFilter = video::ETMINF_NEAREST_MIPMAP_NEAREST;
+
+		// Best preset for downscaled 2D graphics using trilinear interpolation
+		//tex.MinFilter = video::ETMINF_LINEAR_MIPMAP_LINEAR;
+		// Lower bias  -> more crisp images, more jitter
+		// Higher bias -> burry images, less jitter
+		//tex.LODBias = -1;
+
 		tex.MagFilter = video::ETMAGF_NEAREST;
 		tex.TextureWrapU = video::ETC_REPEAT;
 		tex.TextureWrapV = video::ETC_REPEAT;
@@ -124,9 +98,6 @@ CNullDriver::CNullDriver(io::IFileSystem *io, const core::dimension2d<u32> &scre
 //! destructor
 CNullDriver::~CNullDriver()
 {
-	if (DriverAttributes)
-		DriverAttributes->drop();
-
 	if (FileSystem)
 		FileSystem->drop();
 
@@ -223,14 +194,13 @@ void CNullDriver::deleteAllTextures()
 
 bool CNullDriver::beginScene(u16 clearFlag, SColor clearColor, f32 clearDepth, u8 clearStencil, const SExposedVideoData &videoData, core::rect<s32> *sourceRect)
 {
-	PrimitivesDrawn = 0;
+	FrameStats = {};
 	return true;
 }
 
 bool CNullDriver::endScene()
 {
-	FPSCounter.registerFrame(os::Timer::getRealTime(), PrimitivesDrawn);
-	updateAllHardwareBuffers();
+	expireHardwareBuffers();
 	updateAllOcclusionQueries();
 	return true;
 }
@@ -245,12 +215,6 @@ void CNullDriver::disableFeature(E_VIDEO_DRIVER_FEATURE feature, bool flag)
 bool CNullDriver::queryFeature(E_VIDEO_DRIVER_FEATURE feature) const
 {
 	return false;
-}
-
-//! Get attributes of the actual video driver
-const io::IAttributes &CNullDriver::getDriverAttributes() const
-{
-	return *DriverAttributes;
 }
 
 //! sets transformation
@@ -307,25 +271,11 @@ u32 CNullDriver::getTextureCount() const
 
 ITexture *CNullDriver::addTexture(const core::dimension2d<u32> &size, const io::path &name, ECOLOR_FORMAT format)
 {
-	if (0 == name.size()) {
-		os::Printer::log("Could not create ITexture, texture needs to have a non-empty name.", ELL_WARNING);
-		return 0;
-	}
-
 	IImage *image = new CImage(format, size);
-	ITexture *t = 0;
-
-	if (checkImage(image)) {
-		t = createDeviceDependentTexture(name, image);
-	}
-
+	// the image data will be uploaded, so zero it
+	memset(image->getData(), 0, image->getImageDataSizeInBytes());
+	ITexture *t = addTexture(name, image);
 	image->drop();
-
-	if (t) {
-		addTexture(t);
-		t->drop();
-	}
-
 	return t;
 }
 
@@ -342,7 +292,8 @@ ITexture *CNullDriver::addTexture(const io::path &name, IImage *image)
 	ITexture *t = 0;
 
 	if (checkImage(image)) {
-		t = createDeviceDependentTexture(name, image);
+		std::vector tmp { image };
+		t = createDeviceDependentTexture(name, ETT_2D, tmp);
 	}
 
 	if (t) {
@@ -350,6 +301,27 @@ ITexture *CNullDriver::addTexture(const io::path &name, IImage *image)
 		t->drop();
 	}
 
+	return t;
+}
+
+ITexture *CNullDriver::addArrayTexture(const io::path &name, IImage **images, u32 count)
+{
+	if (0 == name.size()) {
+		os::Printer::log("Could not create ITexture, texture needs to have a non-empty name.", ELL_WARNING);
+		return 0;
+	}
+
+	// this is stupid but who cares
+	std::vector<IImage*> tmp(images, images + count);
+
+	ITexture *t = nullptr;
+	if (checkImage(tmp)) {
+		t = createDeviceDependentTexture(name, ETT_2D_ARRAY, tmp);
+	}
+	if (t) {
+		addTexture(t);
+		t->drop();
+	}
 	return t;
 }
 
@@ -361,7 +333,7 @@ ITexture *CNullDriver::addTextureCubemap(const io::path &name, IImage *imagePosX
 
 	ITexture *t = 0;
 
-	core::array<IImage *> imageArray(6);
+	std::vector<IImage*> imageArray;
 	imageArray.push_back(imagePosX);
 	imageArray.push_back(imageNegX);
 	imageArray.push_back(imagePosY);
@@ -370,7 +342,7 @@ ITexture *CNullDriver::addTextureCubemap(const io::path &name, IImage *imagePosX
 	imageArray.push_back(imageNegZ);
 
 	if (checkImage(imageArray)) {
-		t = createDeviceDependentTextureCubemap(name, imageArray);
+		t = createDeviceDependentTexture(name, ETT_CUBEMAP, imageArray);
 	}
 
 	if (t) {
@@ -381,7 +353,7 @@ ITexture *CNullDriver::addTextureCubemap(const io::path &name, IImage *imagePosX
 	return t;
 }
 
-ITexture *CNullDriver::addTextureCubemap(const irr::u32 sideLen, const io::path &name, ECOLOR_FORMAT format)
+ITexture *CNullDriver::addTextureCubemap(const u32 sideLen, const io::path &name, ECOLOR_FORMAT format)
 {
 	if (0 == sideLen)
 		return 0;
@@ -391,13 +363,13 @@ ITexture *CNullDriver::addTextureCubemap(const irr::u32 sideLen, const io::path 
 		return 0;
 	}
 
-	core::array<IImage *> imageArray(6);
+	std::vector<IImage*> imageArray;
 	for (int i = 0; i < 6; ++i)
 		imageArray.push_back(new CImage(format, core::dimension2du(sideLen, sideLen)));
 
 	ITexture *t = 0;
 	if (checkImage(imageArray)) {
-		t = createDeviceDependentTextureCubemap(name, imageArray);
+		t = createDeviceDependentTexture(name, ETT_CUBEMAP, imageArray);
 
 		if (t) {
 			addTexture(t);
@@ -418,17 +390,13 @@ ITexture *CNullDriver::getTexture(const io::path &filename)
 	const io::path absolutePath = FileSystem->getAbsolutePath(filename);
 
 	ITexture *texture = findTexture(absolutePath);
-	if (texture) {
-		texture->updateSource(ETS_FROM_CACHE);
+	if (texture)
 		return texture;
-	}
 
 	// Then try the raw filename, which might be in an Archive
 	texture = findTexture(filename);
-	if (texture) {
-		texture->updateSource(ETS_FROM_CACHE);
+	if (texture)
 		return texture;
-	}
 
 	// Now try to open the file using the complete path.
 	io::IReadFile *file = FileSystem->createAndOpenFile(absolutePath);
@@ -442,7 +410,6 @@ ITexture *CNullDriver::getTexture(const io::path &filename)
 		// Re-check name for actual archive names
 		texture = findTexture(file->getFileName());
 		if (texture) {
-			texture->updateSource(ETS_FROM_CACHE);
 			file->drop();
 			return texture;
 		}
@@ -451,7 +418,6 @@ ITexture *CNullDriver::getTexture(const io::path &filename)
 		file->drop();
 
 		if (texture) {
-			texture->updateSource(ETS_FROM_FILE);
 			addTexture(texture);
 			texture->drop(); // drop it because we created it, one grab too much
 		} else
@@ -471,15 +437,12 @@ ITexture *CNullDriver::getTexture(io::IReadFile *file)
 	if (file) {
 		texture = findTexture(file->getFileName());
 
-		if (texture) {
-			texture->updateSource(ETS_FROM_CACHE);
+		if (texture)
 			return texture;
-		}
 
 		texture = loadTextureFromFile(file);
 
 		if (texture) {
-			texture->updateSource(ETS_FROM_FILE);
 			addTexture(texture);
 			texture->drop(); // drop it because we created it, one grab too much
 		}
@@ -501,7 +464,8 @@ video::ITexture *CNullDriver::loadTextureFromFile(io::IReadFile *file, const io:
 		return nullptr;
 
 	if (checkImage(image)) {
-		texture = createDeviceDependentTexture(hashName.size() ? hashName : file->getFileName(), image);
+		std::vector tmp { image };
+		texture = createDeviceDependentTexture(hashName.size() ? hashName : file->getFileName(), ETT_2D, tmp);
 		if (texture)
 			os::Printer::log("Loaded texture", file->getFileName(), ELL_DEBUG);
 	}
@@ -541,16 +505,14 @@ video::ITexture *CNullDriver::findTexture(const io::path &filename)
 	return 0;
 }
 
-ITexture *CNullDriver::createDeviceDependentTexture(const io::path &name, IImage *image)
+ITexture *CNullDriver::createDeviceDependentTexture(const io::path &name, E_TEXTURE_TYPE type,
+		const std::vector<IImage*> &images)
 {
-	SDummyTexture *dummy = new SDummyTexture(name, ETT_2D);
-	dummy->setSize(image->getDimension());
+	if (type != ETT_2D && type != ETT_CUBEMAP)
+		return nullptr;
+	SDummyTexture *dummy = new SDummyTexture(name, type);
+	dummy->setSize(images[0]->getDimension());
 	return dummy;
-}
-
-ITexture *CNullDriver::createDeviceDependentTextureCubemap(const io::path &name, const core::array<IImage *> &image)
-{
-	return new SDummyTexture(name, ETT_CUBEMAP);
 }
 
 ITexture* CNullDriver::useDeviceDependentTexture(const io::path& name, E_DRIVER_TYPE driverType, void *textureId, ECOLOR_FORMAT colorFormat, u32 width, u32 height)
@@ -611,7 +573,8 @@ void CNullDriver::drawVertexPrimitiveList(const void *vertices, u32 vertexCount,
 {
 	if ((iType == EIT_16BIT) && (vertexCount > 65536))
 		os::Printer::log("Too many vertices for 16bit index type, render artifacts may occur.");
-	PrimitivesDrawn += primitiveCount;
+	FrameStats.Drawcalls++;
+	FrameStats.PrimitivesDrawn += primitiveCount;
 }
 
 //! draws a vertex primitive list in 2d
@@ -619,7 +582,8 @@ void CNullDriver::draw2DVertexPrimitiveList(const void *vertices, u32 vertexCoun
 {
 	if ((iType == EIT_16BIT) && (vertexCount > 65536))
 		os::Printer::log("Too many vertices for 16bit index type, render artifacts may occur.");
-	PrimitivesDrawn += primitiveCount;
+	FrameStats.Drawcalls++;
+	FrameStats.PrimitivesDrawn += primitiveCount;
 }
 
 //! Draws a 3d line.
@@ -634,20 +598,17 @@ void CNullDriver::draw3DBox(const core::aabbox3d<f32> &box, SColor color)
 	core::vector3df edges[8];
 	box.getEdges(edges);
 
-	// TODO: optimize into one big drawIndexPrimitive call.
+	video::S3DVertex v[8];
+	for (u32 i = 0; i < 8; i++) {
+		v[i].Pos = edges[i];
+		v[i].Color = color;
+	}
 
-	draw3DLine(edges[5], edges[1], color);
-	draw3DLine(edges[1], edges[3], color);
-	draw3DLine(edges[3], edges[7], color);
-	draw3DLine(edges[7], edges[5], color);
-	draw3DLine(edges[0], edges[2], color);
-	draw3DLine(edges[2], edges[6], color);
-	draw3DLine(edges[6], edges[4], color);
-	draw3DLine(edges[4], edges[0], color);
-	draw3DLine(edges[1], edges[0], color);
-	draw3DLine(edges[3], edges[2], color);
-	draw3DLine(edges[7], edges[6], color);
-	draw3DLine(edges[5], edges[4], color);
+	const static u16 box_indices[24] = {
+		5, 1, 1, 3, 3, 7, 7, 5, 0, 2, 2, 6, 6, 4, 4, 0, 1, 0, 3, 2, 7, 6, 5, 4
+	};
+
+	drawVertexPrimitiveList(v, 8, box_indices, 12, EVT_STANDARD, scene::EPT_LINES);
 }
 
 //! draws an 2d image
@@ -671,7 +632,7 @@ void CNullDriver::draw2DImageBatch(const video::ITexture *texture,
 		SColor color,
 		bool useAlphaChannelOfTexture)
 {
-	const irr::u32 drawCount = core::min_<u32>(positions.size(), sourceRects.size());
+	const u32 drawCount = core::min_<u32>(positions.size(), sourceRects.size());
 
 	for (u32 i = 0; i < drawCount; ++i) {
 		draw2DImage(texture, positions[i], sourceRects[i],
@@ -717,12 +678,6 @@ void CNullDriver::draw2DLine(const core::position2d<s32> &start,
 {
 }
 
-//! returns color format
-ECOLOR_FORMAT CNullDriver::getColorFormat() const
-{
-	return ECF_R5G6B5;
-}
-
 //! returns screen size
 const core::dimension2d<u32> &CNullDriver::getScreenSize() const
 {
@@ -743,31 +698,9 @@ const core::dimension2d<u32> &CNullDriver::getCurrentRenderTargetSize() const
 		return CurrentRenderTargetSize;
 }
 
-// returns current frames per second value
-s32 CNullDriver::getFPS() const
+SFrameStats &CNullDriver::getFrameStats()
 {
-	return FPSCounter.getFPS();
-}
-
-//! returns amount of primitives (mostly triangles) were drawn in the last frame.
-//! very useful method for statistics.
-u32 CNullDriver::getPrimitiveCountDrawn(u32 param) const
-{
-	return (0 == param) ? FPSCounter.getPrimitive() : (1 == param) ? FPSCounter.getPrimitiveAverage()
-																   : FPSCounter.getPrimitiveTotal();
-}
-
-//! Sets the dynamic ambient light color. The default color is
-//! (0,0,0,0) which means it is dark.
-//! \param color: New color of the ambient light.
-void CNullDriver::setAmbientLight(const SColorf &color)
-{
-	AmbientLight = color;
-}
-
-const SColorf &CNullDriver::getAmbientLight() const
-{
-	return AmbientLight;
+	return FrameStats;
 }
 
 //! \return Returns the name of the video driver. Example: In case of the DIRECT3D8
@@ -778,130 +711,18 @@ const char *CNullDriver::getName() const
 	return "Irrlicht NullDevice";
 }
 
-//! Creates a boolean alpha channel of the texture based of an color key.
-void CNullDriver::makeColorKeyTexture(video::ITexture *texture,
-		video::SColor color) const
+SDriverLimits CNullDriver::getLimits() const
 {
-	if (!texture)
-		return;
-
-	if (texture->getColorFormat() != ECF_A1R5G5B5 &&
-			texture->getColorFormat() != ECF_A8R8G8B8) {
-		os::Printer::log("Error: Unsupported texture color format for making color key channel.", ELL_ERROR);
-		return;
-	}
-
-	if (texture->getColorFormat() == ECF_A1R5G5B5) {
-		u16 *p = (u16 *)texture->lock();
-
-		if (!p) {
-			os::Printer::log("Could not lock texture for making color key channel.", ELL_ERROR);
-			return;
-		}
-
-		const core::dimension2d<u32> dim = texture->getSize();
-		const u32 pitch = texture->getPitch() / 2;
-
-		// color with alpha disabled (i.e. fully transparent)
-		const u16 refZeroAlpha = (0x7fff & color.toA1R5G5B5());
-
-		const u32 pixels = pitch * dim.Height;
-
-		for (u32 pixel = 0; pixel < pixels; ++pixel) {
-			// If the color matches the reference color, ignoring alphas,
-			// set the alpha to zero.
-			if (((*p) & 0x7fff) == refZeroAlpha)
-				(*p) = refZeroAlpha;
-
-			++p;
-		}
-
-		texture->unlock();
-	} else {
-		u32 *p = (u32 *)texture->lock();
-
-		if (!p) {
-			os::Printer::log("Could not lock texture for making color key channel.", ELL_ERROR);
-			return;
-		}
-
-		core::dimension2d<u32> dim = texture->getSize();
-		u32 pitch = texture->getPitch() / 4;
-
-		// color with alpha disabled (fully transparent)
-		const u32 refZeroAlpha = 0x00ffffff & color.color;
-
-		const u32 pixels = pitch * dim.Height;
-		for (u32 pixel = 0; pixel < pixels; ++pixel) {
-			// If the color matches the reference color, ignoring alphas,
-			// set the alpha to zero.
-			if (((*p) & 0x00ffffff) == refZeroAlpha)
-				(*p) = refZeroAlpha;
-
-			++p;
-		}
-
-		texture->unlock();
-	}
-	texture->regenerateMipMapLevels();
-}
-
-//! Creates an boolean alpha channel of the texture based of an color key position.
-void CNullDriver::makeColorKeyTexture(video::ITexture *texture,
-		core::position2d<s32> colorKeyPixelPos) const
-{
-	if (!texture)
-		return;
-
-	if (texture->getColorFormat() != ECF_A1R5G5B5 &&
-			texture->getColorFormat() != ECF_A8R8G8B8) {
-		os::Printer::log("Error: Unsupported texture color format for making color key channel.", ELL_ERROR);
-		return;
-	}
-
-	SColor colorKey;
-
-	if (texture->getColorFormat() == ECF_A1R5G5B5) {
-		u16 *p = (u16 *)texture->lock(ETLM_READ_ONLY);
-
-		if (!p) {
-			os::Printer::log("Could not lock texture for making color key channel.", ELL_ERROR);
-			return;
-		}
-
-		u32 pitch = texture->getPitch() / 2;
-
-		const u16 key16Bit = 0x7fff & p[colorKeyPixelPos.Y * pitch + colorKeyPixelPos.X];
-
-		colorKey = video::A1R5G5B5toA8R8G8B8(key16Bit);
-	} else {
-		u32 *p = (u32 *)texture->lock(ETLM_READ_ONLY);
-
-		if (!p) {
-			os::Printer::log("Could not lock texture for making color key channel.", ELL_ERROR);
-			return;
-		}
-
-		u32 pitch = texture->getPitch() / 4;
-		colorKey = 0x00ffffff & p[colorKeyPixelPos.Y * pitch + colorKeyPixelPos.X];
-	}
-
-	texture->unlock();
-	makeColorKeyTexture(texture, colorKey);
-}
-
-//! Returns the maximum amount of primitives (mostly vertices) which
-//! the device is able to render with one drawIndexedTriangleList
-//! call.
-u32 CNullDriver::getMaximalPrimitiveCount() const
-{
-	return 0xFFFFFFFF;
+	SDriverLimits ret;
+	ret.MaxPrimitiveCount = 0xFFFFFFFF;
+	ret.MaxTextureSize = 0x10000; // maybe large enough
+	return ret;
 }
 
 //! checks triangle count and print warning if wrong
 bool CNullDriver::checkPrimitiveCount(u32 prmCount) const
 {
-	const u32 m = getMaximalPrimitiveCount();
+	const u32 m = getLimits().MaxPrimitiveCount;
 
 	if (prmCount > m) {
 		char tmp[128];
@@ -918,17 +739,20 @@ bool CNullDriver::checkImage(IImage *image) const
 	return true;
 }
 
-bool CNullDriver::checkImage(const core::array<IImage *> &image) const
+bool CNullDriver::checkImage(const std::vector<IImage*> &image) const
 {
-	if (!image.size())
+	if (image.empty())
 		return false;
 
 	ECOLOR_FORMAT lastFormat = image[0]->getColorFormat();
-	core::dimension2d<u32> lastSize = image[0]->getDimension();
+	auto lastSize = image[0]->getDimension();
 
-	for (u32 i = 0; i < image.size(); ++i) {
+	for (size_t i = 0; i < image.size(); ++i) {
+		if (!image[i])
+			return false;
+
 		ECOLOR_FORMAT format = image[i]->getColorFormat();
-		core::dimension2d<u32> size = image[i]->getDimension();
+		auto size = image[i]->getDimension();
 
 		if (!checkImage(image[i]))
 			return false;
@@ -950,9 +774,10 @@ void CNullDriver::setTextureCreationFlag(E_TEXTURE_CREATION_FLAG flag, bool enab
 		setTextureCreationFlag(ETCF_OPTIMIZED_FOR_SPEED, false);
 	}
 
-	// set flag
-	TextureCreationFlags = (TextureCreationFlags & (~flag)) |
-						   ((((u32)!enabled) - 1) & flag);
+	if (enabled)
+		TextureCreationFlags |= flag;
+	else
+		TextureCreationFlags &= ~flag;
 }
 
 //! Returns if a texture creation flag is enabled or disabled.
@@ -1118,79 +943,102 @@ void CNullDriver::getFog(SColor &color, E_FOG_TYPE &fogType, f32 &start, f32 &en
 	rangeFog = RangeFog;
 }
 
-//! Draws a mesh buffer
-void CNullDriver::drawMeshBuffer(const scene::IMeshBuffer *mb)
+void CNullDriver::drawBuffers(const scene::IVertexBuffer *vb,
+		const scene::IIndexBuffer *ib, u32 primCount,
+		scene::E_PRIMITIVE_TYPE pType)
 {
-	if (!mb)
+	if (!vb || !ib)
 		return;
 
-	// IVertexBuffer and IIndexBuffer later
-	SHWBufferLink *HWBuffer = getBufferLink(mb);
+	// subclass is supposed to override this if it supports hw buffers
+	assert(!vb->Link && !ib->Link);
 
-	if (HWBuffer)
-		drawHardwareBuffer(HWBuffer);
-	else
-		drawVertexPrimitiveList(mb->getVertices(), mb->getVertexCount(), mb->getIndices(), mb->getPrimitiveCount(), mb->getVertexType(), mb->getPrimitiveType(), mb->getIndexType());
+	drawVertexPrimitiveList(vb->getData(), vb->getCount(), ib->getData(),
+		primCount, vb->getType(), pType, ib->getType());
 }
 
 //! Draws the normals of a mesh buffer
 void CNullDriver::drawMeshBufferNormals(const scene::IMeshBuffer *mb, f32 length, SColor color)
 {
 	const u32 count = mb->getVertexCount();
-	const bool normalize = mb->getMaterial().NormalizeNormals;
-
 	for (u32 i = 0; i < count; ++i) {
-		core::vector3df normalizedNormal = mb->getNormal(i);
-		if (normalize)
-			normalizedNormal.normalize();
-
+		core::vector3df normal = mb->getNormal(i);
 		const core::vector3df &pos = mb->getPosition(i);
-		draw3DLine(pos, pos + (normalizedNormal * length), color);
+		draw3DLine(pos, pos + (normal * length), color);
 	}
 }
 
-CNullDriver::SHWBufferLink *CNullDriver::getBufferLink(const scene::IMeshBuffer *mb)
+CNullDriver::SHWBufferLink *CNullDriver::getBufferLink(const scene::HWBuffer *buf)
 {
-	if (!mb || !isHardwareBufferRecommend(mb))
-		return 0;
+	if (!buf || !isHardwareBufferRecommend(buf))
+		return nullptr;
 
 	// search for hardware links
-	SHWBufferLink *HWBuffer = reinterpret_cast<SHWBufferLink *>(mb->getHWBuffer());
-	if (HWBuffer)
-		return HWBuffer;
+	if (auto *link = reinterpret_cast<SHWBufferLink *>(buf->Link))
+		return link;
 
-	return createHardwareBuffer(mb); // no hardware links, and mesh wants one, create it
+	return createHardwareBuffer(buf);
 }
 
-//! Update all hardware buffers, remove unused ones
-void CNullDriver::updateAllHardwareBuffers()
+void CNullDriver::registerHardwareBuffer(SHWBufferLink *HWBuffer)
 {
-	auto it = HWBufferList.begin();
-	while (it != HWBufferList.end()) {
-		SHWBufferLink *Link = *it;
-		++it;
+	assert(HWBuffer);
+	HWBuffer->ListPosition = HWBufferList.size();
+	HWBufferList.push_back(HWBuffer);
+}
 
-		if (!Link->MeshBuffer || Link->MeshBuffer->getReferenceCount() == 1)
-			deleteHardwareBuffer(Link);
+void CNullDriver::expireHardwareBuffers()
+{
+	// 10 - 30s at usual framerates
+	constexpr u16 DELETE_AFTER_UNUSED_FRAMES = 60 * 25;
+
+	for (size_t i = 0; i < HWBufferList.size(); ) {
+		auto *link = HWBufferList[i];
+
+		bool del = link->UnusedCounter++ >= DELETE_AFTER_UNUSED_FRAMES ||
+			!link->Buffer || link->Buffer->getReferenceCount() == 1;
+
+		// deleting can reorder, so don't advance in list
+		if (del)
+			deleteHardwareBuffer(link);
+		else
+			i++;
 	}
+
+	FrameStats.HWBuffersActive = HWBufferList.size();
 }
 
 void CNullDriver::deleteHardwareBuffer(SHWBufferLink *HWBuffer)
 {
 	if (!HWBuffer)
 		return;
-	HWBufferList.erase(HWBuffer->listPosition);
+	const size_t pos = HWBuffer->ListPosition;
+	assert(HWBufferList.at(pos) == HWBuffer);
+	if (HWBufferList.size() < 2 || pos == HWBufferList.size() - 1) {
+		HWBufferList.erase(HWBufferList.begin() + pos);
+	} else {
+		// swap with last
+		std::swap(HWBufferList[pos], HWBufferList.back());
+		HWBufferList.pop_back();
+		HWBufferList[pos]->ListPosition = pos;
+	}
 	delete HWBuffer;
 }
 
-//! Remove hardware buffer
-void CNullDriver::removeHardwareBuffer(const scene::IMeshBuffer *mb)
+void CNullDriver::updateHardwareBuffer(const scene::HWBuffer *buf)
 {
-	if (!mb)
+	if (!buf)
 		return;
-	SHWBufferLink *HWBuffer = reinterpret_cast<SHWBufferLink *>(mb->getHWBuffer());
-	if (HWBuffer)
-		deleteHardwareBuffer(HWBuffer);
+	if (auto *link = getBufferLink(buf))
+		updateHardwareBuffer(link);
+}
+
+void CNullDriver::removeHardwareBuffer(const scene::HWBuffer *buf)
+{
+	if (!buf)
+		return;
+	if (auto *link = reinterpret_cast<SHWBufferLink *>(buf->Link))
+		deleteHardwareBuffer(link);
 }
 
 //! Remove all hardware buffers
@@ -1200,15 +1048,19 @@ void CNullDriver::removeAllHardwareBuffers()
 		deleteHardwareBuffer(HWBufferList.front());
 }
 
-bool CNullDriver::isHardwareBufferRecommend(const scene::IMeshBuffer *mb)
+bool CNullDriver::isHardwareBufferRecommend(const scene::HWBuffer *buf)
 {
-	if (!mb || (mb->getHardwareMappingHint_Index() == scene::EHM_NEVER && mb->getHardwareMappingHint_Vertex() == scene::EHM_NEVER))
+	if (buf->MappingHint == scene::EHM_NEVER)
 		return false;
 
-	if (mb->getVertexCount() < MinVertexCountForVBO)
-		return false;
-
-	return true;
+	if (dynamic_cast<const scene::IVertexBuffer *>(buf)) {
+		return buf->getCount() >= MinVertexCountForVBO;
+	} else if (dynamic_cast<const scene::IIndexBuffer *>(buf)) {
+		// This is a bit stupid
+		return buf->getCount() >= 3 * MinVertexCountForVBO;
+	} else {
+		return true;
+	}
 }
 
 //! Create occlusion query.
@@ -1223,7 +1075,7 @@ void CNullDriver::addOcclusionQuery(scene::ISceneNode *node, const scene::IMesh 
 		else if (node->getType() == scene::ESNT_MESH)
 			mesh = static_cast<scene::IMeshSceneNode *>(node)->getMesh();
 		else
-			mesh = static_cast<scene::IAnimatedMeshSceneNode *>(node)->getMesh()->getMesh(0);
+			mesh = static_cast<scene::AnimatedMeshSceneNode *>(node)->getMesh();
 		if (!mesh)
 			return;
 	}
@@ -1274,10 +1126,8 @@ void CNullDriver::runOcclusionQuery(scene::ISceneNode *node, bool visible)
 	OcclusionQueries[index].Run = 0;
 	if (!visible) {
 		SMaterial mat;
-		mat.Lighting = false;
-		mat.AntiAliasing = 0;
+		mat.AntiAliasing = video::EAAM_OFF;
 		mat.ColorMask = ECP_NONE;
-		mat.GouraudShading = false;
 		mat.ZWriteEnable = EZW_OFF;
 		setMaterial(mat);
 	}
@@ -1408,21 +1258,12 @@ s32 CNullDriver::addMaterialRenderer(IMaterialRenderer *renderer, const char *na
 	return MaterialRenderers.size() - 1;
 }
 
-//! Sets the name of a material renderer.
-void CNullDriver::setMaterialRendererName(u32 idx, const char *name)
-{
-	if (idx < numBuiltInMaterials || idx >= MaterialRenderers.size())
-		return;
-
-	MaterialRenderers[idx].Name = name;
-}
-
 void CNullDriver::swapMaterialRenderers(u32 idx1, u32 idx2, bool swapNames)
 {
 	if (idx1 < MaterialRenderers.size() && idx2 < MaterialRenderers.size()) {
-		irr::core::swap(MaterialRenderers[idx1].Renderer, MaterialRenderers[idx2].Renderer);
+		std::swap(MaterialRenderers[idx1].Renderer, MaterialRenderers[idx2].Renderer);
 		if (swapNames)
-			irr::core::swap(MaterialRenderers[idx1].Name, MaterialRenderers[idx2].Name);
+			std::swap(MaterialRenderers[idx1].Name, MaterialRenderers[idx2].Name);
 	}
 }
 
@@ -1464,15 +1305,6 @@ u32 CNullDriver::getMaterialRendererCount() const
 	return MaterialRenderers.size();
 }
 
-//! Returns name of the material renderer
-const char *CNullDriver::getMaterialRendererName(u32 idx) const
-{
-	if (idx < MaterialRenderers.size())
-		return MaterialRenderers[idx].Name.c_str();
-
-	return 0;
-}
-
 //! Returns pointer to the IGPUProgrammingServices interface.
 IGPUProgrammingServices *CNullDriver::getGPUProgrammingServices()
 {
@@ -1482,34 +1314,24 @@ IGPUProgrammingServices *CNullDriver::getGPUProgrammingServices()
 //! Adds a new material renderer to the VideoDriver, based on a high level shading language.
 s32 CNullDriver::addHighLevelShaderMaterial(
 		const c8 *vertexShaderProgram,
-		const c8 *vertexShaderEntryPointName,
-		E_VERTEX_SHADER_TYPE vsCompileTarget,
 		const c8 *pixelShaderProgram,
-		const c8 *pixelShaderEntryPointName,
-		E_PIXEL_SHADER_TYPE psCompileTarget,
 		const c8 *geometryShaderProgram,
-		const c8 *geometryShaderEntryPointName,
-		E_GEOMETRY_SHADER_TYPE gsCompileTarget,
+		const c8 *shaderName,
 		scene::E_PRIMITIVE_TYPE inType, scene::E_PRIMITIVE_TYPE outType,
 		u32 verticesOut,
 		IShaderConstantSetCallBack *callback,
 		E_MATERIAL_TYPE baseMaterial,
 		s32 userData)
 {
-	os::Printer::log("High level shader materials not available (yet) in this driver, sorry");
+	os::Printer::log("Shader materials not available in this driver", ELL_ERROR);
 	return -1;
 }
 
 s32 CNullDriver::addHighLevelShaderMaterialFromFiles(
 		const io::path &vertexShaderProgramFileName,
-		const c8 *vertexShaderEntryPointName,
-		E_VERTEX_SHADER_TYPE vsCompileTarget,
 		const io::path &pixelShaderProgramFileName,
-		const c8 *pixelShaderEntryPointName,
-		E_PIXEL_SHADER_TYPE psCompileTarget,
 		const io::path &geometryShaderProgramFileName,
-		const c8 *geometryShaderEntryPointName,
-		E_GEOMETRY_SHADER_TYPE gsCompileTarget,
+		const c8 *shaderName,
 		scene::E_PRIMITIVE_TYPE inType, scene::E_PRIMITIVE_TYPE outType,
 		u32 verticesOut,
 		IShaderConstantSetCallBack *callback,
@@ -1545,9 +1367,7 @@ s32 CNullDriver::addHighLevelShaderMaterialFromFiles(
 	}
 
 	s32 result = addHighLevelShaderMaterialFromFiles(
-			vsfile, vertexShaderEntryPointName, vsCompileTarget,
-			psfile, pixelShaderEntryPointName, psCompileTarget,
-			gsfile, geometryShaderEntryPointName, gsCompileTarget,
+			vsfile, psfile, gsfile, shaderName,
 			inType, outType, verticesOut,
 			callback, baseMaterial, userData);
 
@@ -1565,14 +1385,9 @@ s32 CNullDriver::addHighLevelShaderMaterialFromFiles(
 
 s32 CNullDriver::addHighLevelShaderMaterialFromFiles(
 		io::IReadFile *vertexShaderProgram,
-		const c8 *vertexShaderEntryPointName,
-		E_VERTEX_SHADER_TYPE vsCompileTarget,
 		io::IReadFile *pixelShaderProgram,
-		const c8 *pixelShaderEntryPointName,
-		E_PIXEL_SHADER_TYPE psCompileTarget,
 		io::IReadFile *geometryShaderProgram,
-		const c8 *geometryShaderEntryPointName,
-		E_GEOMETRY_SHADER_TYPE gsCompileTarget,
+		const c8 *shaderName,
 		scene::E_PRIMITIVE_TYPE inType, scene::E_PRIMITIVE_TYPE outType,
 		u32 verticesOut,
 		IShaderConstantSetCallBack *callback,
@@ -1618,9 +1433,7 @@ s32 CNullDriver::addHighLevelShaderMaterialFromFiles(
 	}
 
 	s32 result = this->addHighLevelShaderMaterial(
-			vs, vertexShaderEntryPointName, vsCompileTarget,
-			ps, pixelShaderEntryPointName, psCompileTarget,
-			gs, geometryShaderEntryPointName, gsCompileTarget,
+			vs, ps, gs, shaderName,
 			inType, outType, verticesOut,
 			callback, baseMaterial, userData);
 
@@ -1648,7 +1461,7 @@ void CNullDriver::deleteShaderMaterial(s32 material)
 	auto &ref = MaterialRenderers[idx];
 	if (ref.Renderer)
 		ref.Renderer->drop();
-	ref.Renderer = new CDummyMaterialRenderer();
+	ref.Renderer = new IMaterialRenderer();
 	ref.Name.clear();
 }
 
@@ -1659,7 +1472,13 @@ ITexture *CNullDriver::addRenderTargetTexture(const core::dimension2d<u32> &size
 	return 0;
 }
 
-ITexture *CNullDriver::addRenderTargetTextureCubemap(const irr::u32 sideLen,
+ITexture *CNullDriver::addRenderTargetTextureMs(const core::dimension2d<u32> &size, u8 msaa,
+		const io::path &name, const ECOLOR_FORMAT format)
+{
+	return 0;
+}
+
+ITexture *CNullDriver::addRenderTargetTextureCubemap(const u32 sideLen,
 		const io::path &name, const ECOLOR_FORMAT format)
 {
 	return 0;
@@ -1704,22 +1523,6 @@ IVideoDriver *createNullDriver(io::IFileSystem *io, const core::dimension2d<u32>
 	return nullDriver;
 }
 
-//! Set/unset a clipping plane.
-//! There are at least 6 clipping planes available for the user to set at will.
-//! \param index: The plane index. Must be between 0 and MaxUserClipPlanes.
-//! \param plane: The plane itself.
-//! \param enable: If true, enable the clipping plane else disable it.
-bool CNullDriver::setClipPlane(u32 index, const core::plane3df &plane, bool enable)
-{
-	return false;
-}
-
-//! Enable/disable a clipping plane.
-void CNullDriver::enableClipPlane(u32 index, bool enable)
-{
-	// not necessary
-}
-
 void CNullDriver::setMinHardwareBufferVertexCount(u32 count)
 {
 	MinVertexCountForVBO = count;
@@ -1742,12 +1545,7 @@ void CNullDriver::enableMaterial2D(bool enable)
 	OverrideMaterial2DEnabled = enable;
 }
 
-core::dimension2du CNullDriver::getMaxTextureSize() const
-{
-	return core::dimension2du(0x10000, 0x10000); // maybe large enough
-}
-
-bool CNullDriver::needsTransparentRenderPass(const irr::video::SMaterial &material) const
+bool CNullDriver::needsTransparentRenderPass(const video::SMaterial &material) const
 {
 	// TODO: I suspect it would be nice if the material had an enum for further control.
 	//		Especially it probably makes sense to allow disabling transparent render pass as soon as material.ZWriteEnable is on.
@@ -1765,21 +1563,4 @@ bool CNullDriver::needsTransparentRenderPass(const irr::video::SMaterial &materi
 	return false;
 }
 
-//! Color conversion convenience function
-/** Convert an image (as array of pixels) from source to destination
-array, thereby converting the color format. The pixel size is
-determined by the color formats.
-\param sP Pointer to source
-\param sF Color format of source
-\param sN Number of pixels to convert, both array must be large enough
-\param dP Pointer to destination
-\param dF Color format of destination
-*/
-void CNullDriver::convertColor(const void *sP, ECOLOR_FORMAT sF, s32 sN,
-		void *dP, ECOLOR_FORMAT dF) const
-{
-	video::CColorConverter::convert_viaFormat(sP, sF, sN, dP, dF);
-}
-
-} // end namespace
 } // end namespace

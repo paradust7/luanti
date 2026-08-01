@@ -1,25 +1,12 @@
-/*
-Minetest
-Copyright (C) 2016 est31, <MTest31@outlook.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2016 est31, <MTest31@outlook.com>
 
 #pragma once
 
-#include "irrlichttypes_extrabloated.h"
+#include <IEventReceiver.h>
+#include "irrlichttypes.h"
+
 #include "keys.h"
 #include <bitset>
 #include <vector>
@@ -44,7 +31,7 @@ struct JoystickAxisLayout {
 
 struct JoystickCombination {
 
-	virtual bool isTriggered(const irr::SEvent::SJoystickEvent &ev) const=0;
+	virtual bool isTriggered(const SEvent::SJoystickEvent &ev) const=0;
 
 	GameKeyType key;
 };
@@ -62,7 +49,7 @@ struct JoystickButtonCmb : public JoystickCombination {
 
 	virtual ~JoystickButtonCmb() = default;
 
-	virtual bool isTriggered(const irr::SEvent::SJoystickEvent &ev) const;
+	virtual bool isTriggered(const SEvent::SJoystickEvent &ev) const;
 
 	u32 filter_mask;
 	u32 compare_mask;
@@ -82,7 +69,7 @@ struct JoystickAxisCmb : public JoystickCombination {
 
 	virtual ~JoystickAxisCmb() = default;
 
-	bool isTriggered(const irr::SEvent::SJoystickEvent &ev) const override;
+	bool isTriggered(const SEvent::SJoystickEvent &ev) const override;
 
 	u16 axis_to_compare;
 
@@ -104,9 +91,9 @@ class JoystickController {
 public:
 	JoystickController();
 
-	void onJoystickConnect(const std::vector<irr::SJoystickInfo> &joystick_infos);
+	void onJoystickConnect(const std::vector<SJoystickInfo> &joystick_infos);
 
-	bool handleEvent(const irr::SEvent::SJoystickEvent &ev);
+	bool handleEvent(const SEvent::SJoystickEvent &ev);
 	void clear();
 
 	void releaseAllKeys()
@@ -154,6 +141,11 @@ public:
 
 	float getMovementDirection();
 	float getMovementSpeed();
+
+	u8 getJoystickId() const
+	{
+		return m_joystick_id;
+	}
 
 	f32 doubling_dtime;
 

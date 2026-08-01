@@ -1,28 +1,15 @@
- /*
-Minetest
-Copyright (C) 2010-2014 kwolekr, Ryan Kwolek <kwolekr@minetest.net>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2014 kwolekr, Ryan Kwolek <kwolekr@minetest.net>
 
 #include "test.h"
 
 #include "noise.h"
 #include "settings.h"
 #include "mapgen/mapgen_v5.h"
-#include "util/sha1.h"
+#include "emerge.h"
+#include "util/hashing.h"
+#include "irrlicht_changes/printing.h"
 #include "map_settings_manager.h"
 
 class TestMapSettingsManager : public TestBase {
@@ -38,6 +25,7 @@ public:
 	void testMapSettingsManager();
 	void testMapMetaSaveLoad();
 	void testMapMetaFailures();
+	void testChunks();
 };
 
 static TestMapSettingsManager g_test_instance;
@@ -47,6 +35,7 @@ void TestMapSettingsManager::runTests(IGameDef *gamedef)
 	TEST(testMapSettingsManager);
 	TEST(testMapMetaSaveLoad);
 	TEST(testMapMetaFailures);
+	TEST(testChunks);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -144,7 +133,7 @@ void TestMapSettingsManager::testMapSettingsManager()
 
 	{
 		NoiseParams dummy;
-		mgr.getMapSettingNoiseParams("mgv5_np_factor", &dummy);
+		mgr.getNoiseParams("mgv5_np_factor", &dummy);
 		check_noise_params(&dummy, &script_np_factor);
 	}
 
@@ -156,7 +145,7 @@ void TestMapSettingsManager::testMapSettingsManager()
 	// Now make our Params and see if the values are correctly sourced
 	MapgenParams *params = mgr.makeMapgenParams();
 	UASSERT(params->mgtype == MAPGEN_V5);
-	UASSERT(params->chunksize == 5);
+	UASSERT(params->chunksize == v3s16(5));
 	UASSERT(params->water_level == 15);
 	UASSERT(params->seed == 1234);
 	UASSERT((params->flags & MG_LIGHT) == 0);
@@ -186,11 +175,9 @@ void TestMapSettingsManager::testMapSettingsManager()
 		0x78, 0x56, 0x95, 0x2d, 0xdc, 0x6a, 0xf7, 0x61, 0x36, 0x5f
 	};
 
-	SHA1 ctx;
 	std::string metafile_contents;
 	UASSERT(fs::ReadFile(test_mapmeta_path, metafile_contents));
-	ctx.addBytes(metafile_contents);
-	std::string sha1_result = ctx.getDigest();
+	std::string sha1_result = hashing::sha1(metafile_contents);
 	int resultdiff = memcmp(sha1_result.data(), expected_contents_hash, 20);
 
 	UASSERT(!resultdiff);
@@ -262,4 +249,30 @@ void TestMapSettingsManager::testMapMetaFailures()
 		MapSettingsManager mgr2(test_mapmeta_path);
 		UASSERT(!mgr2.loadMapMeta());
 	}
+}
+
+
+void TestMapSettingsManager::testChunks()
+{
+	v3s16 csize(5);
+
+#define GET(x) EmergeManager::getContainingChunk(x, csize)
+	// origin chunk goes from (-2, -2, -2) -> (3, 3, 3) excl
+	UASSERTEQ(auto, GET(v3s16(-2, -2, -2)), v3s16(-2, -2, -2));
+	UASSERTEQ(auto, GET(v3s16(0, 0, 0)), v3s16(-2, -2, -2));
+	UASSERTEQ(auto, GET(v3s16(1, 1, 1)), v3s16(-2, -2, -2));
+	UASSERTEQ(auto, GET(v3s16(2, 2, 2)), v3s16(-2, -2, -2));
+	UASSERTEQ(auto, GET(v3s16(2, 3, 2)), v3s16(-2, 3, -2));
+	UASSERTEQ(auto, GET(v3s16(0, -3, 0)), v3s16(-2, -7, -2));
+
+	csize = v3s16(5, 2, 5);
+	UASSERTEQ(auto, GET(v3s16(0, 0, 0)), v3s16(-2, -1, -2));
+	UASSERTEQ(auto, GET(v3s16(0, 1, 0)), v3s16(-2, 1, -2));
+	UASSERTEQ(auto, GET(v3s16(3, 3, 3)), v3s16(3, 3, 3));
+
+	csize = v3s16(1);
+	UASSERTEQ(auto, GET(v3s16(1, 2, 3)), v3s16(1, 2, 3));
+	UASSERTEQ(auto, GET(v3s16(-3, -2, -1)), v3s16(-3, -2, -1));
+
+#undef GET
 }

@@ -1,21 +1,6 @@
-/*
-Minetest
-Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
@@ -24,7 +9,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include <vector>
 #include <SMaterial.h>
 
-enum MaterialType{
+enum MaterialType : u8 {
 	TILE_MATERIAL_BASIC,
 	TILE_MATERIAL_ALPHA,
 	TILE_MATERIAL_LIQUID_TRANSPARENT,
@@ -35,20 +20,33 @@ enum MaterialType{
 	TILE_MATERIAL_WAVING_LIQUID_BASIC,
 	TILE_MATERIAL_WAVING_LIQUID_TRANSPARENT,
 	TILE_MATERIAL_WAVING_LIQUID_OPAQUE,
+	// Note: PLAIN isn't a material actually used by tiles, rather just entities.
 	TILE_MATERIAL_PLAIN,
 	TILE_MATERIAL_PLAIN_ALPHA
 };
+
+/**
+ * @brief change type so it has at least simple transparency
+ */
+static inline MaterialType material_type_with_alpha(MaterialType type)
+{
+	switch (type) {
+		case TILE_MATERIAL_OPAQUE:
+			return TILE_MATERIAL_BASIC;
+		case TILE_MATERIAL_WAVING_LIQUID_OPAQUE:
+			return TILE_MATERIAL_WAVING_LIQUID_BASIC;
+		default:
+			return type;
+	}
+}
 
 // Material flags
 // Should backface culling be enabled?
 #define MATERIAL_FLAG_BACKFACE_CULLING 0x01
 // Should a crack be drawn?
 #define MATERIAL_FLAG_CRACK 0x02
-// Should the crack be drawn on transparent pixels (unset) or not (set)?
-// Ignored if MATERIAL_FLAG_CRACK is not set.
-#define MATERIAL_FLAG_CRACK_OVERLAY 0x04
+// Does this layer have texture animation?
 #define MATERIAL_FLAG_ANIMATION 0x08
-//#define MATERIAL_FLAG_HIGHLIGHTED 0x10
 #define MATERIAL_FLAG_TILEABLE_HORIZONTAL 0x20
 #define MATERIAL_FLAG_TILEABLE_VERTICAL 0x40
 
@@ -56,16 +54,20 @@ enum MaterialType{
 	This fully defines the looks of a tile.
 	The SMaterial of a tile is constructed according to this.
 */
+
 struct FrameSpec
 {
 	FrameSpec() = default;
 
 	u32 texture_id = 0;
 	video::ITexture *texture = nullptr;
-	video::ITexture *normal_texture = nullptr;
-	video::ITexture *flags_texture = nullptr;
 };
 
+/**
+ * We have two tile layers:
+ * layer 0 = base
+ * layer 1 = overlay
+ */
 #define MAX_TILE_LAYERS 2
 
 //! Defines a layer of a tile.
@@ -74,48 +76,60 @@ struct TileLayer
 	TileLayer() = default;
 
 	/*!
-	 * Two layers are equal if they can be merged.
+	 * Two layers are equal if they can be merged (same material).
 	 */
 	bool operator==(const TileLayer &other) const
 	{
 		return
 			texture_id == other.texture_id &&
-			material_type == other.material_type &&
+			shader_id == other.shader_id &&
 			material_flags == other.material_flags &&
 			has_color == other.has_color &&
 			color == other.color &&
-			scale == other.scale;
+			need_polygon_offset == other.need_polygon_offset;
+		// texture_layer_idx and scale are notably part of the vertex data
 	}
 
 	/*!
-	 * Two tiles are not equal if they must have different vertices.
+	 * Two layers are not equal if they must have different vertices.
 	 */
 	bool operator!=(const TileLayer &other) const
 	{
 		return !(*this == other);
 	}
 
-	// Sets everything else except the texture in the material
-	void applyMaterialOptions(video::SMaterial &material) const;
+	/**
+	 * Set some material parameters accordingly.
+	 * @note does not set `MaterialType`!
+	 * @param material material to mody
+	 * @param layer index of this layer in the `TileSpec`
+	 */
+	void applyMaterialOptions(video::SMaterial &material, int layer) const;
 
-	void applyMaterialOptionsWithShaders(video::SMaterial &material) const;
+	/// @return is this layer uninitalized?
+	bool empty() const
+	{
+		return !shader_id && !texture_id;
+	}
 
+	/// @return is this layer semi-transparent?
 	bool isTransparent() const
 	{
+		// see also: the mapping in ShaderSource::generateShader()
 		switch (material_type) {
 		case TILE_MATERIAL_ALPHA:
+		case TILE_MATERIAL_PLAIN_ALPHA:
 		case TILE_MATERIAL_LIQUID_TRANSPARENT:
 		case TILE_MATERIAL_WAVING_LIQUID_TRANSPARENT:
 			return true;
+		default:
+			return false;
 		}
-		return false;
 	}
 
 	// Ordered for size, please do not reorder
 
 	video::ITexture *texture = nullptr;
-	video::ITexture *normal_texture = nullptr;
-	video::ITexture *flags_texture = nullptr;
 
 	u32 shader_id = 0;
 
@@ -124,25 +138,85 @@ struct TileLayer
 	u16 animation_frame_length_ms = 0;
 	u16 animation_frame_count = 1;
 
-	u8 material_type = TILE_MATERIAL_BASIC;
+	/// Layer index to use, if the texture is an array texture
+	u16 texture_layer_idx = 0;
+
+	MaterialType material_type = TILE_MATERIAL_BASIC;
 	u8 material_flags =
-		//0 // <- DEBUG, Use the one below
 		MATERIAL_FLAG_BACKFACE_CULLING |
 		MATERIAL_FLAG_TILEABLE_HORIZONTAL|
 		MATERIAL_FLAG_TILEABLE_VERTICAL;
 
-	//! If true, the tile has its own color.
-	bool has_color = false;
+	/// Texture scale in both directions (used for world-align)
+	u8 scale = 1;
 
+	/// does this tile need to have a positive polygon offset set?
+	/// @see TileLayer::applyMaterialOptions
+	bool need_polygon_offset = false;
+
+	/// @note not owned by this struct
 	std::vector<FrameSpec> *frames = nullptr;
 
 	/*!
 	 * The color of the tile, or if the tile does not own
 	 * a color then the color of the node owning this tile.
 	 */
-	video::SColor color = video::SColor(0, 0, 0, 0);
+	video::SColor color;
 
-	u8 scale = 1;
+	//! If true, the tile has its own color.
+	bool has_color = false;
+};
+
+template<>
+struct std::hash<TileLayer>
+{
+	// All layers equal according to TileLayer::operator== will have the same
+	// hash value according to this function.
+	std::size_t operator()(const TileLayer &l) const noexcept
+	{
+		std::size_t ret = 0;
+		for (auto h : { l.texture_id, l.shader_id, (u32)l.material_flags }) {
+			ret += h;
+			ret ^= (ret << 6) + (ret >> 2); // distribute bits
+		}
+		return ret;
+	}
+};
+
+
+// Stores information for drawing an animated tile
+struct AnimationInfo {
+
+	AnimationInfo() = default;
+
+	AnimationInfo(const TileLayer &tile) :
+			m_frame_length_ms(tile.animation_frame_length_ms),
+			m_frame_count(tile.animation_frame_count),
+			m_frames(tile.frames)
+	{}
+
+	AnimationInfo(std::vector<FrameSpec> *frames, u16 frame_length_ms) :
+			m_frame_length_ms(frame_length_ms),
+			m_frame_count(frames->size()),
+			m_frames(frames)
+	{}
+
+	size_t getFrameCount() const
+	{
+		return m_frames ? m_frame_count : 0;
+	}
+
+	void updateTexture(video::SMaterial &material, float animation_time);
+
+	// Returns nullptr if texture did not change since last time
+	video::ITexture *getTexture(float animation_time) const;
+
+private:
+	u16 m_frame_length_ms = 0;
+	u16 m_frame_count = 1;
+
+	/// @note by default not owned by this struct
+	std::vector<FrameSpec> *m_frames = nullptr;
 };
 
 enum class TileRotation: u8 {
@@ -163,8 +237,6 @@ struct TileSpec
 	bool world_aligned = false;
 	//! Tile rotation.
 	TileRotation rotation = TileRotation::None;
-	//! This much light does the tile emit.
-	u8 emissive_light = 0;
 	//! The first is base texture, the second is overlay.
 	TileLayer layers[MAX_TILE_LAYERS];
 };

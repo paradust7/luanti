@@ -1,21 +1,6 @@
-/*
-Minetest
-Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #pragma once
 
@@ -81,12 +66,12 @@ struct BoneOverride
 		v3f previous;
 		v3f vector;
 		bool absolute = false;
-		f32 interp_timer = 0;
+		f32 interp_duration = 0.0f;
 	} position;
 
 	v3f getPosition(v3f anim_pos) const {
-		f32 progress = dtime_passed / position.interp_timer;
-		if (progress > 1.0f || position.interp_timer == 0.0f)
+		f32 progress = dtime_passed / position.interp_duration;
+		if (progress > 1.0f || position.interp_duration == 0.0f)
 			progress = 1.0f;
 		return position.vector.getInterpolated(position.previous, progress)
 				+ (position.absolute ? v3f() : anim_pos);
@@ -96,15 +81,18 @@ struct BoneOverride
 	{
 		core::quaternion previous;
 		core::quaternion next;
+		// Redundantly store the euler angles serverside
+		// so that we can return them in the appropriate getters
+		v3f next_radians;
 		bool absolute = false;
-		f32 interp_timer = 0;
+		f32 interp_duration = 0.0f;
 	} rotation;
 
 	v3f getRotationEulerDeg(v3f anim_rot_euler) const {
 		core::quaternion rot;
 
-		f32 progress = dtime_passed / rotation.interp_timer;
-		if (progress > 1.0f || rotation.interp_timer == 0.0f)
+		f32 progress = dtime_passed / rotation.interp_duration;
+		if (progress > 1.0f || rotation.interp_duration == 0.0f)
 			progress = 1.0f;
 		rot.slerp(rotation.previous, rotation.next, progress);
 		if (!rotation.absolute) {
@@ -119,27 +107,35 @@ struct BoneOverride
 
 	struct ScaleProperty
 	{
-		v3f previous;
-		v3f vector{1, 1, 1};
+		v3f previous = v3f(1.0f);
+		v3f vector = v3f(1.0f);
 		bool absolute = false;
-		f32 interp_timer = 0;
+		f32 interp_duration = 0.0f;
 	} scale;
 
 	v3f getScale(v3f anim_scale) const {
-		f32 progress = dtime_passed / scale.interp_timer;
-		if (progress > 1.0f || scale.interp_timer == 0.0f)
+		f32 progress = dtime_passed / scale.interp_duration;
+		if (progress > 1.0f || scale.interp_duration == 0.0f)
 			progress = 1.0f;
 		return scale.vector.getInterpolated(scale.previous, progress)
-				* (scale.absolute ? v3f(1) : anim_scale);
+				* (scale.absolute ? v3f(1.0f) : anim_scale);
 	}
 
-	f32 dtime_passed = 0;
+	f32 dtime_passed = 0.0f;
+
+	bool finishedInterpolation() const
+	{
+		return dtime_passed >= std::max(std::max(
+				position.interp_duration, rotation.interp_duration),
+				scale.interp_duration);
+	}
 
 	bool isIdentity() const
 	{
-		return !position.absolute && position.vector == v3f()
+		return finishedInterpolation()
+				&& !position.absolute && position.vector == v3f()
 				&& !rotation.absolute && rotation.next == core::quaternion()
-				&& !scale.absolute && scale.vector == v3f(1);
+				&& !scale.absolute && scale.vector == v3f(1.0f);
 	}
 };
 
@@ -152,17 +148,19 @@ typedef std::unordered_map<std::string, BoneOverride> BoneOverrideMap;
 class ActiveObject
 {
 public:
-	ActiveObject(u16 id):
+	typedef u16 object_t;
+
+	ActiveObject(object_t id):
 		m_id(id)
 	{
 	}
 
-	u16 getId() const
+	object_t getId() const
 	{
 		return m_id;
 	}
 
-	void setId(u16 id)
+	void setId(object_t id)
 	{
 		m_id = id;
 	}
@@ -193,14 +191,22 @@ public:
 	virtual bool collideWithObjects() const = 0;
 
 
-	virtual void setAttachment(int parent_id, const std::string &bone, v3f position,
+	virtual void setAttachment(object_t parent_id, const std::string &bone, v3f position,
 			v3f rotation, bool force_visible) {}
-	virtual void getAttachment(int *parent_id, std::string *bone, v3f *position,
+	virtual void getAttachment(object_t *parent_id, std::string *bone, v3f *position,
 			v3f *rotation, bool *force_visible) const {}
+	// Detach all children
 	virtual void clearChildAttachments() {}
-	virtual void clearParentAttachment() {}
-	virtual void addAttachmentChild(int child_id) {}
-	virtual void removeAttachmentChild(int child_id) {}
+	// Detach from parent
+	virtual void clearParentAttachment()
+	{
+		setAttachment(0, "", v3f(), v3f(), false);
+	}
+
+	// To be be called from setAttachment() and descendants, but not manually!
+	virtual void addAttachmentChild(object_t child_id) {}
+	virtual void removeAttachmentChild(object_t child_id) {}
+
 protected:
-	u16 m_id; // 0 is invalid, "no id"
+	object_t m_id; // 0 is invalid, "no id"
 };

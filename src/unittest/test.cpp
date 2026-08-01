@@ -1,30 +1,20 @@
-/*
-Minetest
-Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "test.h"
 
+#include "catch.h"
 #include "nodedef.h"
 #include "itemdef.h"
 #include "dummygamedef.h"
+#include "log_internal.h"
 #include "modchannels.h"
 #include "util/numeric.h"
 #include "porting.h"
+#include "debug.h"
+
+#include <iostream>
 
 content_t t_CONTENT_STONE;
 content_t t_CONTENT_GRASS;
@@ -219,8 +209,6 @@ bool run_tests()
 	u64 t1 = porting::getTimeMs();
 	TestGameDef gamedef;
 
-	g_logger.setLevelSilenced(LL_ERROR, true);
-
 	u32 num_modules_failed     = 0;
 	u32 num_total_tests_failed = 0;
 	u32 num_total_tests_run    = 0;
@@ -233,13 +221,26 @@ bool run_tests()
 		num_total_tests_run += testmod->num_tests_run;
 	}
 
-	u64 tdiff = porting::getTimeMs() - t1;
+	rawstream << "Catch test results: " << std::endl;
+	Catch::Session session{};
+	auto config = session.configData();
+	config.skipBenchmarks = true;
+	config.allowZeroTests = true;
+	session.useConfigData(config);
+	auto exit_code = session.run();
+	// We count all the Catch tests as one test for Minetest's own logging
+	// because we don't have a way to tell how many individual tests Catch ran.
+	++num_total_tests_run;
+	if (exit_code != 0) {
+		++num_modules_failed;
+		++num_total_tests_failed;
+	}
 
-	g_logger.setLevelSilenced(LL_ERROR, false);
+	u64 tdiff = porting::getTimeMs() - t1;
 
 	const char *overall_status = (num_modules_failed == 0) ? "PASSED" : "FAILED";
 
-	rawstream
+	rawstream << "\n"
 		<< "++++++++++++++++++++++++++++++++++++++++"
 		<< "++++++++++++++++++++++++++++++++++++++++" << std::endl
 		<< "Unit Test Results: " << overall_status << std::endl
@@ -268,21 +269,22 @@ bool run_tests(const std::string &module_name)
 
 	auto testmod = findTestModule(module_name);
 	if (!testmod) {
-		errorstream << "Test module not found: " << module_name << std::endl;
-		return 1;
+		rawstream << "Did not find module, searching Catch tests: " << module_name << std::endl;
+		Catch::Session session;
+		session.configData().testsOrTags.push_back(module_name);
+		auto catch_test_failures = session.run();
+		return catch_test_failures == 0;
 	}
 
-	g_logger.setLevelSilenced(LL_ERROR, true);
 	u64 t1 = porting::getTimeMs();
 
 	bool ok = testmod->testModule(&gamedef);
 
 	u64 tdiff = porting::getTimeMs() - t1;
-	g_logger.setLevelSilenced(LL_ERROR, false);
 
 	const char *overall_status = ok ? "PASSED" : "FAILED";
 
-	rawstream
+	rawstream << "\n"
 		<< "++++++++++++++++++++++++++++++++++++++++"
 		<< "++++++++++++++++++++++++++++++++++++++++" << std::endl
 		<< "Unit Test Results: " << overall_status << std::endl
@@ -348,11 +350,14 @@ void TestBase::runTest(const char *name, std::function<void()> &&test)
 		rawstream << "    at " << e.file << ":" << e.line << std::endl;
 		rawstream << "[FAIL] ";
 		num_tests_failed++;
-	} catch (std::exception &e) {
+	}
+#if CATCH_UNHANDLED_EXCEPTIONS == 1
+	catch (std::exception &e) {
 		rawstream << "Caught unhandled exception: " << e.what() << std::endl;
 		rawstream << "[FAIL] ";
 		num_tests_failed++;
 	}
+#endif
 	num_tests_run++;
 	u64 tdiff = porting::getTimeMs() - t1;
 	rawstream << name << " - " << tdiff << "ms" << std::endl;

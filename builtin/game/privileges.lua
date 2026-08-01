@@ -1,5 +1,3 @@
--- Minetest: builtin/privileges.lua
-
 local S = core.get_translator("__builtin")
 
 --
@@ -73,7 +71,7 @@ core.register_privilege("kick", {
 	give_to_admin = true,
 })
 core.register_privilege("give", {
-	description = S("Can use /give and /giveme"),
+	description = S("Can use /give, /giveme, /pulverize and /clearinv"),
 	give_to_singleplayer = false,
 })
 core.register_privilege("password", {

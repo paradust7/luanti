@@ -1,23 +1,8 @@
-/*
-Minetest
-Copyright (C) 2010-2017 celeron55, Perttu Ahola <celeron55@gmail.com>
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2010-2017 celeron55, Perttu Ahola <celeron55@gmail.com>
 
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
-
-#include "util/serialize.h"
+#include "util/serialize.h" // serializeJsonString
 #include "util/pointedthing.h"
 #include "client.h"
 #include "clientenvironment.h"
@@ -33,20 +18,18 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "raycast.h"
 #include "voxelalgorithms.h"
 #include "settings.h"
-#include "shader.h"
 #include "content_cao.h"
 #include "porting.h"
-#include <algorithm>
 #include "client/renderingengine.h"
 
 /*
 	ClientEnvironment
 */
 
-ClientEnvironment::ClientEnvironment(ClientMap *map,
+ClientEnvironment::ClientEnvironment(irr_ptr<ClientMap> map,
 	ITextureSource *texturesource, Client *client):
 	Environment(client),
-	m_map(map),
+	m_map(std::move(map)),
 	m_texturesource(texturesource),
 	m_client(client)
 {
@@ -60,18 +43,17 @@ ClientEnvironment::~ClientEnvironment()
 		delete simple_object;
 	}
 
-	// Drop/delete map
-	m_map->drop();
+	m_map.reset();
 
 	delete m_local_player;
 }
 
-Map & ClientEnvironment::getMap()
+Map &ClientEnvironment::getMap()
 {
 	return *m_map;
 }
 
-ClientMap & ClientEnvironment::getClientMap()
+ClientMap &ClientEnvironment::getClientMap()
 {
 	return *m_map;
 }
@@ -112,7 +94,6 @@ void ClientEnvironment::step(float dtime)
 	/*
 		Maximum position increment
 	*/
-	//f32 position_max_increment = 0.05*BS;
 	f32 position_max_increment = 0.1*BS;
 
 	// Maximum time increment (for collision detection etc)
@@ -126,8 +107,8 @@ void ClientEnvironment::step(float dtime)
 		dtime_max_increment = 0.01;
 
 	// Don't allow overly huge dtime
-	if(dtime > 0.5)
-		dtime = 0.5;
+	if(dtime > DTIME_LIMIT)
+		dtime = DTIME_LIMIT;
 
 	/*
 		Stuff that has a maximum time increment
@@ -192,12 +173,11 @@ void ClientEnvironment::step(float dtime)
 		}
 
 		/*
-			Move the lplayer.
+			Move the local player.
 			This also does collision detection.
 		*/
 
-		lplayer->move(dtime_part, this, position_max_increment,
-			&player_collisions);
+		lplayer->move(dtime_part, this, &player_collisions);
 	}
 
 	bool player_immortal = false;
@@ -283,7 +263,6 @@ void ClientEnvironment::step(float dtime)
 	/*
 		Step and handle simple objects
 	*/
-	g_profiler->avg("ClientEnv: CSO count [#]", m_simple_objects.size());
 	for (auto i = m_simple_objects.begin(); i != m_simple_objects.end();) {
 		ClientSimpleObject *simple = *i;
 
@@ -340,9 +319,14 @@ void ClientEnvironment::addActiveObject(u16 id, u8 type,
 
 	obj->setId(id);
 
-	try {
+#ifdef NDEBUG
+	try
+#endif
+	{
 		obj->initialize(init_data);
-	} catch(SerializationError &e) {
+	}
+#ifdef NDEBUG
+	catch (SerializationError &e) {
 		errorstream<<"ClientEnvironment::addActiveObject():"
 			<<" id="<<id<<" type="<<type
 			<<": SerializationError in initialize(): "
@@ -350,6 +334,7 @@ void ClientEnvironment::addActiveObject(u16 id, u8 type,
 			<<": init_data="<<serializeJsonString(init_data)
 			<<std::endl;
 	}
+#endif
 
 	u16 new_id = addActiveObject(std::move(obj));
 	// Object initialized:
@@ -368,7 +353,7 @@ void ClientEnvironment::addActiveObject(u16 id, u8 type,
 void ClientEnvironment::removeActiveObject(u16 id)
 {
 	// Get current attachment childs to detach them visually
-	std::unordered_set<int> attachment_childs;
+	std::unordered_set<ClientActiveObject::object_t> attachment_childs;
 	if (auto *obj = getActiveObject(id))
 		attachment_childs = obj->getAttachmentChildIds();
 
@@ -391,14 +376,20 @@ void ClientEnvironment::processActiveObjectMessage(u16 id, const std::string &da
 		return;
 	}
 
-	try {
+#ifdef NDEBUG
+	try
+#endif
+	{
 		obj->processMessage(data);
-	} catch (SerializationError &e) {
+	}
+#ifdef NDEBUG
+	catch (SerializationError &e) {
 		errorstream<<"ClientEnvironment::processActiveObjectMessage():"
 			<< " id=" << id << " type=" << obj->getType()
 			<< " SerializationError in processMessage(): " << e.what()
 			<< std::endl;
 	}
+#endif
 }
 
 /*
@@ -448,7 +439,7 @@ void ClientEnvironment::getSelectedActiveObjects(
 
 	for (const auto &allObject : allObjects) {
 		ClientActiveObject *obj = allObject.obj;
-		aabb3f selection_box;
+		aabb3f selection_box{{0.0f, 0.0f, 0.0f}};
 		if (!obj->getSelectionBox(&selection_box))
 			continue;
 
@@ -459,8 +450,8 @@ void ClientEnvironment::getSelectedActiveObjects(
 		GenericCAO* gcao = dynamic_cast<GenericCAO*>(obj);
 		if (gcao != nullptr && gcao->getProperties().rotate_selectionbox) {
 			gcao->getSceneNode()->updateAbsolutePosition();
-			const v3f deg = obj->getSceneNode()->getAbsoluteTransformation().getRotationDegrees();
-			collision = boxLineCollision(selection_box, deg,
+			const v3f rad = obj->getSceneNode()->getAbsoluteTransformation().getRotationRadians();
+			collision = boxLineCollision(selection_box, rad,
 				rel_pos, line_vector, &current_intersection, &current_normal, &current_raw_normal);
 		} else {
 			collision = boxLineCollision(selection_box, rel_pos, line_vector,

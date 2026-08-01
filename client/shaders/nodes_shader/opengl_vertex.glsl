@@ -6,23 +6,24 @@ uniform vec3 dayLight;
 uniform highp vec3 cameraOffset;
 uniform float animationTimer;
 
-varying vec3 vNormal;
-varying vec3 vPosition;
+VARYING_ vec3 vNormal;
 // World position in the visible world (i.e. relative to the cameraOffset.)
 // This can be used for many shader effects without loss of precision.
 // If the absolute position is required it can be calculated with
 // cameraOffset + worldPosition (for large coordinates the limits of float
 // precision must be considered).
-varying vec3 worldPosition;
-varying lowp vec4 varColor;
+VARYING_ vec3 worldPosition;
 // The centroid keyword ensures that after interpolation the texture coordinates
-// lie within the same bounds when MSAA is en- and disabled.
+// lie within the same bounds when MSAA is en- or disabled.
 // This fixes the stripes problem with nearest-neighbor textures and MSAA.
-#ifdef GL_ES
-varying mediump vec2 varTexCoord;
-#else
-centroid varying vec2 varTexCoord;
+CENTROID_ VARYING_ lowp vec4 varColor;
+CENTROID_ VARYING_ mediump vec2 varTexCoord;
+// Conditional because 'flat' is not available on old GLSL
+#ifdef USE_ARRAY_TEXTURE
+flat VARYING_ uint varTexLayer;
 #endif
+CENTROID_ VARYING_ float nightRatio;
+
 #ifdef ENABLE_DYNAMIC_SHADOWS
 	// shadow uniforms
 	uniform vec3 v_LightDirection;
@@ -33,27 +34,23 @@ centroid varying vec2 varTexCoord;
 	uniform float f_timeofday;
 	uniform vec4 CameraPos;
 
-	varying float cosLight;
-	varying float normalOffsetScale;
-	varying float adj_shadow_strength;
-	varying float f_normal_length;
-	varying vec3 shadow_position;
-	varying float perspective_factor;
+	VARYING_ float cosLight;
+	VARYING_ float normalOffsetScale;
+	VARYING_ float adj_shadow_strength;
+	VARYING_ float f_normal_length;
+	VARYING_ vec3 shadow_position;
+	VARYING_ float perspective_factor;
 #endif
 
-varying float area_enable_parallax;
-
-varying highp vec3 eyeVec;
-varying float nightRatio;
+VARYING_ highp vec3 eyeVec;
 // Color of the light emitted by the light sources.
 const vec3 artificialLight = vec3(1.04, 1.04, 1.04);
-const float e = 2.718281828459;
-const float BS = 10.0;
+
+#ifdef ENABLE_DYNAMIC_SHADOWS
+
 uniform float xyPerspectiveBias0;
 uniform float xyPerspectiveBias1;
 uniform float zPerspectiveBias;
-
-#ifdef ENABLE_DYNAMIC_SHADOWS
 
 vec4 getRelativePosition(in vec4 position)
 {
@@ -81,13 +78,15 @@ vec4 applyPerspectiveDistortion(in vec4 position)
 	return position;
 }
 
-// custom smoothstep implementation because it's not defined in glsl1.2
-// https://docs.gl/sl4/smoothstep
+#if __VERSION__ >= 130
+#define mtsmoothstep smoothstep
+#else
 float mtsmoothstep(in float edge0, in float edge1, in float x)
 {
 	float t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0);
 	return t * t * (3.0 - 2.0 * t);
 }
+#endif
 #endif
 
 
@@ -108,8 +107,7 @@ float smoothTriangleWave(float x)
 	return smoothCurve(triangleWave(x)) * 2.0 - 1.0;
 }
 
-// OpenGL < 4.3 does not support continued preprocessor lines
-#if (MATERIAL_TYPE == TILE_MATERIAL_WAVING_LIQUID_TRANSPARENT || MATERIAL_TYPE == TILE_MATERIAL_WAVING_LIQUID_OPAQUE || MATERIAL_TYPE == TILE_MATERIAL_WAVING_LIQUID_BASIC) && ENABLE_WAVING_WATER
+#if MATERIAL_WAVING_LIQUID && ENABLE_WAVING_WATER
 
 //
 // Simple, fast noise function.
@@ -150,6 +148,9 @@ float snoise(vec3 p)
 
 void main(void)
 {
+#ifdef USE_ARRAY_TEXTURE
+	varTexLayer = inVertexAux;
+#endif
 	varTexCoord = inTexCoord0.st;
 
 	float disp_x;
@@ -166,8 +167,7 @@ void main(void)
 #endif
 
 	vec4 pos = inVertexPosition;
-// OpenGL < 4.3 does not support continued preprocessor lines
-#if (MATERIAL_TYPE == TILE_MATERIAL_WAVING_LIQUID_TRANSPARENT || MATERIAL_TYPE == TILE_MATERIAL_WAVING_LIQUID_OPAQUE || MATERIAL_TYPE == TILE_MATERIAL_WAVING_LIQUID_BASIC) && ENABLE_WAVING_WATER
+#if MATERIAL_WAVING_LIQUID && ENABLE_WAVING_WATER
 	// Generate waves with Perlin-type noise.
 	// The constants are calibrated such that they roughly
 	// correspond to the old sine waves.
@@ -183,6 +183,7 @@ void main(void)
 	pos.y += disp_z * 0.1;
 	pos.z += disp_z;
 #elif MATERIAL_TYPE == TILE_MATERIAL_WAVING_PLANTS && ENABLE_WAVING_PLANTS
+	// bottom of plant doesn't wave
 	if (varTexCoord.y < 0.05) {
 		pos.x += disp_x;
 		pos.z += disp_z;
@@ -191,7 +192,6 @@ void main(void)
 	worldPosition = (mWorld * pos).xyz;
 	gl_Position = mWorldViewProj * pos;
 
-	vPosition = gl_Position.xyz;
 	eyeVec = -(mWorldView * pos).xyz;
 #ifdef SECONDSTAGE
 	normalPass = normalize((inVertexNormal+1)/2);
@@ -199,15 +199,11 @@ void main(void)
 	vNormal = inVertexNormal;
 
 	// Calculate color.
+	vec4 color = inVertexColor;
 	// Red, green and blue components are pre-multiplied with
 	// the brightness, so now we have to multiply these
 	// colors with the color of the incoming light.
 	// The pre-baked colors are halved to prevent overflow.
-#ifdef GL_ES
-	vec4 color = inVertexColor.bgra;
-#else
-	vec4 color = inVertexColor;
-#endif
 	// The alpha gives the ratio of sunlight in the incoming light.
 	nightRatio = 1.0 - color.a;
 	color.rgb = color.rgb * (color.a * dayLight.rgb +
@@ -256,7 +252,9 @@ void main(void)
 		z_bias *= pFactor * pFactor / f_textureresolution / f_shadowfar;
 
 		shadow_position = applyPerspectiveDistortion(m_ShadowViewProj * mWorld * (shadow_pos + vec4(normalOffsetScale * nNormal, 0.0))).xyz;
+#if !defined(ENABLE_TRANSLUCENT_FOLIAGE) || MATERIAL_TYPE != TILE_MATERIAL_WAVING_LEAVES
 		shadow_position.z -= z_bias;
+#endif
 		perspective_factor = pFactor;
 
 		if (f_timeofday < 0.2) {

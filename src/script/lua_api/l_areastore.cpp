@@ -1,21 +1,6 @@
-/*
-Minetest
-Copyright (C) 2015 est31 <mtest31@outlook.com>
-
-This program is free software; you can redistribute it and/or modify
-it under the terms of the GNU Lesser General Public License as published by
-the Free Software Foundation; either version 2.1 of the License, or
-(at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Lesser General Public License for more details.
-
-You should have received a copy of the GNU Lesser General Public License along
-with this program; if not, write to the Free Software Foundation, Inc.,
-51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
-*/
+// Luanti
+// SPDX-License-Identifier: LGPL-2.1-or-later
+// Copyright (C) 2015 est31 <mtest31@outlook.com>
 
 
 #include "lua_api/l_areastore.h"
@@ -25,7 +10,7 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #include "irr_v3d.h"
 #include "util/areastore.h"
 #include "filesys.h"
-#include <fstream>
+#include <sstream>
 
 static inline void get_data_and_corner_flags(lua_State *L, u8 start_i,
 		bool *corners, bool *data)
@@ -298,7 +283,7 @@ int LuaAreaStore::l_from_file(lua_State *L)
 	const char *filename = luaL_checkstring(L, 2);
 	CHECK_SECURE_PATH(L, filename, false);
 
-	std::ifstream is(filename, std::ios::binary);
+	auto is = open_ifstream(filename, true);
 	return deserialization_helper(L, o->as, is);
 }
 
@@ -345,7 +330,7 @@ void LuaAreaStore::Register(lua_State *L)
 		{"__gc", gc_object},
 		{0, 0}
 	};
-	registerClass(L, className, methods, metamethods);
+	registerClass<LuaAreaStore>(L, methods, metamethods);
 
 	// Can be created from Lua (AreaStore())
 	lua_register(L, className, create_object);
