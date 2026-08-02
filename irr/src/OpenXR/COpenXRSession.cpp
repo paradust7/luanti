@@ -538,7 +538,7 @@ bool COpenXRSession::createSession()
 		XrGraphicsBindingEGLMNDX binding{
 			.type = XR_TYPE_GRAPHICS_BINDING_EGL_MNDX,
 		};
-		binding.getProcAddress = eglGetProcAddress;
+		binding.getProcAddress = (PFN_xrEglGetProcAddressMNDX)eglGetProcAddress;
 		binding.display = eglGetCurrentDisplay();
 		XR_ASSERT(FindCurrentEGLConfig(&binding.config));
 		binding.context = eglGetCurrentContext();

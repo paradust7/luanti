@@ -4,7 +4,7 @@ apply plugin: 'de.undercouch.download'
 android {
 	ndkVersion "$ndk_version"
 	defaultConfig {
-		minSdkVersion 21
+		minSdkVersion 32
 		compileSdk 34
 		targetSdkVersion 34
 		externalNativeBuild {
@@ -21,6 +21,10 @@ android {
 		cmake {
 			path file("../../CMakeLists.txt")
 		}
+	}
+
+	buildFeatures {
+		prefab true
 	}
 
 	// supported architectures
@@ -40,6 +44,12 @@ android {
 		}
 	}
 	namespace 'net.minetest'
+}
+
+dependencies {
+  // Package/application AndroidManifest.xml properties, plus headers and libraries
+  // exposed to CMake
+  implementation 'org.khronos.openxr:openxr_loader_for_android:1.1.53'
 }
 
 // get precompiled deps

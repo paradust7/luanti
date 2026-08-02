@@ -13,6 +13,12 @@ option(ENABLE_OPENXR_X11	"Enable X11 bindings for OpenXR" 	TRUE)
 option(ENABLE_OPENXR_WAYLAND	"Enable Wayland bindings for OpenXR" 	TRUE)
 option(ENABLE_OPENXR_EGL	"Enable EGL bindings for OpenXR" 	FALSE)
 
+if(ANDROID)
+	set(ENABLE_OPENXR_X11 FALSE)
+	set(ENABLE_OPENXR_WAYLAND FALSE)
+	set(ENABLE_OPENXR_EGL TRUE)
+endif()
+
 # Compiler flags
 
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -271,8 +277,15 @@ if(USE_SDL_OPENGL_4_5_HEADER)
 endif()
 
 if(ENABLE_OPENXR)
-	find_package(OpenXR REQUIRED)
+	if(NOT TARGET OpenXR::openxr_loader)
+		find_package(OpenXR REQUIRED)
+	endif()
+
 	message(STATUS "Found OpenXR")
+
+	# Both the system and the Android prefab OpenXR config packages expose the
+	# headers only via the imported target, so read the dirs back off of it.
+	set(OPENXR_INCLUDE_DIRS "$<TARGET_PROPERTY:OpenXR::headers,INTERFACE_INCLUDE_DIRECTORIES>")
 
 	if(ENABLE_GLES2)
 		if(NOT ENABLE_OPENXR_EGL)
@@ -310,7 +323,7 @@ set(link_includes
 
 	${OPENGL_INCLUDE_DIR}
 	${EGL_INCLUDE_DIR}
-	${OpenXR_INCLUDE_DIRS}
+	${OPENXR_INCLUDE_DIRS}
 	"${OPENXR_EXTRA_INCLUDE}"
 )
 

@@ -44,11 +44,15 @@
 #	include <GL/glx.h>
 #endif
 
+#ifdef XR_USE_PLATFORM_ANDROID
+#	include <jni.h>
+#endif
+
 #ifdef XR_USE_PLATFORM_EGL
 #	include "EGL/egl.h"
 #endif
 
-#ifdef XR_USE_GRAPHICS_API_OPENGL
+#if defined(XR_USE_GRAPHICS_API_OPENGL) || defined(XR_USE_GRAPHICS_API_OPENGL_ES)
 #	include <vendor/gl.h>
 #endif
 
