@@ -427,6 +427,9 @@ CIrrDeviceSDL::CIrrDeviceSDL(const SIrrlichtCreationParameters &param) :
 		SDL_SetHint(SDL_HINT_IME_SHOW_UI, "1");
 #endif
 
+		if (CreationParams.DriverType == video::EDT_OGLES2)
+			SDL_SetHint(SDL_HINT_VIDEO_X11_FORCE_EGL, "1");
+
 		// Initialize SDL
 
 		u32 flags = SDL_INIT_EVENTS;

@@ -8,7 +8,11 @@
 #include <cassert>
 #include <memory>
 
+#ifdef _IRR_USE_SDL3_
 #include <SDL3/SDL_video.h>
+#else
+#include <SDL_video.h>
+#endif
 
 #ifndef XR_API_VERSION_1_0
 #define XR_API_VERSION_1_0 XR_MAKE_VERSION(1, 0, XR_VERSION_PATCH(XR_CURRENT_API_VERSION))

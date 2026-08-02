@@ -1,9 +1,5 @@
 #ifdef _IRR_COMPILE_WITH_XR_DEVICE_
 
-#if !defined(_IRR_USE_SDL3_)
-#	error "XR driver needs SDL3. Set USE_SDL3 to TRUE."
-#endif
-
 #if defined(WIN32)
 #	define XR_USE_PLATFORM_WIN32
 #endif

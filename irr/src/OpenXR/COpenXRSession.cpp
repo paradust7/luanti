@@ -8,7 +8,11 @@
 #include "Common.h"
 #include "OpenXRMath.h"
 
+#ifdef _IRR_USE_SDL3_
 #include <SDL3/SDL_video.h>
+#else
+#include <SDL_video.h>
+#endif
 
 using std::unique_ptr;
 
@@ -369,6 +373,55 @@ bool COpenXRSession::verifyGraphics()
 	return true;
 }
 
+#ifdef XR_USE_PLATFORM_EGL
+
+static bool FindCurrentEGLConfig(EGLConfig *found) {
+	EGLDisplay display = eglGetCurrentDisplay();
+	EGLContext context = eglGetCurrentContext();
+
+	if (context == EGL_NO_CONTEXT) {
+		os::Printer::log("Failed eglGetCurrentContext", ELL_ERROR);
+		return false;
+	}
+
+	if (display == EGL_NO_DISPLAY) {
+		os::Printer::log("Failed eglGetCurrentDisplay", ELL_ERROR);
+		return false;
+	}
+
+	EGLint config_id = 0;
+	if (!eglQueryContext(display, context, EGL_CONFIG_ID, &config_id)) {
+		os::Printer::log("Failed eglQueryContext", ELL_ERROR);
+		return false;
+	}
+
+	EGLint config_count = 0;
+	if (!eglGetConfigs(display, NULL, 0, &config_count)) {
+		os::Printer::log("Failed eglGetConfigs", ELL_ERROR);
+		return false;
+	}
+
+	std::vector<EGLConfig> configs(config_count);
+	if (!eglGetConfigs(display, configs.data(), config_count, &config_count)) {
+		os::Printer::log("Failed eglGetConfigs", ELL_ERROR);
+		return false;
+	}
+
+	for (EGLint i = 0; i < config_count; ++i) {
+		EGLint candidate_id = 0;
+		if (eglGetConfigAttrib(display, configs[i], EGL_CONFIG_ID, &candidate_id)) {
+			if (candidate_id == config_id) {
+				*found = configs[i];
+				return true;
+			}
+		}
+	}
+	os::Printer::log("Failed to find EGL config", ELL_ERROR);
+	return false;
+}
+
+#endif
+
 // SDL and OpenXR don't know how to talk to each other
 //
 // For them to work together, it is necessary to pass
@@ -413,6 +466,7 @@ bool COpenXRSession::createSession()
 	(void)isGL;
 	(void)isGLES;
 
+/* TODO(paradust7): SDL3
 	SDL_GLContext sdlContext = SDL_GL_GetCurrentContext();
 	if (!sdlContext) {
 		os::Printer::log("[XR] Unable to get SDL GL context", ELL_ERROR);
@@ -430,6 +484,7 @@ bool COpenXRSession::createSession()
 		os::Printer::log("[XR] Unable to get SDL window properties", ELL_ERROR);
 		return false;
 	}
+*/
 
 	{
 		char buf[256];
@@ -442,8 +497,8 @@ bool COpenXRSession::createSession()
 		XrGraphicsBindingOpenGLWin32KHR binding{
 			.type = XR_TYPE_GRAPHICS_BINDING_OPENGL_WIN32_KHR,
 		};
-		binding.hDC = static_cast<HDC>(SDL_GetPointerProperty(propId, SDL_PROP_WINDOW_WIN32_HDC_POINTER, nullptr));
-		binding.hGLRC = reinterpret_cast<HGLRC>(sdlContext);
+		binding.hDC = wglGetCurrentDC();
+		binding.hGLRC = wglGetCurrentContext();
 		session_create_info.next = &binding;
 		XR_CHECK(xrCreateSession, Instance, &session_create_info, &Session);
 		return true;
@@ -469,8 +524,8 @@ bool COpenXRSession::createSession()
 		XrGraphicsBindingOpenGLESAndroidKHR binding{
 			.type = XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR,
 		};
-		binding.display = (EGLDisplay)SDL_EGL_GetCurrentDisplay();
-		binding.config = (EGLConfig)SDL_EGL_GetCurrentConfig();
+		binding.display = eglGetCurrentDisplay();
+		XR_ASSERT(FindCurrentEGLConfig(&binding.config));
 		binding.context = eglGetCurrentContext();
 		session_create_info.next = &binding;
 		XR_CHECK(xrCreateSession, Instance, &session_create_info, &Session);
@@ -483,9 +538,9 @@ bool COpenXRSession::createSession()
 		XrGraphicsBindingEGLMNDX binding{
 			.type = XR_TYPE_GRAPHICS_BINDING_EGL_MNDX,
 		};
-		binding.getProcAddress = (PFNEGLGETPROCADDRESSPROC)SDL_EGL_GetProcAddress;
-		binding.display = (EGLDisplay)SDL_EGL_GetCurrentDisplay();
-		binding.config = (EGLConfig)SDL_EGL_GetCurrentConfig();
+		binding.getProcAddress = eglGetProcAddress;
+		binding.display = eglGetCurrentDisplay();
+		XR_ASSERT(FindCurrentEGLConfig(&binding.config));
 		binding.context = eglGetCurrentContext();
 		session_create_info.next = &binding;
 		XR_CHECK(xrCreateSession, Instance, &session_create_info, &Session);
