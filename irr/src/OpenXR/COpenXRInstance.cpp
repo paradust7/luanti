@@ -8,6 +8,8 @@
 #include <cassert>
 #include <memory>
 
+#include <SDL3/SDL_video.h>
+
 #ifndef XR_API_VERSION_1_0
 #define XR_API_VERSION_1_0 XR_MAKE_VERSION(1, 0, XR_VERSION_PATCH(XR_CURRENT_API_VERSION))
 #endif
@@ -114,20 +116,42 @@ bool COpenXRInstance::createInstance()
 	}
 	extensionsToEnable.push_back(XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME);
 
+
+	const char* raw_sdl_driver = SDL_GetCurrentVideoDriver();
+	std::string sdl_driver = raw_sdl_driver ? raw_sdl_driver : "";
+	(void)sdl_driver;
+
+	video::E_DRIVER_TYPE driverType = VideoDriver->getDriverType();
+	(void)driverType;
+
 #ifdef XR_USE_GRAPHICS_API_OPENGL
-	if (!ExtensionNames.count(XR_KHR_OPENGL_ENABLE_EXTENSION_NAME)) {
-		os::Printer::log("OpenXR runtime does not support OpenGL", ELL_ERROR);
-		return false;
+	if (driverType == video::EDT_OPENGL || driverType == video::EDT_OPENGL3) {
+		if (!ExtensionNames.count(XR_KHR_OPENGL_ENABLE_EXTENSION_NAME)) {
+			os::Printer::log("OpenXR runtime does not support OpenGL", ELL_ERROR);
+			return false;
+		}
+		extensionsToEnable.push_back(XR_KHR_OPENGL_ENABLE_EXTENSION_NAME);
 	}
-	extensionsToEnable.push_back(XR_KHR_OPENGL_ENABLE_EXTENSION_NAME);
 #endif
 
 #ifdef XR_USE_GRAPHICS_API_OPENGL_ES
-	if (!ExtensionNames.count(XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME)) {
-		os::Printer::log("OpenXR runtime does not support OpenGL ES", ELL_ERROR);
-		return false;
+	if (driverType == video::EDT_OGLES2) {
+		if (!ExtensionNames.count(XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME)) {
+			os::Printer::log("OpenXR runtime does not support OpenGL ES", ELL_ERROR);
+			return false;
+		}
+		extensionsToEnable.push_back(XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME);
 	}
-	extensionsToEnable.push_back(XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME);
+#endif
+
+#ifdef XR_USE_PLATFORM_EGL
+	if (driverType == video::EDT_OGLES2 || sdl_driver == "wayland") {
+		if (!ExtensionNames.count(XR_MNDX_EGL_ENABLE_EXTENSION_NAME)) {
+			os::Printer::log("OpenXR runtime does not support EGL", ELL_ERROR);
+			return false;
+		}
+		extensionsToEnable.push_back(XR_MNDX_EGL_ENABLE_EXTENSION_NAME);
+	}
 #endif
 
 	XrInstanceCreateInfo info = {

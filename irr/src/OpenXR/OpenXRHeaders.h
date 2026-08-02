@@ -1,19 +1,38 @@
 #ifdef _IRR_COMPILE_WITH_XR_DEVICE_
 
-// See createSession() for why this is needed.
+#if !defined(_IRR_USE_SDL3_)
+#	error "XR driver needs SDL3. Set USE_SDL3 to TRUE."
+#endif
+
 #if defined(WIN32)
 #	define XR_USE_PLATFORM_WIN32
+#endif
+
+#ifdef _IRR_COMPILE_WITH_OPENGL_
 #	define XR_USE_GRAPHICS_API_OPENGL
-#elif defined(_IRR_COMPILE_WITH_OGLES1_) || defined(_IRR_COMPILE_WITH_OGLES2_)
-#	define XR_USE_PLATFORM_EGL
+#endif
+
+#if defined(_IRR_COMPILE_WITH_OGLES2_)
 #	define XR_USE_GRAPHICS_API_OPENGL_ES
-#elif defined(__ANDROID__)
-#	error "Irrlicht XR driver does not support Android"
-#elif defined(__APPLE__)
-#	error "Irrlicht XR driver does not support MacOSX / iOS"
-#else
+#	if !defined(_IRR_COMPILE_WITH_XR_EGL_)
+#		error "XR driver needs EGL for GLES. Set ENABLE_OPENXR_EGL to TRUE."
+#	endif
+#endif
+
+#if defined(__ANDROID__)
+#	define XR_USE_PLATFORM_ANDROID
+#endif
+
+#if defined(_IRR_COMPILE_WITH_XR_EGL_)
+#	define XR_USE_PLATFORM_EGL
+#endif
+
+#if defined(__APPLE__)
+#	error "XR driver does not support MacOSX / iOS"
+#endif
+
+#if defined(_IRR_COMPILE_WITH_XR_X11_)
 #	define XR_USE_PLATFORM_XLIB
-#	define XR_USE_GRAPHICS_API_OPENGL
 #endif
 
 // Headers required for openxr_platform.h
@@ -30,7 +49,7 @@
 #endif
 
 #ifdef XR_USE_PLATFORM_EGL
-#	error "TODO: EGL headers"
+#	include "EGL/egl.h"
 #endif
 
 #ifdef XR_USE_GRAPHICS_API_OPENGL

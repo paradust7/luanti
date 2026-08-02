@@ -20,7 +20,7 @@
 #include "CWriteFile.h"
 */
 
-#ifdef XR_USE_GRAPHICS_API_OPENGL
+#if defined(XR_USE_GRAPHICS_API_OPENGL) || defined(XR_USE_GRAPHICS_API_OPENGL_ES)
 #include "COpenGLCommon.h"
 #endif
 
@@ -77,6 +77,8 @@ public:
 
 	bool init();
 
+	template<typename ImageType>
+	bool initImages(std::vector<ImageType> &images);
 protected:
 	video::IVideoDriver* VideoDriver;
 	XrInstance Instance;
@@ -128,18 +130,39 @@ bool COpenXRSwapchain::init()
 		os::Printer::log(buf, ELL_INFORMATION);
 	}
 
-	video::E_DRIVER_TYPE driverType = video::EDT_NULL;
+	video::E_DRIVER_TYPE driverType = VideoDriver->getDriverType();
+	bool isGL = (
+		driverType == video::EDT_OPENGL ||
+		driverType == video::EDT_OPENGL3);
+	bool isGLES = (driverType == video::EDT_OGLES2);
+
+	// Suppress warning if never used.
+	(void)isGL;
+	(void)isGLES;
+
 #ifdef XR_USE_GRAPHICS_API_OPENGL
-	std::vector<XrSwapchainImageOpenGLKHR> images(swapchainLength,
-		XrSwapchainImageOpenGLKHR{ .type = XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR });
-	driverType = VideoDriver->getDriverType();
-	XR_ASSERT(driverType == video::EDT_OPENGL || driverType == video::EDT_OPENGL3);
+	if (isGL) {
+		std::vector<XrSwapchainImageOpenGLKHR> images(swapchainLength,
+			XrSwapchainImageOpenGLKHR{ .type = XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR });
+		return initImages(images);
+	}
 #endif
 #ifdef XR_USE_GRAPHICS_API_OPENGL_ES
-	std::vector<XrSwapchainImageOpenGLESKHR> images(swapchainLength,
-		XrSwapchainImageOpenGLESKHR{ .type = XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR });
-	driverType = video::EDT_OPENGLES2;
+	if (isGLES) {
+		std::vector<XrSwapchainImageOpenGLESKHR> images(swapchainLength,
+			XrSwapchainImageOpenGLESKHR{ .type = XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_ES_KHR });
+		return initImages(images);
+	}
 #endif
+	os::Printer::log("[XR] Unhandled case in swapchain init", ELL_ERROR);
+	return false;
+}
+
+
+template<typename ImageType>
+bool COpenXRSwapchain::initImages(std::vector<ImageType> &images) {
+	uint32_t swapchainLength = images.size();
+
 	XR_CHECK(xrEnumerateSwapchainImages,
 		Swapchain,
 		swapchainLength,
@@ -155,7 +178,7 @@ bool COpenXRSwapchain::init()
 	for (uint32_t i = 0; i < swapchainLength; ++i) {
 		Textures[i] = VideoDriver->useDeviceDependentTexture(
 			"openxr_swapchain",
-			driverType,
+			VideoDriver->getDriverType(),
 			&Images[i],
 			(UsageFlags & XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) ? video::ECF_D32F : video::ECF_A8R8G8B8,
 			Width, Height);

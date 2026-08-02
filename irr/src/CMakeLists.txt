@@ -8,7 +8,10 @@ option(USE_SDL2_STATIC "Link with SDL2 static libraries" FALSE)
 option(USE_SDL3 "Use the SDL3 backend instead of SDL2" ${DEFAULT_SDL3})
 option(USE_SDL3_STATIC "Link with SDL3 static libraries" FALSE)
 
-option(ENABLE_OPENXR "Enable the OpenXR backend" TRUE)
+option(ENABLE_OPENXR		"Enable the OpenXR backend" 		TRUE)
+option(ENABLE_OPENXR_X11	"Enable X11 bindings for OpenXR" 	TRUE)
+option(ENABLE_OPENXR_WAYLAND	"Enable Wayland bindings for OpenXR" 	TRUE)
+option(ENABLE_OPENXR_EGL	"Enable EGL bindings for OpenXR" 	FALSE)
 
 # Compiler flags
 
@@ -122,6 +125,16 @@ else()
 	endif()
 endif()
 
+if(ENABLE_OPENXR_WAYLAND)
+	message(WARNING "ENABLE_OPENXR_WAYLAND requires ENABLE_OPENXR_EGL. Setting to TRUE")
+	set(ENABLE_OPENXR_EGL TRUE)
+endif()
+
+if(ENABLE_GLES2)
+	message(WARNING "ENABLE_GLES2 requires ENABLE_OPENXR_EGL. Setting to TRUE")
+	set(ENABLE_OPENXR_EGL TRUE)
+endif()
+
 if(ENABLE_OPENGL)
 	add_compile_definitions(_IRR_COMPILE_WITH_OPENGL_)
 	set(OPENGL_DIRECT_LINK TRUE) # driver relies on this
@@ -139,6 +152,20 @@ if(ENABLE_OPENXR)
 	add_definitions(-D_IRR_COMPILE_WITH_XR_DEVICE_)
 endif()
 
+if(ENABLE_OPENXR_X11)
+	add_definitions(-D_IRR_COMPILE_WITH_XR_X11_)
+endif()
+
+if(ENABLE_OPENXR_WAYLAND)
+	add_definitions(-D_IRR_COMPILE_WITH_XR_WAYLAND_)
+endif()
+
+if(ENABLE_OPENXR_EGL)
+	add_definitions(-D_IRR_COMPILE_WITH_XR_EGL_)
+endif()
+
+
+
 # Misc
 
 include(TestBigEndian)
@@ -152,6 +179,12 @@ endif()
 message(STATUS "OpenGL (legacy): ${ENABLE_OPENGL}")
 message(STATUS "OpenGL 3: ${ENABLE_OPENGL3}")
 message(STATUS "OpenGL ES 2: ${ENABLE_GLES2}")
+
+message(STATUS "OpenXR: ${ENABLE_OPENXR}")
+message(STATUS "OpenXR_X11: ${ENABLE_OPENXR_X11}")
+message(STATUS "OpenXR_WAYLAND: ${ENABLE_OPENXR_WAYLAND}")
+message(STATUS "OpenXR_EGL: ${ENABLE_OPENXR_EGL}")
+
 #message(STATUS "WebGL: ${ENABLE_WEBGL1}")
 
 # Required libs
@@ -241,15 +274,19 @@ if(ENABLE_OPENXR)
 	find_package(OpenXR REQUIRED)
 	message(STATUS "Found OpenXR")
 
+	if(ENABLE_GLES2)
+		if(NOT ENABLE_OPENXR_EGL)
+			message(FATAL_ERROR "OpenXR needs ENABLE_EGL for GLES")
+		endif()
+	endif()
+
 	if(WIN32)
 		# WinAPI is automatically available.
-	elseif(ENABLE_GLES1 OR ENABLE_GLES2)
-		# EGL is already available
 	elseif(APPLE)
 		message(FATAL_ERROR "OpenXR not supported on MacOS X / iOS")
 	elseif(ANDROID)
-		message(FATAL_ERROR "OpenXR not supported on android")
-	else()
+		# Android APIs automatically available.
+	elseif(ENABLE_OPENXR_X11)
 		find_package(X11 REQUIRED)
 		set(OPENXR_EXTRA_INCLUDE ${X11_INCLUDE_DIR})
 		set(OPENXR_EXTRA_LIBS ${X11_X11_LIB})
@@ -557,6 +594,16 @@ target_link_libraries(IrrlichtMt PRIVATE
 	# incl. transitive SDL2 dependencies for static linking
 	"$<$<PLATFORM_ID:Android>:-landroid -llog -lGLESv2 -lGLESv1_CM -lOpenSLES>"
 )
+
+if(ENABLE_OPENXR_EGL)
+	if(ANDROID)
+		find_library(EGL_LIB EGL REQUIRED)
+		target_link_libraries(IrrlichtMt PRIVATE ${EGL_LIB})
+	else()
+		find_package(OpenGL REQUIRED COMPONENTS EGL)
+		target_link_libraries(IrrlichtMt PRIVATE OpenGL::EGL)
+	endif()
+endif()
 
 if(WIN32)
 	target_compile_definitions(IrrlichtMt INTERFACE _IRR_WINDOWS_API_)

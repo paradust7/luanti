@@ -8,7 +8,7 @@
 #include "Common.h"
 #include "OpenXRMath.h"
 
-#include <SDL_video.h>
+#include <SDL3/SDL_video.h>
 
 using std::unique_ptr;
 
@@ -292,10 +292,14 @@ bool COpenXRSession::verifyGraphics()
 	// xrGetInstanceProcAddr must be used, since these methods might load in dynamically.
 	XrVersion minApiVersionSupported = 0;
 	XrVersion maxApiVersionSupported = 0;
-	bool gles = false;
+	video::E_DRIVER_TYPE irrDriverType = VideoDriver->getDriverType();
+	bool isGL = (
+		irrDriverType == video::EDT_OPENGL ||
+		irrDriverType == video::EDT_OPENGL3);
+	bool isGLES = (irrDriverType == video::EDT_OGLES2);
 
 #ifdef XR_USE_GRAPHICS_API_OPENGL
-	{
+	if (isGL) {
 		PFN_xrGetOpenGLGraphicsRequirementsKHR pfn_xrGetOpenGLGraphicsRequirementsKHR = nullptr;
 		XR_CHECK(xrGetInstanceProcAddr, Instance, "xrGetOpenGLGraphicsRequirementsKHR",
 			(PFN_xrVoidFunction*)&pfn_xrGetOpenGLGraphicsRequirementsKHR);
@@ -310,7 +314,7 @@ bool COpenXRSession::verifyGraphics()
 #endif
 
 #ifdef XR_USE_GRAPHICS_API_OPENGL_ES
-	{
+	if (isGLES) {
 		PFN_xrGetOpenGLESGraphicsRequirementsKHR pfn_xrGetOpenGLESGraphicsRequirementsKHR = nullptr;
 		XR_CHECK(xrGetInstanceProcAddr, Instance, "xrGetOpenGLESGraphicsRequirementsKHR",
 			(PFN_xrVoidFunction*)&pfn_xrGetOpenGLESGraphicsRequirementsKHR);
@@ -321,14 +325,13 @@ bool COpenXRSession::verifyGraphics()
 		XR_CHECK(pfn_xrGetOpenGLESGraphicsRequirementsKHR, Instance, SystemId, &reqs);
 		minApiVersionSupported = reqs.minApiVersionSupported;
 		maxApiVersionSupported = reqs.maxApiVersionSupported;
-		gles = true;
 	}
 #endif
 
 	char buf[128];
 	snprintf_irr(buf, sizeof(buf),
 		"[XR] OpenXR supports OpenGL%s version range (%d.%d.%d, %d.%d.%d)",
-		gles ? "ES" : "",
+		isGLES ? "ES" : "",
 		XR_VERSION_MAJOR(minApiVersionSupported),
 		XR_VERSION_MINOR(minApiVersionSupported),
 		XR_VERSION_PATCH(minApiVersionSupported),
@@ -344,18 +347,18 @@ bool COpenXRSession::verifyGraphics()
 	SDL_GL_GetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, &glminor);
 	SDL_GL_GetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, &glmask);
 	XrVersion sdl_gl_version = XR_MAKE_VERSION(glmajor, glminor, 0);
-	bool is_gles = glmask & SDL_GL_CONTEXT_PROFILE_ES;
+	bool sdl_is_gles = glmask & SDL_GL_CONTEXT_PROFILE_ES;
 
 	snprintf_irr(buf, sizeof(buf),
 		"[XR] SDL is configured for OpenGL%s %d.%d.%d",
-		is_gles ? "ES" : "",
+		sdl_is_gles ? "ES" : "",
 		glmajor,
 		glminor,
 		glmask);
 	os::Printer::log(buf, ELL_INFORMATION);
 
-	if (is_gles != gles) {
-		os::Printer::log("[XR] Unexpected profile mismatch (OpenGL vs. OpenGLES)", ELL_ERROR);
+	if (sdl_is_gles != isGLES) {
+		os::Printer::log("[XR] Unexpected ES profile mismatch (OpenGL <> OpenGLES)", ELL_ERROR);
 		return false;
 	}
 
@@ -369,25 +372,27 @@ bool COpenXRSession::verifyGraphics()
 // SDL and OpenXR don't know how to talk to each other
 //
 // For them to work together, it is necessary to pass
-// the raw GL/display context from SDL to OpenXR.
+// the raw GL and display context(s) from SDL to OpenXR.
 //
-// SDL doesn't expose this, so it has to be pulled
-// directly from the underlying api:
+// What these values are/mean depends on the underlying
+// windowing API.
 //
-//     Windows + OpenGL         -> WGL
-//     X11 + OpenGL             -> GLX
-//     OpenGLES, WebGL, Wayland -> EGL
-//     OS X + OpenGL            -> CGL
+// SDL2 doesn't expose these values in any way.
+// SDL3 exposes them indirectly, but we still need to
+// know the exact API that SDL used to do it correctly.
 //
-// This is pretty fragile, since the API we query has
-// to match the one SDL is using exactly.
+// These are the possibilities:
 //
-// If SDL is compiled to support both GL and GLES, then it
-// could potentially use GLX or EGL on X11. For now this
-// code assumes that platforms with GLES support will only
-// use EGL. If this turns out to not always be the case, it
-// might make sense to use SDL_HINT_VIDEO_X11_FORCE_EGL to
-// make it certain.
+//     Windows + OpenGL         -> WGL, [1]EGL
+//     Windows + OpenGLES       -> EGL, [1]WGL
+//     X11 + OpenGL             -> GLX, [1]EGL
+//     X11 + OpenGLES           -> EGL, [1]GLX
+//     Wayland Native           -> EGL
+//     Apple + OpenGL           -> [2]CGL
+//
+// [1] = Technically possible but not implemented
+// [2] = Not supported yet
+//
 bool COpenXRSession::createSession()
 {
 	XrSessionCreateInfo session_create_info = {
@@ -398,41 +403,97 @@ bool COpenXRSession::createSession()
 
 	const char* raw_sdl_driver = SDL_GetCurrentVideoDriver();
 	std::string sdl_driver = raw_sdl_driver ? raw_sdl_driver : "";
+	video::E_DRIVER_TYPE irrDriverType = VideoDriver->getDriverType();
+	bool isGL = (
+		irrDriverType == video::EDT_OPENGL ||
+		irrDriverType == video::EDT_OPENGL3);
+	bool isGLES = (irrDriverType == video::EDT_OGLES2);
 
-#ifdef XR_USE_PLATFORM_WIN32
-	if (sdl_driver != "windows") {
-		os::Printer::log("[XR] Expected SDL driver 'windows'", ELL_ERROR);
+	// Suppress warning in case no platform uses it.
+	(void)isGL;
+	(void)isGLES;
+
+	SDL_GLContext sdlContext = SDL_GL_GetCurrentContext();
+	if (!sdlContext) {
+		os::Printer::log("[XR] Unable to get SDL GL context", ELL_ERROR);
 		return false;
 	}
 
-	XrGraphicsBindingOpenGLWin32KHR binding{
-		.type = XR_TYPE_GRAPHICS_BINDING_OPENGL_WIN32_KHR,
-	};
-	binding.hDC = wglGetCurrentDC();
-	binding.hGLRC = wglGetCurrentContext();
-	session_create_info.next = &binding;
+	SDL_Window *sdlWindow = SDL_GL_GetCurrentWindow();
+	if (!sdlWindow) {
+		os::Printer::log("[XR] Unable to find SDL Window", ELL_ERROR);
+		return false;
+	}
 
+	SDL_PropertiesID propId = SDL_GetWindowProperties(sdlWindow);
+	if (!propId) {
+		os::Printer::log("[XR] Unable to get SDL window properties", ELL_ERROR);
+		return false;
+	}
+
+	{
+		char buf[256];
+		snprintf_irr(buf, sizeof(buf), "[XR] SDL driver is '%s'", sdl_driver.c_str());
+		os::Printer::log(buf, ELL_INFORMATION);
+	}
+
+#ifdef XR_USE_PLATFORM_WIN32
+	if (sdl_driver == "windows" && isGL) {
+		XrGraphicsBindingOpenGLWin32KHR binding{
+			.type = XR_TYPE_GRAPHICS_BINDING_OPENGL_WIN32_KHR,
+		};
+		binding.hDC = static_cast<HDC>(SDL_GetPointerProperty(propId, SDL_PROP_WINDOW_WIN32_HDC_POINTER, nullptr));
+		binding.hGLRC = reinterpret_cast<HGLRC>(sdlContext);
+		session_create_info.next = &binding;
+		XR_CHECK(xrCreateSession, Instance, &session_create_info, &Session);
+		return true;
+	}
 #endif
 
 #ifdef XR_USE_PLATFORM_XLIB
-	if (sdl_driver != "x11") {
-		os::Printer::log("[XR] Expected SDL driver 'x11'", ELL_ERROR);
-		return false;
+	if (sdl_driver == "x11" && isGL) {
+		XrGraphicsBindingOpenGLXlibKHR binding{
+			.type = XR_TYPE_GRAPHICS_BINDING_OPENGL_XLIB_KHR,
+		};
+		binding.xDisplay = XOpenDisplay(NULL);
+		binding.glxContext = glXGetCurrentContext();
+		binding.glxDrawable = glXGetCurrentDrawable();
+		session_create_info.next = &binding;
+		XR_CHECK(xrCreateSession, Instance, &session_create_info, &Session);
+		return true;
 	}
-	XrGraphicsBindingOpenGLXlibKHR binding{
-		.type = XR_TYPE_GRAPHICS_BINDING_OPENGL_XLIB_KHR,
-	};
-	binding.xDisplay = XOpenDisplay(NULL);
-	binding.glxContext = glXGetCurrentContext();
-	binding.glxDrawable = glXGetCurrentDrawable();
-	session_create_info.next = &binding;
+#endif
+
+#ifdef XR_USE_PLATFORM_ANDROID
+	if (sdl_driver == "android" && isGLES) {
+		XrGraphicsBindingOpenGLESAndroidKHR binding{
+			.type = XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR,
+		};
+		binding.display = (EGLDisplay)SDL_EGL_GetCurrentDisplay();
+		binding.config = (EGLConfig)SDL_EGL_GetCurrentConfig();
+		binding.context = eglGetCurrentContext();
+		session_create_info.next = &binding;
+		XR_CHECK(xrCreateSession, Instance, &session_create_info, &Session);
+		return true;
+	}
 #endif
 
 #ifdef XR_USE_PLATFORM_EGL
-#error "Not implemented"
+	if (isGLES || (isGL && sdl_driver == "wayland")) {
+		XrGraphicsBindingEGLMNDX binding{
+			.type = XR_TYPE_GRAPHICS_BINDING_EGL_MNDX,
+		};
+		binding.getProcAddress = (PFNEGLGETPROCADDRESSPROC)SDL_EGL_GetProcAddress;
+		binding.display = (EGLDisplay)SDL_EGL_GetCurrentDisplay();
+		binding.config = (EGLConfig)SDL_EGL_GetCurrentConfig();
+		binding.context = eglGetCurrentContext();
+		session_create_info.next = &binding;
+		XR_CHECK(xrCreateSession, Instance, &session_create_info, &Session);
+		return true;
+	}
 #endif
-	XR_CHECK(xrCreateSession, Instance, &session_create_info, &Session);
-	return true;
+	os::Printer::log("[XR] Couldn't bind graphics context", ELL_ERROR);
+	return false;
 }
 
 bool COpenXRSession::setupSpaces()
