@@ -21,3 +21,4 @@ with this program; if not, write to the Free Software Foundation, Inc.,
 #pragma once
 
 void populateXrPipeline(RenderPipeline *pipeline, Client *client);
+void renderFallback(IrrlichtDevice *device);

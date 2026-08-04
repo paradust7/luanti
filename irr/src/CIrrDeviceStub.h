@@ -49,6 +49,9 @@ public:
 	//! constructor
 	CIrrDeviceStub(const SIrrlichtCreationParameters &param);
 
+	//! post-constructor initializer
+	virtual void init() override {}
+
 	//! destructor
 	virtual ~CIrrDeviceStub();
 
@@ -166,6 +169,7 @@ public:
 	bool beginFrame(const core::XrFrameConfig&) override { return false; }
 	bool nextView(core::XrViewInfo* info) override { return false; }
 	void stopXR() override {}
+	void setFallbackRenderer(std::function<void()> cb) override {}
 
 protected:
 	void createGUIAndScene();

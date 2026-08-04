@@ -434,3 +434,47 @@ void populateXrPipeline(RenderPipeline *pipeline, Client *client)
 	pipeline->addStep<XrForEachView>(viewState, camState, renderView, renderHud);
 	pipeline->addStep<RestoreCameraState>(camState);
 }
+
+void renderFallback(IrrlichtDevice *device)
+{
+	video::IVideoDriver *driver = device->getVideoDriver();
+	core::XrFrameConfig config = {};
+
+	config.HudSize = driver->getScreenSize();
+	f32 aspect_ratio = (f32)config.HudSize.Width / config.HudSize.Height;
+	config.FloatingHud.Size = core::dimension2df(2.0f * aspect_ratio, 2.0f);
+	config.FloatingHud.Enable = true;
+	config.FloatingHud.Position = core::vector3df(0, 0, 2.0f);
+	config.FloatingHud.Orientation = core::quaternion();
+
+	if (!device->beginFrame(config))
+		return;
+
+	core::XrInputState inputState;
+	device->xrGetInputState(&inputState);
+
+	auto oldScreenSize = driver->getScreenSize();
+	auto oldViewPort = driver->getViewPort();
+
+	core::XrViewInfo info;
+	while (device->nextView(&info)) {
+		if (info.Kind == core::XRVK_HUD) {
+			// Without this, the blit goes nowhere because
+			// IRenderTarget::setTexture() doesn't bind the
+			// frame buffer to the textures until update().
+			driver->setRenderTargetEx(info.Target, video::ECBF_NONE);
+
+			// Copy the menu/loading screen into the floating quad.
+			driver->blitRenderTarget(nullptr, info.Target);
+		} else {
+			// All black space
+			driver->setRenderTargetEx(info.Target, video::ECBF_ALL,
+					video::SColor(255, 0, 0, 0));
+		}
+	}
+
+	// Restore driver state
+	driver->setRenderTarget(nullptr, video::ECBF_NONE);
+	driver->OnResize(oldScreenSize);
+	driver->setViewPort(oldViewPort);
+}

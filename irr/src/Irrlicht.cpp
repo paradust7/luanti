@@ -33,6 +33,9 @@ extern "C" IrrlichtDevice *createDeviceEx(const SIrrlichtCreationParameters &par
 		dev = new CIrrDeviceXR(params);
 #endif
 
+	if (dev)
+		dev->init();
+
 	if (dev && !dev->getVideoDriver() && params.DriverType != video::EDT_NULL) {
 		dev->closeDevice(); // destroy window
 		dev->run();         // consume quit message

@@ -373,6 +373,12 @@ CIrrDeviceSDL::CIrrDeviceSDL(const SIrrlichtCreationParameters &param) :
 		Resizable(param.WindowResizable == 1 ? true : false), CurrentTouchCount(0),
 		IsInBackground(false)
 {
+}
+
+void CIrrDeviceSDL::init()
+{
+	CIrrDeviceStub::init();
+
 	if (++SDLDeviceInstances == 1) {
 #ifdef __ANDROID__
 		// Blocking on pause causes problems with multiplayer.
@@ -766,8 +772,7 @@ void CIrrDeviceSDL::createDriver()
 		return;
 	}
 
-	ContextManager = new video::CSDLManager(this);
-	ContextManager->initialize(CreationParams, {});
+	createContextManager();
 
 	switch (CreationParams.DriverType) {
 	case video::EDT_OPENGL:
@@ -786,6 +791,12 @@ void CIrrDeviceSDL::createDriver()
 	}
 	if (!VideoDriver)
 		os::Printer::log("Could not create video driver", ELL_ERROR);
+}
+
+void CIrrDeviceSDL::createContextManager()
+{
+	ContextManager = new video::CSDLManager(this);
+	ContextManager->initialize(CreationParams, {});
 }
 
 static int wrap_PollEvent(SDL_Event *ev)

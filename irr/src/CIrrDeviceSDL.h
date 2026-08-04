@@ -33,6 +33,9 @@ public:
 	//! constructor
 	CIrrDeviceSDL(const SIrrlichtCreationParameters &param);
 
+	//! initialize
+	void init() override;
+
 	//! destructor
 	virtual ~CIrrDeviceSDL();
 
@@ -317,6 +320,7 @@ private:
 
 	//! create the driver
 	void createDriver();
+	virtual void createContextManager();
 
 	bool createWindow();
 	bool createWindowWithContext();

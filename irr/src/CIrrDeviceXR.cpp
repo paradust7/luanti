@@ -3,13 +3,23 @@
 #ifdef _IRR_COMPILE_WITH_XR_DEVICE_
 
 #include "CIrrDeviceXR.h"
+#include "CXRManager.h"
+
 #include "OpenXR/IOpenXRConnector.h"
+
+#include "mt_opengl.h"
+
 
 //! constructor
 CIrrDeviceXR::CIrrDeviceXR(const SIrrlichtCreationParameters& param)
-	: CIrrDeviceSDL(param), Connector(nullptr), DeviceMotionActive(false)
-
+	: CIrrDeviceSDL(param), Connector(nullptr), DeviceMotionActive(false), InXR(false), In2D(true), In3D(false)
 {
+}
+
+void CIrrDeviceXR::init()
+{
+	CIrrDeviceSDL::init();
+
 	if (!VideoDriver)
 		// SDL was unable to initialize
 		return;
@@ -23,10 +33,15 @@ CIrrDeviceXR::CIrrDeviceXR(const SIrrlichtCreationParameters& param)
 	}
 }
 
-
 //! destructor
 CIrrDeviceXR::~CIrrDeviceXR()
 {
+}
+
+void CIrrDeviceXR::createContextManager()
+{
+        ContextManager = new video::CXRManager(this);
+        ContextManager->initialize(CreationParams, {});
 }
 
 //! Activate device motion.
@@ -70,7 +85,13 @@ void CIrrDeviceXR::xrGetInputState(core::XrInputState* state)
 
 void CIrrDeviceXR::startXR()
 {
-	Connector->startXR();
+	assert(!In3D);
+	In3D = true;
+	In2D = false;
+	if (!InXR) {
+		InXR = true;
+		Connector->startXR();
+	}
 }
 
 bool CIrrDeviceXR::beginFrame(const core::XrFrameConfig& config)
@@ -90,7 +111,35 @@ bool CIrrDeviceXR::nextView(core::XrViewInfo* info)
 
 void CIrrDeviceXR::stopXR()
 {
+	assert(In3D && InXR);
+	In3D = false;
+	In2D = true;
+	InXR = false;
 	Connector->stopXR();
 }
+
+void CIrrDeviceXR::setFallbackRenderer(std::function<void()> cb)
+{
+	FallbackRenderer = std::move(cb);
+}
+
+void CIrrDeviceXR::beforeSwap()
+{
+	if (!In2D)
+		return;
+
+	if (!FallbackRenderer)
+		return;
+
+	// StartXR on first rendered frame
+	if (!InXR) {
+		InXR = true;
+		Connector->startXR();
+	}
+
+	FallbackRenderer();
+	GL.Flush();
+}
+
 
 #endif // _IRR_COMPILE_WITH_XR_DEVICE_

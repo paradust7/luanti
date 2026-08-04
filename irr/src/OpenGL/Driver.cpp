@@ -656,12 +656,20 @@ void COpenGL3DriverBase::blitRenderTarget(IRenderTarget *from, IRenderTarget *to
 
 	COpenGL3RenderTarget *src = static_cast<COpenGL3RenderTarget *>(from);
 	COpenGL3RenderTarget *dst = static_cast<COpenGL3RenderTarget *>(to);
-	GL.BindFramebuffer(GL.READ_FRAMEBUFFER, src->getBufferID());
+
+	// A depth/stencil blit requires the formats to match exactly, or else the
+	// whole call fails, color included. The window's depth/stencil format is
+	// not under our control, so only copy color when reading from it.
+	GLbitfield mask = GL.COLOR_BUFFER_BIT;
+	if (src)
+		mask |= GL.DEPTH_BUFFER_BIT | GL.STENCIL_BUFFER_BIT;
+
+	GL.BindFramebuffer(GL.READ_FRAMEBUFFER, src ? src->getBufferID() : 0);
 	GL.BindFramebuffer(GL.DRAW_FRAMEBUFFER, dst->getBufferID());
 	GL.BlitFramebuffer(
-			0, 0, src->getSize().Width, src->getSize().Height,
+			0, 0, src ? src->getSize().Width : ScreenSize.Width, src ? src->getSize().Height : ScreenSize.Height,
 			0, 0, dst->getSize().Width, dst->getSize().Height,
-			GL.COLOR_BUFFER_BIT | GL.DEPTH_BUFFER_BIT | GL.STENCIL_BUFFER_BIT, GL.NEAREST);
+			mask, GL.NEAREST);
 
 	// This resets both read and draw framebuffer. Note that we bypass CacheHandler here.
 	GL.BindFramebuffer(GL.FRAMEBUFFER, prev_fbo_id);

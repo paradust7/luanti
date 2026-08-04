@@ -358,10 +358,12 @@ set(IRRDRVROBJ
 	CNullDriver.h
 	CEGLManager.h
 	CSDLManager.h
+	CXRManager.h
 
 	CNullDriver.cpp
 	CEGLManager.cpp
 	CSDLManager.cpp
+	CXRManager.cpp
 	mt_opengl_loader.cpp
 	HWBuffer.cpp
 )

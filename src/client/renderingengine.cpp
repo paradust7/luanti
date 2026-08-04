@@ -21,6 +21,7 @@
 #include "clientmap.h"
 #include "renderingengine.h"
 #include "render/core.h"
+#include "render/xr.h"
 #include "render/factory.h"
 #include "filesys.h"
 #include "irrlicht_changes/static_text.h"
@@ -210,6 +211,8 @@ RenderingEngine::RenderingEngine(MyEventReceiver *receiver)
 	m_device = createDevice(params, driverType);
 	driver = m_device->getVideoDriver();
 	verbosestream << "Using the " << getVideoDriverName(driver->getDriverType()) << " video driver" << std::endl;
+
+	m_device->setFallbackRenderer(std::bind(renderFallback, m_device));
 
 	// This changes the minimum allowed number of vertices in a VBO. Default is 500.
 	driver->setMinHardwareBufferVertexCount(4);

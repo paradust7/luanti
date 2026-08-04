@@ -53,6 +53,9 @@ time.
 class IrrlichtDevice : public virtual IReferenceCounted
 {
 public:
+	//! Post-constructor initializer. Called exactly once after constructing.
+	virtual void init() = 0;
+
 	//! Runs the device.
 	/** Also increments the virtual timer by calling
 	ITimer::tick();. You can prevent this
@@ -371,6 +374,10 @@ public:
 
 	//! Signal that the app will no longer be rendering frames
 	virtual void stopXR() = 0;
+
+	//! Function to render XR when Luanti is rendering 2D only
+	//! (and so not using the pipeline)
+	virtual void setFallbackRenderer(std::function<void()> cb) = 0;
 
 	//! Get the corresponding scancode for the keycode.
 	/**
