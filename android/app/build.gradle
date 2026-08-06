@@ -15,6 +15,23 @@ android {
 		buildConfig true
 	}
 
+	// 'phone' is the stock Luanti build and is unchanged. 'quest' layers
+	// src/quest/AndroidManifest.xml on top to declare the app immersive so
+	// Horizon OS launches it into VR instead of a 2D panel.
+	flavorDimensions 'device'
+	productFlavors {
+		phone {
+			dimension 'device'
+			isDefault true
+		}
+		quest {
+			dimension 'device'
+			// Horizon OS is arm64 only. abiFilters can't be narrowed here
+			// because AGP rejects it alongside the splits.abi block below,
+			// so just sideload the arm64-v8a split APK.
+		}
+	}
+
 	// load properties
 	Properties props = new Properties()
 	def propfile = file('../local.properties')

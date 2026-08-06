@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+	Quest-only overlay, merged on top of src/main/AndroidManifest.xml.
+
+	Without this, Horizon OS resolves the launcher activity, sees no immersive
+	marker, and runs the app as a flat 2D panel inside the Quest home
+	environment. OpenXR still initializes in that mode, but the session never
+	leaves XR_SESSION_STATE_IDLE, so no frames are ever submitted to the
+	compositor and you just see the Android surface on a floating panel.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+	xmlns:tools="http://schemas.android.com/tools">
+
+	<!-- 6DoF head tracking. Marks the app as headset-only for the store. -->
+	<uses-feature
+		android:name="android.hardware.vr.headtracking"
+		android:version="1"
+		android:required="true" />
+
+	<application>
+
+		<meta-data
+			android:name="com.oculus.supportedDevices"
+			android:value="quest2|questpro|quest3" />
+
+		<!--
+			The Quest shell inspects the *launcher* activity to decide immersive
+			vs. panel, so the categories have to go here and not only on
+			GameActivity. The manifest merger appends this intent-filter
+			alongside the one in src/main rather than replacing it, which is
+			fine: the shell only needs to find one filter carrying the VR
+			category.
+		-->
+		<activity
+			android:name=".MainActivity"
+			android:screenOrientation="landscape"
+			android:configChanges="density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode"
+			tools:replace="android:screenOrientation,android:configChanges">
+			<intent-filter>
+				<action android:name="android.intent.action.MAIN" />
+				<category android:name="android.intent.category.LAUNCHER" />
+				<!-- Khronos-standard immersive marker -->
+				<category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" />
+				<!-- Meta's vendor equivalent, still honored by Horizon OS -->
+				<category android:name="com.oculus.intent.category.VR" />
+			</intent-filter>
+		</activity>
+
+		<activity
+			android:name=".GameActivity"
+			android:screenOrientation="landscape"
+			android:configChanges="density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+			tools:replace="android:screenOrientation,android:configChanges">
+			<intent-filter>
+				<action android:name="android.intent.action.MAIN" />
+				<category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" />
+				<category android:name="com.oculus.intent.category.VR" />
+			</intent-filter>
+		</activity>
+
+	</application>
+
+</manifest>
