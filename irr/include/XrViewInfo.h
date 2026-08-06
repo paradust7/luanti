@@ -56,15 +56,26 @@ struct XrInputState {
 	XrInputHand Hand[2];
 };
 
+// A flat quad placed in the world and composited by the XR runtime.
+struct XrQuadConfig {
+	bool Enable;
+	// Size of the surface rendered into the quad, in pixels
+	dimension2du Resolution;
+	// Size of the quad in the world, in meters
+	dimension2df Size;
+	// Coordinates of the center (in the XR fixed frame)
+	vector3df Position;
+	quaternion Orientation;
+};
+
 struct XrFrameConfig {
-	core::dimension2du HudSize;
-	struct {
-		bool Enable;
-		dimension2df Size;
-		// Coordinates of the center (in the XR fixed frame)
-		vector3df Position;
-		quaternion Orientation;
-	} FloatingHud;
+	// Composited on top of everything else.
+	XrQuadConfig FloatingHud;
+
+	// Composited underneath the eye views, so that 3D content can be drawn
+	// over it. This only works if the eye views are cleared to transparent,
+	// since they are blended over the underlay rather than replacing it.
+	XrQuadConfig FloatingUnderlay;
 };
 
 enum XR_VIEW_KIND {
@@ -72,6 +83,7 @@ enum XR_VIEW_KIND {
 	XRVK_LEFT_EYE,
 	XRVK_RIGHT_EYE,
 	XRVK_HUD,
+	XRVK_UNDERLAY,
 	XRVK_GENERIC,
 };
 

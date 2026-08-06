@@ -33,7 +33,8 @@ public:
 		Input.reset();
 		ViewLayers.clear();
 		resetViewChains();
-		resetHudChain();
+		resetQuadChain(HudChain);
+		resetQuadChain(UnderlayChain);
 		if (BasePlaySpace != XR_NULL_HANDLE)
 			xrDestroySpace(BasePlaySpace);
 		if (ViewSpace != XR_NULL_HANDLE)
@@ -54,6 +55,15 @@ public:
 	bool init();
 	bool endFrame();
 protected:
+	// Swapchain backing a quad composition layer
+	struct QuadChainData {
+		unique_ptr<IOpenXRSwapchain> Swapchain;
+		unique_ptr<IOpenXRSwapchain> DepthSwapchain;
+		std::vector<video::IRenderTarget*> RenderTargets;
+		uint32_t Width = 1280;
+		uint32_t Height = 1024;
+	};
+
 	bool getSystem();
 	bool getViewConfigs();
 	bool setupViews();
@@ -61,12 +71,15 @@ protected:
 	bool createSession();
 	bool setupSpaces();
 	bool setupViewChains();
-	bool setupHudChain();
+	bool setupQuadChain(QuadChainData& chain);
+	bool resizeQuadChain(QuadChainData& chain, const core::dimension2du& size);
+	bool acquireQuadView(QuadChainData& chain, core::XR_VIEW_KIND kind, core::XrViewInfo* info);
+	XrCompositionLayerQuad makeQuadLayer(const QuadChainData& chain, const core::XrQuadConfig& quad);
 	bool setupCompositionLayers();
 	bool setupInput();
 
 	void resetViewChains();
-	void resetHudChain();
+	void resetQuadChain(QuadChainData& chain);
 
 	bool beginSession();
 	bool waitFrame();
@@ -131,15 +144,8 @@ protected:
 	};
 	std::vector<ViewChainData> ViewChains;
 
-	// HUD Swapchain
-	struct HudChainData {
-		unique_ptr<IOpenXRSwapchain> Swapchain;
-		unique_ptr<IOpenXRSwapchain> DepthSwapchain;
-		std::vector<video::IRenderTarget*> RenderTargets;
-	};
-	HudChainData HudChain;
-	uint32_t HudWidth = 1280;
-	uint32_t HudHeight = 1024;
+	QuadChainData HudChain;
+	QuadChainData UnderlayChain;
 
 	// Initialized by setupCompositionLayers
 	std::vector<XrCompositionLayerProjectionView> ViewLayers;
@@ -154,6 +160,7 @@ protected:
 	bool InFrame = false;
 	core::XrFrameConfig FrameConfig; // provided by the app
 	bool RenderHud;
+	bool RenderUnderlay;
 	uint32_t NextViewIndex = 0;
 	XrFrameState FrameState;
 	XrViewState ViewState;
@@ -177,7 +184,8 @@ bool COpenXRSession::init()
 	// TODO: Initialize hand tracking
 	if (!setupSpaces()) return false;
 	if (!setupViewChains()) return false;
-	if (!setupHudChain()) return false;
+	if (!setupQuadChain(HudChain)) return false;
+	if (!setupQuadChain(UnderlayChain)) return false;
 	if (!setupCompositionLayers()) return false;
 	if (!setupInput()) return false;
 	return true;
@@ -520,7 +528,7 @@ bool COpenXRSession::createSession()
 #endif
 
 #ifdef XR_USE_PLATFORM_ANDROID
-	if (sdl_driver == "android" && isGLES) {
+	if (sdl_driver == "Android" && isGLES) {
 		XrGraphicsBindingOpenGLESAndroidKHR binding{
 			.type = XR_TYPE_GRAPHICS_BINDING_OPENGL_ES_ANDROID_KHR,
 		};
@@ -533,7 +541,7 @@ bool COpenXRSession::createSession()
 	}
 #endif
 
-#ifdef XR_USE_PLATFORM_EGL
+#if defined(XR_USE_PLATFORM_EGL) && !defined(XR_USE_PLATFORM_ANDROID)
 	if (isGLES || (isGL && sdl_driver == "wayland")) {
 		XrGraphicsBindingEGLMNDX binding{
 			.type = XR_TYPE_GRAPHICS_BINDING_EGL_MNDX,
@@ -740,46 +748,112 @@ bool COpenXRSession::setupViewChains()
 	return true;
 }
 
-void COpenXRSession::resetHudChain()
+void COpenXRSession::resetQuadChain(QuadChainData& chain)
 {
-	for (auto& target : HudChain.RenderTargets) {
+	for (auto& target : chain.RenderTargets) {
 		if (target) {
 			VideoDriver->removeRenderTarget(target);
 			target = nullptr;
 		}
 	}
-	HudChain.Swapchain.reset();
-	HudChain.DepthSwapchain.reset();
+	chain.Swapchain.reset();
+	chain.DepthSwapchain.reset();
 }
 
-bool COpenXRSession::setupHudChain()
+bool COpenXRSession::setupQuadChain(QuadChainData& chain)
 {
-	// Setup HUD
-	HudChain.Swapchain = createOpenXRSwapchain(
+	chain.Swapchain = createOpenXRSwapchain(
 		VideoDriver,
 		Instance,
 		Session,
 		XR_SWAPCHAIN_USAGE_SAMPLED_BIT | XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT,
 		ColorFormat,
 		1,
-		HudWidth,
-		HudHeight);
-	if (!HudChain.Swapchain)
+		chain.Width,
+		chain.Height);
+	if (!chain.Swapchain)
 		return false;
-	HudChain.DepthSwapchain = createOpenXRSwapchain(
+	chain.DepthSwapchain = createOpenXRSwapchain(
 		VideoDriver,
 		Instance,
 		Session,
 		XR_SWAPCHAIN_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
 		DepthFormat,
 		1,
-		HudWidth,
-		HudHeight);
-	if (!HudChain.DepthSwapchain)
+		chain.Width,
+		chain.Height);
+	if (!chain.DepthSwapchain)
 		return false;
-	size_t swapchainLength = HudChain.Swapchain->getLength();
-	HudChain.RenderTargets.resize(swapchainLength, nullptr);
+	size_t swapchainLength = chain.Swapchain->getLength();
+	chain.RenderTargets.resize(swapchainLength, nullptr);
 	return true;
+}
+
+//! Create the chain if needed, remaking it if the requested size changed.
+bool COpenXRSession::resizeQuadChain(QuadChainData& chain, const core::dimension2du& size)
+{
+	if (chain.Swapchain && chain.Width == size.Width && chain.Height == size.Height)
+		return true;
+	resetQuadChain(chain);
+	chain.Width = size.Width;
+	chain.Height = size.Height;
+	return setupQuadChain(chain);
+}
+
+//! Hand the app a render target to draw the contents of a quad into.
+bool COpenXRSession::acquireQuadView(QuadChainData& chain, core::XR_VIEW_KIND kind, core::XrViewInfo* info)
+{
+	if (!chain.Swapchain->acquireAndWait())
+		return false;
+	if (!chain.DepthSwapchain->acquireAndWait())
+		return false;
+	auto& target = chain.RenderTargets[chain.Swapchain->getAcquiredIndex()];
+	if (!target) {
+		os::Printer::log("[XR] Adding render target", ELL_INFORMATION);
+		target = VideoDriver->addRenderTarget();
+	}
+	target->setTexture(
+		chain.Swapchain->getAcquiredTexture(),
+		chain.DepthSwapchain->getAcquiredTexture());
+	info->Kind = kind;
+	info->Target = target;
+	info->Width = chain.Width;
+	info->Height = chain.Height;
+	info->PositionBase = core::vector3df(0, 0, 0);
+	info->Position = core::vector3df(0, 0, 0);
+	info->Orientation = core::quaternion(0, 0, 0, 1);
+	// These should really not be used
+	info->AngleLeft = -45.0f;
+	info->AngleRight = 45.0f;
+	info->AngleUp = 45.0f;
+	info->AngleDown = -45.0f;
+	info->ZNear = 1.0f;
+	info->ZFar = 10.0f;
+	return true;
+}
+
+XrCompositionLayerQuad COpenXRSession::makeQuadLayer(const QuadChainData& chain, const core::XrQuadConfig& quad)
+{
+	XrCompositionLayerQuad layer = {
+		.type = XR_TYPE_COMPOSITION_LAYER_QUAD,
+		.layerFlags =
+			XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT |
+			XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT,
+		.space = PlaySpace,
+		.eyeVisibility = XR_EYE_VISIBILITY_BOTH,
+		.pose = {
+			.orientation = irrlicht_to_xr(quad.Orientation),
+			.position = irrlicht_to_xr(quad.Position),
+		},
+		.size = irrlicht_to_xr(quad.Size),
+	};
+	layer.subImage.swapchain = chain.Swapchain->getHandle();
+	layer.subImage.imageArrayIndex = 0;
+	layer.subImage.imageRect.offset.x = 0;
+	layer.subImage.imageRect.offset.y = 0;
+	layer.subImage.imageRect.extent.width = chain.Width;
+	layer.subImage.imageRect.extent.height = chain.Height;
+	return layer;
 }
 
 bool COpenXRSession::setupCompositionLayers()
@@ -880,17 +954,13 @@ bool COpenXRSession::internalTryBeginFrame(bool *didBegin, const core::XrFrameCo
 
 	FrameConfig = config;
 	RenderHud = FrameConfig.FloatingHud.Enable;
+	RenderUnderlay = FrameConfig.FloatingUnderlay.Enable;
 
-	// If the hud changed size, remake the swapchain
-	if (RenderHud && (
-		FrameConfig.HudSize.Width != HudWidth ||
-		FrameConfig.HudSize.Height != HudHeight)) {
-		resetHudChain();
-		HudWidth = FrameConfig.HudSize.Width;
-		HudHeight = FrameConfig.HudSize.Height;
-		if (!setupHudChain())
-			return false;
-	}
+	// If a quad changed size, remake its swapchain
+	if (RenderHud && !resizeQuadChain(HudChain, FrameConfig.FloatingHud.Resolution))
+		return false;
+	if (RenderUnderlay && !resizeQuadChain(UnderlayChain, FrameConfig.FloatingUnderlay.Resolution))
+		return false;
 
 	XrFrameBeginInfo beginInfo = {
 		.type = XR_TYPE_FRAME_BEGIN_INFO,
@@ -999,35 +1069,19 @@ bool COpenXRSession::internalNextView(bool *gotView, core::XrViewInfo* info)
 			return true;
 		}
 
-		// HUD
-		if (RenderHud && NextViewIndex == ViewChains.size()) {
-			++NextViewIndex;
-			if (!HudChain.Swapchain->acquireAndWait())
-				return false;
-			if (!HudChain.DepthSwapchain->acquireAndWait())
-				return false;
-			auto& target = HudChain.RenderTargets[HudChain.Swapchain->getAcquiredIndex()];
-			if (!target) {
-				os::Printer::log("[XR] Adding render target", ELL_INFORMATION);
-				target = VideoDriver->addRenderTarget();
+		// The quad layers follow the eye views, in a fixed order. Disabled
+		// quads still take up a slot, they are just skipped over.
+		while (NextViewIndex < ViewChains.size() + 2) {
+			uint32_t quadIndex = NextViewIndex++ - ViewChains.size();
+			if (quadIndex == 0 && RenderUnderlay) {
+				if (!acquireQuadView(UnderlayChain, core::XRVK_UNDERLAY, info))
+					return false;
+			} else if (quadIndex == 1 && RenderHud) {
+				if (!acquireQuadView(HudChain, core::XRVK_HUD, info))
+					return false;
+			} else {
+				continue;
 			}
-			target->setTexture(
-				HudChain.Swapchain->getAcquiredTexture(),
-				HudChain.DepthSwapchain->getAcquiredTexture());
-			info->Kind = core::XRVK_HUD;
-			info->Target = target;
-			info->Width = HudWidth;
-			info->Height = HudHeight;
-			info->PositionBase = core::vector3df(0, 0, 0);
-			info->Position = core::vector3df(0, 0, 0);
-			info->Orientation = core::quaternion(0, 0, 0, 1);
-			// These should really not be used
-			info->AngleLeft = -45.0f;
-			info->AngleRight = 45.0f;
-			info->AngleUp = 45.0f;
-			info->AngleDown = -45.0f;
-			info->ZNear = 1.0f;
-			info->ZFar = 10.0f;
 			*gotView = true;
 			return true;
 		}
@@ -1040,6 +1094,12 @@ bool COpenXRSession::internalNextView(bool *gotView, core::XrViewInfo* info)
 			if (!viewChain.Swapchain->release())
 				return false;
 			if (!viewChain.DepthSwapchain->release())
+				return false;
+		}
+		if (RenderUnderlay) {
+			if (!UnderlayChain.Swapchain->release())
+				return false;
+			if (!UnderlayChain.DepthSwapchain->release())
 				return false;
 		}
 		if (RenderHud) {
@@ -1100,11 +1160,29 @@ bool COpenXRSession::endFrame()
 	const XrCompositionLayerBaseHeader* layers[5];
 	XrCompositionLayerProjection projectionLayer;
 	XrCompositionLayerQuad hudLayer;
+	XrCompositionLayerQuad underlayLayer;
+
+	// Layers are composited in submission order, so the underlay goes first
+	// and the HUD last.
+	if (FrameState.shouldRender && RenderUnderlay) {
+		underlayLayer = makeQuadLayer(UnderlayChain, FrameConfig.FloatingUnderlay);
+		layers[layerCount++] = (XrCompositionLayerBaseHeader*)&underlayLayer;
+	}
+
+	// With an underlay below them, the eye views have to be blended instead of
+	// painted over it.
+	XrCompositionLayerFlags projectionFlags = 0;
+	if (RenderUnderlay) {
+		projectionFlags =
+			XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT |
+			XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
+	}
+
 	if (FrameState.shouldRender) {
 		projectionLayer = XrCompositionLayerProjection{
 			.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION,
 			.next = NULL,
-			.layerFlags = 0,
+			.layerFlags = projectionFlags,
 			.space = PlaySpace,
 			.viewCount = (uint32_t)ViewLayers.size(),
 			.views = ViewLayers.data(),
@@ -1113,25 +1191,7 @@ bool COpenXRSession::endFrame()
 	}
 
 	if (FrameState.shouldRender && RenderHud) {
-		hudLayer = XrCompositionLayerQuad{
-			.type = XR_TYPE_COMPOSITION_LAYER_QUAD,
-			.layerFlags =
-				XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT |
-				XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT,
-			.space = PlaySpace,
-			.eyeVisibility = XR_EYE_VISIBILITY_BOTH,
-			.pose = {
-				.orientation = irrlicht_to_xr(FrameConfig.FloatingHud.Orientation),
-				.position = irrlicht_to_xr(FrameConfig.FloatingHud.Position),
-			},
-			.size = irrlicht_to_xr(FrameConfig.FloatingHud.Size),
-		};
-		hudLayer.subImage.swapchain = HudChain.Swapchain->getHandle();
-		hudLayer.subImage.imageArrayIndex = 0;
-		hudLayer.subImage.imageRect.offset.x = 0;
-		hudLayer.subImage.imageRect.offset.y = 0;
-		hudLayer.subImage.imageRect.extent.width = HudWidth;
-		hudLayer.subImage.imageRect.extent.height = HudHeight;
+		hudLayer = makeQuadLayer(HudChain, FrameConfig.FloatingHud);
 		layers[layerCount++] = (XrCompositionLayerBaseHeader*)&hudLayer;
 	}
 

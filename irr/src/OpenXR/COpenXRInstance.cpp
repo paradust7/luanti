@@ -10,8 +10,10 @@
 
 #ifdef _IRR_USE_SDL3_
 #include <SDL3/SDL_video.h>
+#include <SDL3/SDL_system.h>
 #else
 #include <SDL_video.h>
+#include <SDL_system.h>
 #endif
 
 #ifndef XR_API_VERSION_1_0
@@ -37,6 +39,7 @@ public:
 	virtual bool internalTryBeginFrame(bool *didBegin, const core::XrFrameConfig& config) override;
 	virtual bool internalNextView(bool *gotView, core::XrViewInfo* info) override;
 protected:
+	bool initLoader();
 	bool loadExtensions();
 	bool createInstance();
 	bool tryCreateSession();
@@ -65,6 +68,7 @@ protected:
 
 bool COpenXRInstance::init()
 {
+	if (!initLoader()) return false;
 	if (!loadExtensions()) return false;
 	if (!createInstance()) return false;
 	XR_ASSERT(Instance != XR_NULL_HANDLE);
@@ -85,6 +89,46 @@ void COpenXRInstance::invalidateSession()
 	os::Printer::log("[XR] Session lost", ELL_ERROR);
 	Session = nullptr;
 	SessionRetryTime = os::Timer::getTime() + SessionRetryInterval;
+}
+
+bool COpenXRInstance::initLoader()
+{
+	// One-time program-wide initialization
+	static bool didInitLoader = false;
+	if (didInitLoader)
+		return true;
+	didInitLoader = true;
+
+#ifdef XR_USE_PLATFORM_ANDROID
+#ifdef _IRR_USE_SDL3_
+	JNIEnv *env = (JNIEnv*)SDL_GetAndroidJNIEnv();
+	jobject activity = SDL_GetAndroidActivity();
+#else
+	JNIEnv *env = (JNIEnv*)SDL_AndroidGetJNIEnv();
+	jobject activity = static_cast<jobject>(SDL_AndroidGetActivity());
+#endif
+
+	JavaVM *vm = nullptr;
+	env->GetJavaVM(&vm);
+
+	PFN_xrInitializeLoaderKHR xrInitializeLoaderKHR = nullptr;
+	xrGetInstanceProcAddr(XR_NULL_HANDLE, "xrInitializeLoaderKHR", (PFN_xrVoidFunction*)&xrInitializeLoaderKHR);
+	if (!xrInitializeLoaderKHR) {
+		os::Printer::log("[XR] Failed to get address of xrInitializeLoaderKHR", ELL_ERROR);
+		return false;
+	}
+	XrLoaderInitInfoAndroidKHR loaderInfo{
+		.type = XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR,
+		.next = NULL,
+		.applicationVM = vm,
+		.applicationContext = activity,
+	};
+	if (xrInitializeLoaderKHR((XrLoaderInitInfoBaseHeaderKHR*)&loaderInfo) != XR_SUCCESS) {
+		os::Printer::log("[XR] Failed in xrInitializeLoaderKHR", ELL_ERROR);
+		return false;
+	}
+#endif
+	return true;
 }
 
 bool COpenXRInstance::loadExtensions()
@@ -114,12 +158,14 @@ bool COpenXRInstance::loadExtensions()
 bool COpenXRInstance::createInstance()
 {
 	std::vector<const char*> extensionsToEnable;
+
+/*
 	if (!ExtensionNames.count(XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME)) {
 		os::Printer::log("OpenXR runtime does not support depth composition layer");
 		return false;
 	}
 	extensionsToEnable.push_back(XR_KHR_COMPOSITION_LAYER_DEPTH_EXTENSION_NAME);
-
+*/
 
 	const char* raw_sdl_driver = SDL_GetCurrentVideoDriver();
 	std::string sdl_driver = raw_sdl_driver ? raw_sdl_driver : "";
@@ -148,7 +194,7 @@ bool COpenXRInstance::createInstance()
 	}
 #endif
 
-#ifdef XR_USE_PLATFORM_EGL
+#if defined(XR_USE_PLATFORM_EGL) && !defined(XR_USE_PLATFORM_ANDROID)
 	if (driverType == video::EDT_OGLES2 || sdl_driver == "wayland") {
 		if (!ExtensionNames.count(XR_MNDX_EGL_ENABLE_EXTENSION_NAME)) {
 			os::Printer::log("OpenXR runtime does not support EGL", ELL_ERROR);
