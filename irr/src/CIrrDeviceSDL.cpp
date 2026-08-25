@@ -9,6 +9,7 @@
 #include "IEventReceiver.h"
 #include "IGUIElement.h"
 #include "IGUIEnvironment.h"
+#include "ISceneManager.h"
 #include "IImageLoader.h"
 #include "IFileSystem.h"
 #include "IVideoDriver.h"
@@ -515,6 +516,22 @@ CIrrDeviceSDL::~CIrrDeviceSDL()
 	for (u32 i = 0; i < numJoysticks; ++i)
 		SDL_CloseJoystick(Joysticks[i]);
 #endif
+	// These hold GL objects that are released from their destructors, so they
+	// must go away while the context is still current. (Deleting GL objects
+	// without a context is a no-op on desktop drivers, but throws in WebGL.)
+	if (GUIEnvironment) {
+		GUIEnvironment->drop();
+		GUIEnvironment = nullptr;
+	}
+	if (SceneManager) {
+		SceneManager->drop();
+		SceneManager = nullptr;
+	}
+	if (VideoDriver) {
+		VideoDriver->drop();
+		VideoDriver = nullptr;
+	}
+
 	if (Window && Context) {
 		SDL_GL_MakeCurrent(Window, NULL);
 		SDL_GL_DestroyContext(Context);
