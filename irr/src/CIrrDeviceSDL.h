@@ -346,7 +346,6 @@ private:
 
 	void logAttributes();
 	SDL_GLContext Context;
-	SDL_Renderer *Renderer;
 	SDL_Window *Window;
 #if defined(_IRR_COMPILE_WITH_JOYSTICK_EVENTS_)
 	core::array<SDL_Joystick *> Joysticks;

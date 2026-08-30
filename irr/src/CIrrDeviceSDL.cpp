@@ -573,44 +573,6 @@ void CIrrDeviceSDL::logAttributes()
 	os::Printer::log(sdl_attr.c_str());
 }
 
-#ifdef __EMSCRIPTEN__
-// The default SDL_CreateWindowAndRenderer does not allow setting
-// renderer flags. The VSYNC flag is needed to not break
-// requestAnimationFrame for the main loop on Emscripten.
-static int
-SDL_CreateWindowAndRendererFixed(int width, int height, Uint32 window_flags,
-				SDL_Window **window, SDL_Renderer **renderer)
-{
-	*window = SDL_CreateWindow(NULL, SDL_WINDOWPOS_UNDEFINED,
-					SDL_WINDOWPOS_UNDEFINED,
-					width, height, window_flags);
-	if (!*window) {
-		*renderer = NULL;
-		return -1;
-	}
-
-	// TODO(paradust):
-	//
-	// SDL_RENDERER_PRESENTVSYNC is equivalent to:
-	//
-	//   emscripten_set_main_loop_timing(1, 1);  // use requestAnimationFrame instead of setTimeout
-	//
-	// which is the recommended setting for rendering performance.
-	//
-	// However, major performance issues occur in other threads (especially the server thread)
-	// when this is enabled. It appears something is being done in other threads that
-	// requires periodic messaging to the main thread. If the main thread is too busy, other
-	// threads stall. This dependency should be found and removed, so that vsync can
-	// be enabled.
-	//
-	*renderer = SDL_CreateRenderer(*window, -1, 0); //SDL_RENDERER_PRESENTVSYNC);
-	if (!*renderer) {
-		return -1;
-	}
-	return 0;
-}
-#endif
-
 bool CIrrDeviceSDL::createWindow()
 {
 	if (Close)
@@ -710,6 +672,7 @@ bool CIrrDeviceSDL::createWindowWithContext()
 	SDL_GL_ResetAttributes();
 
 #ifdef _IRR_EMSCRIPTEN_PLATFORM_
+	// The canvas is the window here. Size it as asked, or adopt the size it has.
 	if (Width != 0 || Height != 0) {
 		printf("SETTING CANVAS SIZE: WIDTH=%d, HEIGHT=%d\n", Width, Height);
 		emscripten_set_canvas_element_size("#canvas", Width, Height);
@@ -719,36 +682,8 @@ bool CIrrDeviceSDL::createWindowWithContext()
 		Width = w;
 		Height = h;
 	}
+#endif
 
-	SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
-	SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
-	SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
-	SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, CreationParams.WithAlphaChannel ? 8 : 0);
-
-	SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, CreationParams.ZBufferBits);
-	SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, CreationParams.Stencilbuffer ? 8 : 0);
-	SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, CreationParams.Doublebuffer ? 1 : 0);
-
-	if (CreationParams.AntiAlias > 1) {
-		SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 1);
-		SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, CreationParams.AntiAlias);
-	} else {
-		SDL_GL_SetAttribute(SDL_GL_MULTISAMPLEBUFFERS, 0);
-		SDL_GL_SetAttribute(SDL_GL_MULTISAMPLESAMPLES, 0);
-	}
-
-	SDL_CreateWindowAndRendererFixed(Width, Height, SDL_Flags, &Window, &Renderer); // 0,0 will use the canvas size
-
-	logAttributes();
-
-	// "#canvas" is for the opengl context
-	emscripten_set_mousedown_callback("#canvas", (void *)this, true, MouseUpDownCallback);
-	emscripten_set_mouseup_callback("#canvas", (void *)this, true, MouseUpDownCallback);
-	emscripten_set_mouseenter_callback("#canvas", (void *)this, false, MouseEnterCallback);
-	emscripten_set_mouseleave_callback("#canvas", (void *)this, false, MouseLeaveCallback);
-
-	return true;
-#else // !_IRR_EMSCRIPTEN_PLATFORM_
 	switch (CreationParams.DriverType) {
 	case video::EDT_OPENGL:
 		SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
@@ -814,6 +749,18 @@ bool CIrrDeviceSDL::createWindowWithContext()
 		return false;
 	}
 
+#ifdef _IRR_EMSCRIPTEN_PLATFORM_
+	logAttributes();
+
+	// "#canvas" is for the opengl context
+	emscripten_set_mousedown_callback("#canvas", (void *)this, true, MouseUpDownCallback);
+	emscripten_set_mouseup_callback("#canvas", (void *)this, true, MouseUpDownCallback);
+	emscripten_set_mouseenter_callback("#canvas", (void *)this, false, MouseEnterCallback);
+	emscripten_set_mouseleave_callback("#canvas", (void *)this, false, MouseLeaveCallback);
+
+	// The canvas was sized in pixels above, so there is nothing to convert,
+	// and a browser window cannot be moved or resized from here anyway.
+#else
 #ifdef _IRR_USE_SDL3_
 	if (CreationParams.Fullscreen)
 		SDL_SetWindowFullscreen(Window, true);
@@ -830,9 +777,9 @@ bool CIrrDeviceSDL::createWindowWithContext()
 		SDL_SetWindowPosition(Window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
 		updateSizeAndScale();
 	}
+#endif // _IRR_EMSCRIPTEN_PLATFORM_
 
 	return true;
-#endif // !_IRR_EMSCRIPTEN_PLATFORM_
 }
 
 //! create the driver
