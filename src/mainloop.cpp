@@ -10,6 +10,7 @@
 #include <functional>
 #include <iostream>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <set>
 #include <sstream>
@@ -58,11 +59,19 @@ extern "C" {
     EMSCRIPTEN_KEEPALIVE
     void emloop_install_pack(const char *name, const char *version, void *data, size_t size);
 
+    // Delete everything a pack installed, and stop counting it as installed.
+    // Answers asynchronously with emloop_pack_removed().
+    EMSCRIPTEN_KEEPALIVE
+    void emloop_remove_pack(const char *name);
+
     EMSCRIPTEN_KEEPALIVE
     void emloop_invoke_main(int argc, char* argv[]);
 
+    // Merge settings into minetest.conf. Keys in `defaults` are only written
+    // when the file does not have them yet, so that what the player changed
+    // in-game survives; keys in `overrides` replace whatever is there.
     EMSCRIPTEN_KEEPALIVE
-    void emloop_set_conf(const char *conf);
+    void emloop_set_conf(const char *defaults, const char *overrides);
 }
 
 namespace emloop_private {
@@ -333,15 +342,25 @@ static bool validPackName(const std::string &name) {
     return true;
 }
 
+static void notifyPackRemoveProgress(const std::string &name, double fraction) {
+    MAIN_THREAD_EM_ASM({
+        emloop_pack_remove_progress(UTF8ToString($0), $1);
+    }, name.c_str(), fraction);
+}
+
 // Delete what a previous version of this pack left behind, so that files
 // dropped upstream do not linger in persistent storage. Only paths recorded in
 // the pack's own manifest are touched, so worlds and content the player
 // installed are left alone.
-static void removeInstalledFiles(const std::string &name) {
+//
+// With `report`, the launcher is kept posted on how much of the manifest has
+// been worked through, which an uninstall shows to the player.
+static void removeInstalledFiles(const std::string &name, bool report) {
     std::string manifest;
     if (!readWholeFile(packMetaPath(name, ".files"), manifest))
         return;
 
+    std::vector<std::string> files;
     std::vector<std::string> dirs;
     std::istringstream is(manifest);
     std::string line;
@@ -355,7 +374,7 @@ static void removeInstalledFiles(const std::string &name) {
         if (kind == 'D') {
             dirs.push_back(path);
         } else {
-            unlink(path.c_str());
+            files.push_back(path);
         }
     }
 
@@ -364,10 +383,30 @@ static void removeInstalledFiles(const std::string &name) {
     std::sort(dirs.begin(), dirs.end(), [](const std::string &a, const std::string &b) {
         return a.size() > b.size();
     });
+
+    const size_t total = files.size() + dirs.size();
+    size_t done = 0;
+    int reported = 0;
+    // Deleting from OPFS is slow enough to be worth watching.
+    const auto step = [&]() {
+        done++;
+        if (!report || total == 0)
+            return;
+        int pct = (int)((100 * done) / total);
+        if (pct >= reported + 2) {
+            reported = pct;
+            notifyPackRemoveProgress(name, pct / 100.0);
+        }
+    };
+
+    for (const std::string &path : files) {
+        unlink(path.c_str());
+        step();
+    }
     for (const std::string &dir : dirs) {
-        if (dir == PACK_DB_DIR)
-            continue;
-        rmdir(dir.c_str());
+        if (dir != PACK_DB_DIR)
+            rmdir(dir.c_str());
+        step();
     }
 }
 
@@ -508,7 +547,7 @@ static void do_install_pack(const std::string &name, const std::string &version,
         // version, and drop the marker first so that an interrupted install is
         // retried rather than trusted.
         unlink(packMetaPath(name, ".ver").c_str());
-        removeInstalledFiles(name);
+        removeInstalledFiles(name, false);
         unlink(packMetaPath(name, ".files").c_str());
     }
 
@@ -540,6 +579,48 @@ void emloop_install_pack(const char *name, const char *version, void *data, size
         do_install_pack(packName, packVersion, data, size);
         free(data);
     });
+}
+
+static void notifyPackRemoved(const std::string &name, bool ok) {
+    MAIN_THREAD_EM_ASM({
+        emloop_pack_removed(UTF8ToString($0), $1);
+    }, name.c_str(), ok ? 1 : 0);
+}
+
+// Undo an install. The marker goes first, so that a removal cut short leaves
+// the pack looking uninstalled rather than installed.
+//
+// This is the module's job rather than the page's: the page can reach the same
+// files, but LUANTI_ROOT is mounted here, and deleting underneath a mount
+// leaves it looking like the files are still there.
+static void do_remove_pack(const std::string &name) {
+    if (!persistent) {
+        std::cout << "emloop_remove_pack: nothing is stored, so nothing to remove"
+                  << std::endl;
+        notifyPackRemoved(name, false);
+        return;
+    }
+    std::string installed;
+    if (!readWholeFile(packMetaPath(name, ".ver"), installed)) {
+        std::cout << "emloop_remove_pack: " << name << " is not installed" << std::endl;
+        notifyPackRemoved(name, false);
+        return;
+    }
+    unlink(packMetaPath(name, ".ver").c_str());
+    removeInstalledFiles(name, true);
+    unlink(packMetaPath(name, ".files").c_str());
+    std::cout << "emloop_remove_pack: removed " << name << std::endl;
+    notifyPackRemoved(name, true);
+}
+
+void emloop_remove_pack(const char *name) {
+    std::string packName(name ? name : "");
+    if (!validPackName(packName)) {
+        std::cout << "emloop_remove_pack: rejecting invalid pack name" << std::endl;
+        notifyPackRemoved(packName, false);
+        return;
+    }
+    post([packName]() { do_remove_pack(packName); });
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -583,18 +664,87 @@ static std::set<std::string> confKeys(const std::string &contents) {
     return keys;
 }
 
-static void do_set_conf(const std::string &contents) {
+// The key/value pairs in a blob from the launcher. Values are single-line,
+// which is all the launcher ever sends.
+static std::map<std::string, std::string> confEntries(const std::string &contents) {
+    std::map<std::string, std::string> entries;
+    std::istringstream is(contents);
+    std::string line;
+    while (std::getline(is, line)) {
+        std::string entry = trim(line);
+        if (entry.empty() || entry[0] == '#')
+            continue;
+        size_t eq = entry.find('=');
+        if (eq == std::string::npos)
+            continue;
+        std::string key = trim(entry.substr(0, eq));
+        if (key.empty())
+            continue;
+        entries[key] = trim(entry.substr(eq + 1));
+    }
+    return entries;
+}
+
+// Copies `contents`, giving every key that `forced` has an entry for its new
+// value, and taking those keys out of `forced` as it goes. What is left over
+// was not in the file at all, and belongs at the end.
+static std::string rewriteConf(const std::string &contents,
+                               std::map<std::string, std::string> &forced) {
+    std::string out;
+    std::istringstream is(contents);
+    std::string line;
+    while (std::getline(is, line)) {
+        const std::string entry = trim(line);
+        size_t eq = std::string::npos;
+        if (!entry.empty() && entry[0] != '#')
+            eq = entry.find('=');
+        std::string key;
+        bool multiline = false;
+        if (eq != std::string::npos) {
+            key = trim(entry.substr(0, eq));
+            multiline = (trim(entry.substr(eq + 1)) == "\"\"\"");
+        }
+        auto it = key.empty() ? forced.end() : forced.find(key);
+        const bool replaced = (it != forced.end());
+        if (replaced) {
+            out += key + " = " + it->second + "\n";
+            forced.erase(it);
+        } else {
+            out += line;
+            out.push_back('\n');
+        }
+        if (multiline) {
+            // The rest of the old value runs to the closing marker, and only
+            // belongs in the output if the key was left alone.
+            while (std::getline(is, line)) {
+                if (!replaced) {
+                    out += line;
+                    out.push_back('\n');
+                }
+                if (trim(line) == "\"\"\"")
+                    break;
+            }
+        }
+    }
+    return out;
+}
+
+static void do_set_conf(const std::string &defaults, const std::string &overrides) {
     const std::string path = LUANTI_ROOT "/minetest.conf";
 
     std::string existing;
     readWholeFile(path, existing);
-    std::set<std::string> present = confKeys(existing);
 
-    std::string out = existing;
+    std::map<std::string, std::string> forced = confEntries(overrides);
+    std::string out = rewriteConf(existing, forced);
     if (!out.empty() && out.back() != '\n')
         out.push_back('\n');
+    // Whatever the file did not already have.
+    for (const auto &entry : forced)
+        out += entry.first + " = " + entry.second + "\n";
 
-    std::istringstream is(contents);
+    std::set<std::string> present = confKeys(out);
+    std::istringstream is(defaults);
     std::string line;
     while (std::getline(is, line)) {
         std::string entry = trim(line);
@@ -617,9 +767,10 @@ static void do_set_conf(const std::string &contents) {
         std::cout << "emloop_set_conf: could not write " << path << std::endl;
 }
 
-void emloop_set_conf(const char *contents) {
-    std::string conf(contents ? contents : "");
-    post([conf]() { do_set_conf(conf); });
+void emloop_set_conf(const char *defaults, const char *overrides) {
+    std::string defaultConf(defaults ? defaults : "");
+    std::string overrideConf(overrides ? overrides : "");
+    post([defaultConf, overrideConf]() { do_set_conf(defaultConf, overrideConf); });
 }
 
 /////////////////////////////////////////////////////////////////////////////
