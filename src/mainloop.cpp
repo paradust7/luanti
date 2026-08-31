@@ -1232,5 +1232,13 @@ int main(int argc, char *argv[])
     for (int i = 0; i < main_argc; i++) {
         std::cout << "    " << main_argv[i] << std::endl;
     }
-    return main2(main_argc, main_argv);
+    int retval = main2(main_argc, main_argv);
+
+    // The player quit. Nothing draws to the canvas after this, so tell the
+    // launcher rather than leaving the last frame frozen on the screen.
+    std::cout << "main() returning " << retval << std::endl;
+    MAIN_THREAD_EM_ASM({
+        emloop_exited($0);
+    }, retval);
+    return retval;
 }

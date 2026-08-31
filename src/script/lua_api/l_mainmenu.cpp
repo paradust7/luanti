@@ -167,7 +167,7 @@ int ModApiMainMenu::l_close(lua_State *L)
 	GUIEngine* engine = getGuiEngine(L);
 	sanity_check(engine != NULL);
 
-	//engine->m_kill = true;
+	engine->m_kill = true;
 	return 0;
 }
 
