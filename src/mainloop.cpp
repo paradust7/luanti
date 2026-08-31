@@ -18,6 +18,9 @@
 #include <vector>
 #include <emsocketctl.h>
 
+#include <cstring>
+#include <exception>
+
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <dirent.h>
@@ -45,6 +48,11 @@
 // alongside the files it describes.
 #define PACK_DB_DIR LUANTI_ROOT "/.packs"
 
+// Where Luanti keeps its worlds. RUN_IN_PLACE makes LUANTI_ROOT path_user, and
+// this is the only place getAvailableWorlds() looks. Mirrors WORLDS_DIR in
+// launcher.js.
+#define WORLDS_DIR LUANTI_ROOT "/worlds"
+
 extern "C" {
     EMSCRIPTEN_KEEPALIVE
     void emloop_set_pointerlock(int want);
@@ -63,6 +71,21 @@ extern "C" {
     // Answers asynchronously with emloop_pack_removed().
     EMSCRIPTEN_KEEPALIVE
     void emloop_remove_pack(const char *name);
+
+    // Add up how much space something is taking in persistent storage. `kind`
+    // is "pack" or "world". Answers asynchronously with emloop_usage_result().
+    EMSCRIPTEN_KEEPALIVE
+    void emloop_disk_usage(const char *kind, const char *name);
+
+    // Delete a saved world and everything in it.
+    // Answers asynchronously with emloop_world_deleted().
+    EMSCRIPTEN_KEEPALIVE
+    void emloop_delete_world(const char *name);
+
+    // Pack a saved world into a zip archive, for the player to keep.
+    // Answers asynchronously with emloop_world_zipped().
+    EMSCRIPTEN_KEEPALIVE
+    void emloop_zip_world(const char *name);
 
     EMSCRIPTEN_KEEPALIVE
     void emloop_invoke_main(int argc, char* argv[]);
@@ -621,6 +644,389 @@ void emloop_remove_pack(const char *name) {
         return;
     }
     post([packName]() { do_remove_pack(packName); });
+}
+
+/////////////////////////////////////////////////////////////////////////////
+// Saved worlds
+/////////////////////////////////////////////////////////////////////////////
+
+// A world directory name is chosen by the player, by way of Luanti, so it can
+// hold much more than a pack name can. All it ever has to do here is name a
+// child of WORLDS_DIR, so anything that could reach further is refused rather
+// than cleaned up.
+static bool validWorldName(const std::string &name) {
+    if (name.empty() || name.size() > 255 || name == "." || name == "..")
+        return false;
+    // A leading dot would hide the directory, which Luanti never does.
+    if (name[0] == '.')
+        return false;
+    return name.find('/') == std::string::npos &&
+           name.find('\\') == std::string::npos;
+}
+
+// A world is packed in memory, so how big one can be is a question of how much
+// of the heap is going spare next to everything Luanti has already reserved.
+// Past this the tab would run out of memory partway through, so it is refused
+// with a message instead.
+#define ZIP_MAX_BYTES (512ull * 1024 * 1024)
+
+static std::string worldPath(const std::string &name) {
+    return std::string(WORLDS_DIR "/") + name;
+}
+
+// One file or directory found below the root of a walk.
+struct TreeEntry {
+    std::string path; // absolute
+    std::string rel;  // relative to the root of the walk; empty for the root
+    bool isDir;
+    off_t size;       // 0 for a directory
+};
+
+// Everything at or below `root`, parents before children, or false if `root`
+// is not a directory. Anything that is neither a file nor a directory is left
+// out: a world holds neither.
+//
+// The walk is iterative rather than recursive, so that how deeply a world
+// nests is not a question of stack space.
+static bool collectTree(const std::string &root, std::vector<TreeEntry> &out) {
+    struct stat st;
+    if (lstat(root.c_str(), &st) != 0 || !S_ISDIR(st.st_mode))
+        return false;
+    // Index of the next entry whose contents are still to be read. Children
+    // are appended behind their parent, so walking forward from here reaches
+    // every directory exactly once.
+    size_t next = out.size();
+    out.push_back(TreeEntry{root, std::string(), true, 0});
+    for (; next < out.size(); next++) {
+        if (!out[next].isDir)
+            continue;
+        // Taken by value: appending below moves what `out` holds.
+        const std::string dirPath = out[next].path;
+        const std::string dirRel = out[next].rel;
+        DIR *d = opendir(dirPath.c_str());
+        if (!d) {
+            std::cout << "opendir(" << dirPath << ") failed: " << strerror(errno)
+                      << std::endl;
+            continue;
+        }
+        struct dirent *ent;
+        while ((ent = readdir(d)) != nullptr) {
+            const std::string child = ent->d_name;
+            if (child == "." || child == "..")
+                continue;
+            TreeEntry e;
+            e.path = dirPath + "/" + child;
+            e.rel = dirRel.empty() ? child : dirRel + "/" + child;
+            struct stat cst;
+            if (lstat(e.path.c_str(), &cst) != 0)
+                continue;
+            if (S_ISDIR(cst.st_mode)) {
+                e.isDir = true;
+                e.size = 0;
+            } else if (S_ISREG(cst.st_mode)) {
+                e.isDir = false;
+                e.size = cst.st_size;
+            } else {
+                continue;
+            }
+            out.push_back(e);
+        }
+        closedir(d);
+    }
+    return true;
+}
+
+// Sizes are reported to the page as doubles: a byte count is well inside what
+// one holds exactly, and it is what crosses the EM_ASM boundary unharmed.
+static void notifyUsage(const std::string &kind, const std::string &name,
+                        double bytes) {
+    MAIN_THREAD_EM_ASM({
+        emloop_usage_result(UTF8ToString($0), UTF8ToString($1), $2);
+    }, kind.c_str(), name.c_str(), bytes);
+}
+
+// How much space a world's files take up, or -1 if there is no such world.
+static double worldUsage(const std::string &name) {
+    std::vector<TreeEntry> tree;
+    if (!collectTree(worldPath(name), tree))
+        return -1;
+    double total = 0;
+    for (const TreeEntry &e : tree)
+        total += (double)e.size;
+    return total;
+}
+
+// How much space a pack's files take up, or -1 if it is not installed.
+//
+// Only what the pack laid down is counted, which is what uninstalling it would
+// give back. Worlds and anything the player installed from inside Luanti are
+// not part of a pack and are not counted here.
+static double packUsage(const std::string &name) {
+    std::string manifest;
+    if (!readWholeFile(packMetaPath(name, ".files"), manifest))
+        return -1;
+    double total = 0;
+    std::istringstream is(manifest);
+    std::string line;
+    while (std::getline(is, line)) {
+        if (line.size() < 3 || line[0] != 'F' || line[1] != ' ')
+            continue;
+        struct stat st;
+        const std::string path = line.substr(2);
+        if (insideLuantiRoot(path) && stat(path.c_str(), &st) == 0 &&
+                S_ISREG(st.st_mode))
+            total += (double)st.st_size;
+    }
+    return total;
+}
+
+static void do_disk_usage(const std::string &kind, const std::string &name) {
+    double bytes = -1;
+    // Without persistent storage nothing is stored, so nothing is taking up
+    // space and there is no manifest to read either way.
+    if (!persistent) {
+        bytes = -1;
+    } else if (kind == "world") {
+        bytes = worldUsage(name);
+    } else if (kind == "pack") {
+        bytes = packUsage(name);
+    }
+    notifyUsage(kind, name, bytes);
+}
+
+void emloop_disk_usage(const char *kind, const char *name) {
+    std::string usageKind(kind ? kind : "");
+    std::string usageName(name ? name : "");
+    const bool ok = (usageKind == "world") ? validWorldName(usageName)
+                  : (usageKind == "pack") ? validPackName(usageName)
+                  : false;
+    if (!ok) {
+        std::cout << "emloop_disk_usage: rejecting " << usageKind << " "
+                  << usageName << std::endl;
+        notifyUsage(usageKind, usageName, -1);
+        return;
+    }
+    post([usageKind, usageName]() { do_disk_usage(usageKind, usageName); });
+}
+
+static void notifyWorldDeleteProgress(const std::string &name, double fraction) {
+    MAIN_THREAD_EM_ASM({
+        emloop_world_delete_progress(UTF8ToString($0), $1);
+    }, name.c_str(), fraction);
+}
+
+static void notifyWorldDeleted(const std::string &name, bool ok) {
+    MAIN_THREAD_EM_ASM({
+        emloop_world_deleted(UTF8ToString($0), $1);
+    }, name.c_str(), ok ? 1 : 0);
+}
+
+// Delete a saved world and everything in it. Like removing a pack, this is the
+// module's job rather than the page's: the page can reach the same files, but
+// LUANTI_ROOT is mounted here, and deleting underneath a mount leaves it
+// looking like the files are still there.
+static void do_delete_world(const std::string &name) {
+    const std::string root = worldPath(name);
+    std::vector<TreeEntry> tree;
+    if (!persistent || !collectTree(root, tree)) {
+        std::cout << "emloop_delete_world: no such world: " << name << std::endl;
+        notifyWorldDeleted(name, false);
+        return;
+    }
+    // Children come after their parent, so working backwards reaches each
+    // directory only once it has been emptied.
+    const size_t total = tree.size();
+    size_t done = 0;
+    int reported = 0;
+    for (size_t i = total; i-- > 0; ) {
+        if (tree[i].isDir)
+            rmdir(tree[i].path.c_str());
+        else
+            unlink(tree[i].path.c_str());
+        done++;
+        // Deleting from OPFS is slow enough to be worth watching.
+        int pct = (int)((100 * done) / total);
+        if (pct >= reported + 2) {
+            reported = pct;
+            notifyWorldDeleteProgress(name, pct / 100.0);
+        }
+    }
+    struct stat st;
+    const bool gone = (lstat(root.c_str(), &st) != 0);
+    std::cout << "emloop_delete_world: " << name
+              << (gone ? " deleted" : " could not be fully deleted") << std::endl;
+    notifyWorldDeleted(name, gone);
+}
+
+void emloop_delete_world(const char *name) {
+    std::string worldName(name ? name : "");
+    if (!validWorldName(worldName)) {
+        std::cout << "emloop_delete_world: rejecting invalid world name" << std::endl;
+        notifyWorldDeleted(worldName, false);
+        return;
+    }
+    post([worldName]() { do_delete_world(worldName); });
+}
+
+static void notifyZipProgress(const std::string &name, double fraction) {
+    MAIN_THREAD_EM_ASM({
+        emloop_zip_progress(UTF8ToString($0), $1);
+    }, name.c_str(), fraction);
+}
+
+// Hands the finished archive to the page. A null `data` means the world could
+// not be packed.
+//
+// This blocks until the page has copied the bytes out, which is what lets the
+// archive be handed over where it was built instead of being copied into a
+// buffer of its own first. At these sizes that second copy is worth avoiding.
+static void notifyWorldZipped(const std::string &name, const void *data, size_t size) {
+    MAIN_THREAD_EM_ASM({
+        emloop_world_zipped(UTF8ToString($0), $1, $2);
+    }, name.c_str(), data, (double)size);
+}
+
+// Where libarchive's output goes. The archive is handed to the page in one
+// piece rather than written anywhere, so it is built up in memory.
+static la_ssize_t zipWrite(struct archive *a, void *client_data,
+                           const void *buff, size_t length) {
+    std::string *out = static_cast<std::string *>(client_data);
+    out->append(static_cast<const char *>(buff), length);
+    return (la_ssize_t)length;
+}
+
+// Pack `tree` into a zip archive in `out`. `totalBytes` is how much file data
+// that comes to, which is what the progress reported along the way counts off.
+//
+// Zip rather than the tar/zstd a pack uses: this one is for the player to keep
+// and open with whatever they happen to have.
+static bool writeZip(const std::string &name, const std::vector<TreeEntry> &tree,
+                     double totalBytes, std::string &out) {
+    struct archive *a = archive_write_new();
+    if (!a)
+        return false;
+    bool ok = false;
+    if (archive_write_set_format_zip(a) != ARCHIVE_OK) {
+        std::cout << "emloop_zip_world: zip is not supported" << std::endl;
+    } else if (archive_write_open2(a, &out, nullptr, zipWrite, nullptr,
+                                   nullptr) != ARCHIVE_OK) {
+        std::cout << "emloop_zip_world: " << archive_error_string(a) << std::endl;
+    } else {
+        ok = true;
+        double done = 0;
+        int reported = 0;
+        std::vector<char> buf(64 * 1024);
+        for (const TreeEntry &e : tree) {
+            // Every path is below the world's own directory, so unpacking the
+            // archive leaves one folder rather than a scatter of files.
+            const std::string entryName = e.rel.empty() ? name : name + "/" + e.rel;
+            struct archive_entry *entry = archive_entry_new();
+            archive_entry_set_pathname(entry, entryName.c_str());
+            archive_entry_set_filetype(entry, e.isDir ? AE_IFDIR : AE_IFREG);
+            archive_entry_set_perm(entry, e.isDir ? 0755 : 0644);
+            archive_entry_set_size(entry, e.isDir ? 0 : e.size);
+            int r = archive_write_header(a, entry);
+            archive_entry_free(entry);
+            if (r < ARCHIVE_OK)
+                std::cout << "emloop_zip_world: write header: "
+                          << archive_error_string(a) << std::endl;
+            if (r < ARCHIVE_WARN) {
+                ok = false;
+                break;
+            }
+            if (e.isDir)
+                continue;
+            std::ifstream is(e.path, std::ifstream::binary);
+            if (!is) {
+                std::cout << "emloop_zip_world: could not read " << e.path << std::endl;
+                ok = false;
+                break;
+            }
+            // Only as much as the header promised: a world being written to
+            // while this runs must not desync the archive.
+            off_t left = e.size;
+            while (left > 0) {
+                is.read(buf.data(), std::min<off_t>(left, (off_t)buf.size()));
+                const std::streamsize got = is.gcount();
+                if (got <= 0) {
+                    std::cout << "emloop_zip_world: " << e.path
+                              << " ended early" << std::endl;
+                    ok = false;
+                    break;
+                }
+                if (archive_write_data(a, buf.data(), (size_t)got) < 0) {
+                    std::cout << "emloop_zip_world: " << archive_error_string(a)
+                              << std::endl;
+                    ok = false;
+                    break;
+                }
+                left -= got;
+                done += (double)got;
+                // Reading a world out of OPFS is slow enough to be worth watching.
+                int pct = (totalBytes > 0) ? (int)((100 * done) / totalBytes) : 100;
+                if (pct >= reported + 2) {
+                    reported = pct;
+                    notifyZipProgress(name, pct / 100.0);
+                }
+            }
+            if (!ok)
+                break;
+        }
+    }
+    if (archive_write_close(a) != ARCHIVE_OK)
+        ok = false;
+    archive_write_free(a);
+    return ok;
+}
+
+static void do_zip_world(const std::string &name) {
+    std::vector<TreeEntry> tree;
+    if (!persistent || !collectTree(worldPath(name), tree)) {
+        std::cout << "emloop_zip_world: no such world: " << name << std::endl;
+        notifyWorldZipped(name, nullptr, 0);
+        return;
+    }
+    double totalBytes = 0;
+    for (const TreeEntry &e : tree)
+        totalBytes += (double)e.size;
+    if (totalBytes > (double)ZIP_MAX_BYTES) {
+        std::cout << "emloop_zip_world: " << name
+                  << " is too big to pack in memory" << std::endl;
+        notifyWorldZipped(name, nullptr, 0);
+        return;
+    }
+
+    std::string out;
+    bool ok = false;
+    try {
+        // A world is mostly map data, which is compressed where it sits, so
+        // the archive comes to about what went into it. Asking for that much
+        // once beats growing into it a doubling at a time.
+        out.reserve((size_t)totalBytes + 64 * 1024);
+        ok = writeZip(name, tree, totalBytes, out);
+    } catch (const std::exception &err) {
+        // Running out of heap is the one that matters here. Better a message
+        // than a tab that stops in the middle of packing.
+        std::cout << "emloop_zip_world: " << err.what() << std::endl;
+        ok = false;
+    }
+    if (!ok) {
+        notifyWorldZipped(name, nullptr, 0);
+        return;
+    }
+    std::cout << "emloop_zip_world: packed " << name << " into " << out.size()
+              << " bytes" << std::endl;
+    notifyWorldZipped(name, out.data(), out.size());
+}
+
+void emloop_zip_world(const char *name) {
+    std::string worldName(name ? name : "");
+    if (!validWorldName(worldName)) {
+        std::cout << "emloop_zip_world: rejecting invalid world name" << std::endl;
+        notifyWorldZipped(worldName, nullptr, 0);
+        return;
+    }
+    post([worldName]() { do_zip_world(worldName); });
 }
 
 /////////////////////////////////////////////////////////////////////////////
