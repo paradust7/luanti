@@ -37,9 +37,28 @@ void FpsControl::reset()
 
 void FpsControl::limit(IrrlichtDevice *device, f32 *dtime)
 {
+	const float fps_limit = device->isWindowFocused()
+			? g_settings->getFloat("fps_max")
+			: g_settings->getFloat("fps_max_unfocused");
+	const u64 frametime_min = 1000000.0f / std::max(fps_limit, 1.0f);
+
+	u64 time = porting::getTimeUs();
+
+	if (time > last_time) // Make sure time hasn't overflowed
+		busy_time = time - last_time;
+	else
+		busy_time = 0;
+
+	if (busy_time < frametime_min) {
+		sleep_time = frametime_min - busy_time;
+		porting::preciseSleepUs(sleep_time);
+	} else {
+		sleep_time = 0;
+	}
+
 	// Read the timer again to accurately determine how long we actually slept,
 	// rather than calculating it by adding sleep_time to time.
-	u64 time = porting::getTimeUs();
+	time = porting::getTimeUs();
 
 	if (time > last_time) // Make sure last_time hasn't overflowed
 		*dtime = (time - last_time) / 1000000.0f;
