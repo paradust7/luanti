@@ -3,10 +3,6 @@
 // Copyright (C) 2010-2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include <map>
-
-#include <emscripten/html5.h>
-#include "mainloop.h"
-
 #include "irrlichttypes_bloated.h"
 #include "chat_interface.h"
 #include "debug.h"
@@ -34,8 +30,6 @@
 #include "network/socket.h"
 #include "network/networkexceptions.h"
 #include "mapblock.h"
-#include "util/base64.h"
-#include "util/hex.h"
 #if USE_CURSES
 	#include "terminal_chat_console.h"
 #endif
@@ -124,7 +118,6 @@ static bool game_configure_subgame(GameParams *game_params, const Settings &cmd_
 static bool get_game_from_cmdline(GameParams *game_params, const Settings &cmd_args);
 static bool determine_subgame(GameParams *game_params);
 
-static Thread *spawn_dedicated_server(const GameParams &game_params, const Settings &cmd_args);
 static bool run_dedicated_server(const GameParams &game_params, const Settings &cmd_args);
 static bool migrate_map_database(const GameParams &game_params, const Settings &cmd_args);
 static bool recompress_map_database(const GameParams &game_params, const Settings &cmd_args);
@@ -135,19 +128,6 @@ static bool recompress_map_database(const GameParams &game_params, const Setting
 static FileLogOutput file_log_output;
 
 static OptionList allowed_options;
-
-std::unordered_map<std::string, MediaInfo> warmup_media;
-void do_cache_warmup() {
-	std::cout << "Warming cache" << std::endl;
-	std::string cache_dir = porting::path_cache + DIR_DELIM + "media";
-	fs::CreateAllDirs(cache_dir);
-	for (const auto &kv : warmup_media) {
-		const MediaInfo &info = kv.second;
-		std::string digest = base64_decode(info.sha1_digest);
-		std::string dest = cache_dir + DIR_DELIM + hex_encode(digest.c_str(), 20);
-		fs::CopyFileContents(info.path, dest);
-	}
-}
 
 int main2(int argc, char *argv[])
 {
@@ -298,35 +278,14 @@ int main2(int argc, char *argv[])
 
 	sanity_check(!game_params.world_path.empty());
 
-	if (cmd_args.getFlag("warm")) {
-		// Create a dummy server to initialize but then delete.
-		// This lets us grab the media list.
-		Address bind_addr(0, 0, 0, 0, 65535);
-		Server *server = new Server(game_params.world_path, game_params.game_spec, false, bind_addr, true);
-		warmup_media = server->getMedia();
-		delete server;
-        }
-
 	if (game_params.is_dedicated_server)
 		return run_dedicated_server(game_params, cmd_args) ? 0 : 1;
-
-	Thread *background_server = nullptr;
-	if (cmd_args.getFlag("withserver")) {
-		background_server = spawn_dedicated_server(game_params, cmd_args);
-	}
 
 #if CHECK_CLIENT_BUILD()
 	retval = ClientLauncher().run(game_params, cmd_args) ? 0 : 1;
 #else
 	retval = 0;
 #endif
-
-	if (background_server) {
-		volatile auto &kill = *porting::signal_handler_killstatus();
-		kill = true;
-		background_server->stop();
-		background_server->wait();
-	}
 
 	// Update configuration file
 	if (!g_settings_path.empty())
@@ -467,10 +426,6 @@ static void set_allowed_options(OptionList *allowed_options)
 			_("Enable random user input (for testing)"))));
 	allowed_options->insert(std::make_pair("server", ValueSpec(VALUETYPE_FLAG,
 			_("Behave as dedicated server"))));
-	allowed_options->insert(std::make_pair("withserver", ValueSpec(VALUETYPE_FLAG,
-			_("Run server in addition to client"))));
-	allowed_options->insert(std::make_pair("warm", ValueSpec(VALUETYPE_FLAG,
-			_("Warm cache for specific game"))));
 	allowed_options->insert(std::make_pair("name", ValueSpec(VALUETYPE_STRING,
 			_("Set player name"))));
 	allowed_options->insert(std::make_pair("password", ValueSpec(VALUETYPE_STRING,
@@ -1190,35 +1145,6 @@ static bool determine_subgame(GameParams *game_params)
 /*****************************************************************************
  * Dedicated server
  *****************************************************************************/
-
-class BackgroundThread : public Thread
-{
-public:
-
-        BackgroundThread(const GameParams &game_params, const Settings &cmd_args) :
-                Thread("BackgroundServer"),
-                m_game_params(game_params),
-		m_cmd_args(cmd_args)
-        {}
-
-        virtual void *run() {
-		run_dedicated_server(m_game_params, m_cmd_args);
-		return nullptr;
-	}
-
-private:
-        const GameParams &m_game_params;
-	const Settings &m_cmd_args;
-};
-
-static Thread *spawn_dedicated_server(const GameParams &game_params, const Settings &cmd_args)
-{
-	// Launch in separate thread and return right away
-	auto thread = new BackgroundThread(game_params, cmd_args);
-	thread->start();
-	return thread;
-}
-
 static bool run_dedicated_server(const GameParams &game_params, const Settings &cmd_args)
 {
 	verbosestream << _("Using world path") << " ["

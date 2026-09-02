@@ -497,13 +497,6 @@ bool ClientLauncher::launch_game(GameErrorData &errordata, GameStartData &start_
 		// Figure out which game we'll be using
 		// Note that start_data.game_spec contains the gameid from the command line
 		bool world_exists = getWorldExists(worldspec.path);
-		if (!world_exists) {
-			bool mayCreate = skip_main_menu && start_data.isSinglePlayer();
-			if (mayCreate) {
-				loadGameConfAndInitWorld(worldspec.path, worldspec.name, start_data.game_spec, true);
-				world_exists = getWorldExists(worldspec.path);
-			}
-		}
 		if (world_exists) {
 			auto world_game = findWorldSubgame(worldspec.path);
 			if (world_game.isValid())
