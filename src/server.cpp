@@ -600,14 +600,6 @@ void Server::init()
 	m_csm_restriction_noderange = g_settings->getU32("csm_restriction_noderange");
 }
 
-#ifdef __EMSCRIPTEN__
-std::unordered_map<std::string, MediaInfo> Server::getMedia()
-{
-	init();
-	return m_media;
-}
-#endif
-
 void Server::start()
 {
 	init();

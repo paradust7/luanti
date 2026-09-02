@@ -193,11 +193,6 @@ public:
 	~Server();
 	DISABLE_CLASS_COPY(Server);
 
-#ifdef __EMSCRIPTEN__
-        // For warming the cache.
-        std::unordered_map<std::string, MediaInfo> getMedia();
-#endif
-
 	void start();
 	void stop();
 	// Actual processing is done in another thread.
