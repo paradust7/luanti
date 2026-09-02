@@ -12,9 +12,8 @@ if(USE_SOUND)
 		${CMAKE_CURRENT_SOURCE_DIR}/sound/sound_openal.cpp
 		${CMAKE_CURRENT_SOURCE_DIR}/sound/sound_singleton.cpp
 	)
-	# On emscripten, OPENAL_INCLUDE_DIR is sysroot/include directory,
-	# and this breaks stdlib when added to -isystem.
 	set(SOUND_INCLUDE_DIRS
+		${OPENAL_INCLUDE_DIR}
 		${VORBIS_INCLUDE_DIR}
 		${OGG_INCLUDE_DIR}
 		PARENT_SCOPE)
