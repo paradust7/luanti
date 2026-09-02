@@ -53,6 +53,11 @@
 // launcher.js.
 #define WORLDS_DIR LUANTI_ROOT "/worlds"
 
+// Where Luanti looks for games. RUN_IN_PLACE makes LUANTI_ROOT path_user, and
+// getAvailableGamePaths() lists the directories below this one. A game pack
+// unpacks into here, and so does a game installed from a dropped zip.
+#define GAMES_DIR LUANTI_ROOT "/games"
+
 extern "C" {
     EMSCRIPTEN_KEEPALIVE
     void emloop_set_pointerlock(int want);
@@ -86,6 +91,20 @@ extern "C" {
     // Answers asynchronously with emloop_world_zipped().
     EMSCRIPTEN_KEEPALIVE
     void emloop_zip_world(const char *name);
+
+    // Install a world or a game from a zip archive. `kind` is "world" or
+    // "game"; `name` is the directory it is installed as; `prefix` is the
+    // folder inside the archive that holds it, empty when the archive is that
+    // folder itself; `count` is how many entries the launcher found below that
+    // prefix, which how far along the unpacking is is measured against.
+    // Whatever is already installed under that name is deleted first.
+    //
+    // Takes ownership of `data`, which must come from malloc().
+    // Answers asynchronously with emloop_zip_installed().
+    EMSCRIPTEN_KEEPALIVE
+    void emloop_install_zip(const char *kind, const char *name,
+                            const char *prefix, size_t count,
+                            void *data, size_t size);
 
     EMSCRIPTEN_KEEPALIVE
     void emloop_invoke_main(int argc, char* argv[]);
@@ -1027,6 +1046,336 @@ void emloop_zip_world(const char *name) {
         return;
     }
     post([worldName]() { do_zip_world(worldName); });
+}
+
+/////////////////////////////////////////////////////////////////////////////
+// Installing a world or a game from a zip
+/////////////////////////////////////////////////////////////////////////////
+
+// What a game installed from a zip is recorded under in the pack database,
+// where a downloaded game carries the version of the pack it came from. No
+// pack on the server is ever recorded under this, which is how the launcher
+// knows this one is not to be fetched or upgraded. Mirrors
+// LOCAL_PACK_VERSION in launcher.js.
+#define LOCAL_PACK_VERSION "local"
+
+// How far along an install from a zip is. `phase` is "delete" while what was
+// installed under the same name is being cleared out, and "install" while the
+// archive is being unpacked.
+static void notifyZipInstallProgress(const std::string &kind, const std::string &name,
+                                     const char *phase, double fraction) {
+    MAIN_THREAD_EM_ASM({
+        emloop_zip_install_progress(UTF8ToString($0), UTF8ToString($1),
+                                    UTF8ToString($2), $3);
+    }, kind.c_str(), name.c_str(), phase, fraction);
+}
+
+static void notifyZipInstalled(const std::string &kind, const std::string &name, bool ok) {
+    MAIN_THREAD_EM_ASM({
+        emloop_zip_installed(UTF8ToString($0), UTF8ToString($1), $2);
+    }, kind.c_str(), name.c_str(), ok ? 1 : 0);
+}
+
+// Where an install of `kind` under `name` lands.
+static std::string installRoot(const std::string &kind, const std::string &name) {
+    if (kind == "world")
+        return worldPath(name);
+    return std::string(GAMES_DIR "/") + name;
+}
+
+// The file that says the installed directory is what it claims to be. Luanti
+// only lists a world with a world.mt or a game with a game.conf, so an archive
+// that leaves neither behind has not installed anything.
+static std::string installMarker(const std::string &kind) {
+    return (kind == "world") ? "world.mt" : "game.conf";
+}
+
+// Delete `root` and everything in it, reporting how far along that is where
+// there is enough of it to be worth watching. True if nothing is left.
+static bool wipeTree(const std::string &kind, const std::string &name,
+                     const std::string &root, bool report) {
+    std::vector<TreeEntry> tree;
+    if (!collectTree(root, tree))
+        return true; // Nothing installed under this name.
+    // Children come after their parent, so working backwards reaches each
+    // directory only once it has been emptied.
+    const size_t total = tree.size();
+    size_t done = 0;
+    int reported = 0;
+    for (size_t i = total; i-- > 0; ) {
+        if (tree[i].isDir)
+            rmdir(tree[i].path.c_str());
+        else
+            unlink(tree[i].path.c_str());
+        done++;
+        // Deleting from OPFS is slow enough to be worth watching.
+        int pct = (int)((100 * done) / total);
+        if (report && pct >= reported + 2) {
+            reported = pct;
+            notifyZipInstallProgress(kind, name, "delete", pct / 100.0);
+        }
+    }
+    struct stat st;
+    return (lstat(root.c_str(), &st) != 0);
+}
+
+// What `path` from the archive installs as, relative to the destination, or an
+// empty string if it is not part of what is being installed.
+//
+// `prefix` is the folder inside the archive that holds the world or game, so
+// everything below that is kept and everything else is left out. Anything that
+// could reach outside the destination is dropped rather than cleaned up: where
+// an archive lands is not the archive's to decide.
+static std::string zipEntryRelPath(const std::string &prefix, const std::string &path) {
+    std::string p = path;
+    // "./" is how some archivers write a path that is already relative.
+    while (p.size() >= 2 && p[0] == '.' && p[1] == '/')
+        p.erase(0, 2);
+    if (p.size() < prefix.size() || p.compare(0, prefix.size(), prefix) != 0)
+        return std::string();
+    p.erase(0, prefix.size());
+    // A directory entry carries a trailing slash, which is not part of a path.
+    while (!p.empty() && p.back() == '/')
+        p.pop_back();
+    for (size_t at = 0; at < p.size(); ) {
+        size_t end = p.find('/', at);
+        if (end == std::string::npos)
+            end = p.size();
+        const std::string part = p.substr(at, end - at);
+        if (part.empty() || part == "." || part == "..")
+            return std::string();
+        at = end + 1;
+    }
+    return p;
+}
+
+// Make `path` if it is not there already, and note it in `manifest` the first
+// time it is seen, so that uninstalling takes it away again.
+static bool noteDir(const std::string &path, std::set<std::string> &seen,
+                    std::string &manifest) {
+    if (!seen.insert(path).second)
+        return true;
+    if (mkdir(path.c_str(), 0777) != 0 && errno != EEXIST)
+        return false;
+    manifest += "D ";
+    manifest += path;
+    manifest += '\n';
+    return true;
+}
+
+// Make every directory `rel` sits in, parents first.
+static bool noteParents(const std::string &dest, const std::string &rel,
+                        std::set<std::string> &seen, std::string &manifest) {
+    for (size_t at = rel.find('/'); at != std::string::npos; at = rel.find('/', at + 1)) {
+        if (!noteDir(dest + "/" + rel.substr(0, at), seen, manifest))
+            return false;
+    }
+    return true;
+}
+
+// Unpack what is below `prefix` in `a` into `dest`, appending every path it
+// lays down to `manifest`. `count` is how many entries are expected, which how
+// far along this is is measured against.
+//
+// The count comes from the launcher rather than from a pass over the archive:
+// libarchive reads a zip back to front, so how much of the input it has got
+// through says nothing about how much is left, and unpacking into OPFS costs
+// far more per file than per byte anyway.
+static bool extract_zip(struct archive *a, const std::string &kind,
+                        const std::string &name, const std::string &prefix,
+                        const std::string &dest, size_t count, std::string &manifest)
+{
+    struct archive *ext = archive_write_disk_new();
+    archive_write_disk_set_options(ext, ARCHIVE_EXTRACT_PERM);
+    archive_write_disk_set_standard_lookup(ext);
+    // Paths are written relative to the working directory, which do_init_fs
+    // leaves at "/", the same way a pack is unpacked.
+    const std::string relDest = dest.substr(1);
+    std::set<std::string> dirs;
+    bool ok = true;
+    size_t done = 0;
+    int reported = 0;
+    for (;;) {
+        if (count) {
+            int pct = (int)std::min<size_t>(100, (100 * done) / count);
+            if (pct >= reported + 2) {
+                reported = pct;
+                notifyZipInstallProgress(kind, name, "install", pct / 100.0);
+            }
+        }
+        struct archive_entry *entry;
+        int r = archive_read_next_header(a, &entry);
+        if (r == ARCHIVE_EOF)
+            break;
+        if (r < ARCHIVE_OK)
+            std::cout << "emloop_install_zip: read next header: "
+                      << archive_error_string(a) << std::endl;
+        if (r < ARCHIVE_WARN) {
+            ok = false;
+            break;
+        }
+        const char *rawpath = archive_entry_pathname(entry);
+        const std::string rel = rawpath ? zipEntryRelPath(prefix, rawpath) : std::string();
+        const mode_t type = archive_entry_filetype(entry);
+        // Anything outside the folder being installed, and anything that is
+        // neither a file nor a directory: a world holds neither, and a link is
+        // a way to write somewhere else.
+        if (rel.empty() || (type != AE_IFREG && type != AE_IFDIR))
+            continue;
+        done++;
+        const std::string path = dest + "/" + rel;
+        // An archive need not carry an entry for a directory before the files
+        // in it, so every parent is made on the way rather than when it turns
+        // up.
+        if (!noteParents(dest, rel, dirs, manifest)) {
+            std::cout << "emloop_install_zip: could not create the folders for "
+                      << path << std::endl;
+            ok = false;
+            break;
+        }
+        if (type == AE_IFDIR) {
+            if (!noteDir(path, dirs, manifest)) {
+                std::cout << "emloop_install_zip: could not create " << path << std::endl;
+                ok = false;
+                break;
+            }
+            continue;
+        }
+        archive_entry_set_pathname(entry, (relDest + "/" + rel).c_str());
+        r = archive_write_header(ext, entry);
+        if (r < ARCHIVE_OK)
+            std::cout << "emloop_install_zip: write header: "
+                      << archive_error_string(ext) << std::endl;
+        else if (archive_entry_size(entry) > 0) {
+            r = copy_data(a, ext);
+            if (r < ARCHIVE_OK)
+                std::cout << "emloop_install_zip: copy_data failed" << std::endl;
+            if (r < ARCHIVE_WARN) {
+                ok = false;
+                break;
+            }
+        }
+        if (r >= ARCHIVE_WARN) {
+            manifest += "F ";
+            manifest += path;
+            manifest += '\n';
+        }
+        r = archive_write_finish_entry(ext);
+        if (r < ARCHIVE_OK)
+            std::cout << "emloop_install_zip: archive_write_finish_entry: "
+                      << archive_error_string(ext) << std::endl;
+        if (r < ARCHIVE_WARN) {
+            ok = false;
+            break;
+        }
+    }
+    archive_write_close(ext);
+    archive_write_free(ext);
+    return ok;
+}
+
+static bool unzip(const std::string &kind, const std::string &name,
+                  const std::string &prefix, const std::string &dest,
+                  size_t count, void *data, size_t size, std::string &manifest) {
+    struct archive *a = archive_read_new();
+    bool ok = false;
+    if (archive_read_support_format_zip(a) != ARCHIVE_OK) {
+        std::cout << "emloop_install_zip failed: zip is not supported" << std::endl;
+    } else if (archive_read_open_memory(a, data, size) != ARCHIVE_OK) {
+        std::cout << "emloop_install_zip failed: invalid archive" << std::endl;
+    } else {
+        ok = extract_zip(a, kind, name, prefix, dest, count, manifest);
+    }
+    archive_read_close(a);
+    archive_read_free(a);
+    return ok;
+}
+
+static void do_install_zip(const std::string &kind, const std::string &name,
+                           const std::string &prefix, size_t count,
+                           void *data, size_t size) {
+    const std::string dest = installRoot(kind, name);
+    // A game is recorded in the pack database the way a downloaded one is, so
+    // that the page lists it, can add up what it takes, and can uninstall it
+    // again. A world is found by looking in worlds/, so there is nothing to
+    // record for one. Without persistent storage there is nothing to record
+    // into either: the install only lasts as long as the page.
+    const bool remember = (kind == "game") && persistent;
+
+    if (remember) {
+        // The marker goes first, so that an install cut short leaves the game
+        // looking uninstalled rather than installed and half unpacked.
+        unlink(packMetaPath(name, ".ver").c_str());
+        unlink(packMetaPath(name, ".files").c_str());
+    }
+    // Whatever was installed under this name is replaced rather than merged
+    // with: files the old one had and the new one does not would otherwise
+    // stay behind and be loaded alongside it.
+    if (!wipeTree(kind, name, dest, true)) {
+        std::cout << "emloop_install_zip: could not clear " << dest << std::endl;
+        notifyZipInstalled(kind, name, false);
+        return;
+    }
+    notifyZipInstallProgress(kind, name, "install", 0.0);
+
+    std::string manifest;
+    std::set<std::string> dirs;
+    bool ok = makeDirs(dest) && noteDir(dest, dirs, manifest);
+    if (!ok) {
+        std::cout << "emloop_install_zip: could not create " << dest << std::endl;
+    } else {
+        ok = unzip(kind, name, prefix, dest, count, data, size, manifest);
+    }
+    struct stat st;
+    if (ok && stat((dest + "/" + installMarker(kind)).c_str(), &st) != 0) {
+        std::cout << "emloop_install_zip: " << dest << " has no "
+                  << installMarker(kind) << std::endl;
+        ok = false;
+    }
+    if (!ok) {
+        // Half a world is worse than none: Luanti would list it and fail to
+        // open it. Take back what was written.
+        wipeTree(kind, name, dest, false);
+        notifyZipInstalled(kind, name, false);
+        return;
+    }
+    if (remember) {
+        if (!makeDirs(PACK_DB_DIR) ||
+                !writeWholeFile(packMetaPath(name, ".files"), manifest) ||
+                !writeWholeFile(packMetaPath(name, ".ver"), LOCAL_PACK_VERSION)) {
+            // The files are all there, but nothing says so. Leaving them
+            // would be a game the page cannot see or uninstall.
+            std::cout << "emloop_install_zip: could not record " << name
+                      << " as installed" << std::endl;
+            wipeTree(kind, name, dest, false);
+            unlink(packMetaPath(name, ".files").c_str());
+            notifyZipInstalled(kind, name, false);
+            return;
+        }
+    }
+    std::cout << "emloop_install_zip: installed " << kind << " " << name << std::endl;
+    notifyZipInstalled(kind, name, true);
+}
+
+void emloop_install_zip(const char *kind, const char *name, const char *prefix,
+                        size_t count, void *data, size_t size) {
+    std::string zipKind(kind ? kind : "");
+    std::string zipName(name ? name : "");
+    std::string zipPrefix(prefix ? prefix : "");
+    const bool ok = (zipKind == "world") ? validWorldName(zipName)
+                  : (zipKind == "game") ? validPackName(zipName)
+                  : false;
+    if (!ok) {
+        std::cout << "emloop_install_zip: rejecting " << zipKind << " "
+                  << zipName << std::endl;
+        free(data);
+        notifyZipInstalled(zipKind, zipName, false);
+        return;
+    }
+    post([zipKind, zipName, zipPrefix, count, data, size]() {
+        do_install_zip(zipKind, zipName, zipPrefix, count, data, size);
+        free(data);
+    });
 }
 
 /////////////////////////////////////////////////////////////////////////////
