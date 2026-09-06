@@ -28,6 +28,7 @@
 #include <SDL_messagebox.h>
 #endif
 
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cassert>
@@ -112,11 +113,19 @@ static int SDLDeviceInstances = 0;
 extern "C" {
 	EMSCRIPTEN_KEEPALIVE
 	void irrlicht_resize(int width, int height);
+
+	// Generate a synthetic paste event (Ctrl+V) directly to Luanti.
+	// Whatever irrlicht_set_clipboard() set last will be pasted.
+	EMSCRIPTEN_KEEPALIVE
+	void irrlicht_paste(void);
 }
 
 static int canvas_width = 0;
 static int canvas_height = 0;
 static bool canvas_updated = false;
+
+// Set by the browser thread, consumed by the thread running the device.
+static std::atomic<bool> paste_requested{false};
 
 void irrlicht_resize(int width, int height) {
 	if (canvas_width != width || canvas_height != height) {
@@ -124,6 +133,10 @@ void irrlicht_resize(int width, int height) {
 		canvas_height = height;
 		canvas_updated = true;
 	}
+}
+
+void irrlicht_paste(void) {
+	paste_requested = true;
 }
 
 #ifdef _IRR_EMSCRIPTEN_PLATFORM_
@@ -863,6 +876,25 @@ bool CIrrDeviceSDL::run()
 		double dpr = emscripten_get_device_pixel_ratio();
 		SDL_SetWindowSize(Window, std::lround(canvas_width / dpr), std::lround(canvas_height / dpr));
 		emscripten_set_canvas_element_size("#canvas", canvas_width, canvas_height);
+	}
+
+	// Generate a synthetic paste event (Ctrl+V) when requested by the page.
+	// If the console or formspec field is focused, it will paste the contents
+	// of the clipboard into it.
+	if (paste_requested.exchange(false)) {
+		irrevent.EventType = EET_KEY_INPUT_EVENT;
+		irrevent.KeyInput.Key = KEY_KEY_V;
+		irrevent.KeyInput.Char = L'v';
+		irrevent.KeyInput.SystemKeyCode = SDL_SCANCODE_V;
+		irrevent.KeyInput.Shift = false;
+		irrevent.KeyInput.Control = true;
+
+		irrevent.KeyInput.PressedDown = true;
+		postEventFromUser(irrevent);
+		irrevent.KeyInput.PressedDown = false;
+		postEventFromUser(irrevent);
+
+		irrevent = {};
 	}
 
 	auto get_touch_id_x_y = [this, &irrevent, &SDL_event]() {

@@ -6,6 +6,10 @@
 
 #include "IOSOperator.h"
 
+#ifdef __EMSCRIPTEN__
+#include <string>
+#endif
+
 //! The OSOperator provides OS-specific methods and information.
 class COSOperator : public IOSOperator
 {
@@ -39,6 +43,11 @@ public:
 private:
 #ifdef _IRR_WINDOWS_API_
 	mutable core::stringc ClipboardBuf;
+#endif
+
+#ifdef __EMSCRIPTEN__
+	// What getTextFromClipboard() last returned.
+	mutable std::string ClipboardBuf;
 #endif
 
 #ifdef _IRR_COMPILE_WITH_SDL_DEVICE_
