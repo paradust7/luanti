@@ -260,12 +260,9 @@ HTTPFetchOngoing::HTTPFetchOngoing(const HTTPFetchRequest &request_,
 	std::string proxy = g_settings->get("secure.curl_proxy");
 	curl_easy_setopt(curl, CURLOPT_PROXY, proxy.empty() ? nullptr : proxy.c_str());
 
-	curl_easy_setopt(curl, CURLOPT_PROXY, "http://10.0.0.1:8080");
+	curl_easy_setopt(curl, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_WHATEVER);
+	curl_easy_setopt(curl, CURLOPT_PROXY, "http://[fd00::1]:8080");
 	curl_easy_setopt(curl, CURLOPT_HTTPPROXYTUNNEL, 1L);
-
-	bool enable_ipv6 = g_settings->getBool("enable_ipv6");
-	curl_easy_setopt(curl, CURLOPT_IPRESOLVE,
-		 enable_ipv6 ? CURL_IPRESOLVE_WHATEVER : CURL_IPRESOLVE_V4);
 
 	if (tracestream) {
 		curl_easy_setopt(curl, CURLOPT_DEBUGFUNCTION, httpfetch_debugfunction);
