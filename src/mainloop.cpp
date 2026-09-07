@@ -3,8 +3,11 @@
 #include <emscripten/html5.h>
 #include <emscripten/wasmfs.h>
 #include <algorithm>
+#include <atomic>
 #include <cassert>
+#include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <cstdlib>
 #include <deque>
 #include <functional>
@@ -15,6 +18,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 #include <emsocketctl.h>
 
@@ -114,6 +118,16 @@ extern "C" {
     // in-game survives; keys in `overrides` replace whatever is there.
     EMSCRIPTEN_KEEPALIVE
     void emloop_set_conf(const char *defaults, const char *overrides);
+
+    // Keys pressed in the page's terminal, as the bytes a tty would deliver.
+    // See the terminal section below.
+    EMSCRIPTEN_KEEPALIVE
+    void emloop_terminal_input(const char *data, int len);
+
+    // How big the terminal is now, in character cells. What a SIGWINCH would
+    // otherwise announce.
+    EMSCRIPTEN_KEEPALIVE
+    void emloop_terminal_resize(int cols, int rows);
 }
 
 namespace emloop_private {
@@ -1529,6 +1543,292 @@ void emloop_set_conf(const char *defaults, const char *overrides) {
 }
 
 /////////////////////////////////////////////////////////////////////////////
+// Terminal
+/////////////////////////////////////////////////////////////////////////////
+//
+// A server-only run (--server) never opens a window: SDL is not initialized,
+// nothing is ever drawn, and the canvas would sit there black. The page shows a
+// terminal instead, and it is this process's stdin, stdout and stderr.
+//
+// In:  what is typed arrives through emloop_terminal_input() as the bytes a tty
+//      would deliver -- escape sequences and all, neither echoed nor
+//      line-edited on the way -- and goes into a pipe that is fd 0. Reading
+//      standard input is all it takes to find out what was typed.
+// Out: fd 1 and fd 2 are a pipe as well, emptied into the terminal by a thread
+//      of its own. Printing is all it takes to put something on the screen, and
+//      every byte survives whatever wrote it.
+//
+// WasmFS's own stdout cannot do that job. It buffers fd 1 until it sees a
+// newline, hands the line to emscripten_out(), and drops the delimiter on the
+// way -- see WritingStdFile in wasmfs. That suits a log and nothing else. Of a
+// 14-byte screen update ("A\x1b[31m\nB\0C\x1b[0m") it eats two bytes outright,
+// leaves the five after the last delimiter sitting in the buffer until
+// something unrelated prints, and delivers the rest as two fragments with no
+// way to tell where the lines really ended. A pipe keeps all fourteen, in
+// order. What that is worth is that a program which draws a screen rather than
+// printing lines -- ncurses, when it arrives -- needs no special channel: it
+// writes to STDOUT_FILENO like anything else.
+
+namespace {
+
+std::mutex terminal_mutex;
+
+// How big the terminal is, in character cells, as of the last resize. What a
+// SIGWINCH would otherwise announce.
+int terminal_cols = 80;
+int terminal_rows = 24;
+
+// The write end of the pipe behind fd 0. -1 until the terminal is attached.
+std::atomic<int> terminal_stdin_fd{-1};
+
+// Bumped whenever something is typed, so that a thread with nothing to read has
+// something to wait on. A WasmFS pipe cannot be waited on: read() answers 0
+// rather than blocking, and while poll() does report the pipe readable once it
+// holds anything, it returns at once however long a timeout it is given. So
+// this is what stands in for the wait a tty would have provided.
+std::mutex terminal_input_mutex;
+std::condition_variable terminal_input_cond;
+uint64_t terminal_input_seq = 0;
+
+// How often the pipe behind fd 1 is emptied. Nothing can be waited on here: a
+// WasmFS pipe never blocks a reader, and the writers are whatever printed, so
+// there is no equivalent of the counter above to be woken by. Output is picked
+// up by asking for it.
+constexpr int TERMINAL_POLL_MS = 5;
+
+// Put `len` bytes on the screen as they are. Length-counted rather than
+// NUL-terminated: a screen update is arbitrary bytes, and terminfo padding is
+// made of NULs, so a C string would stop at the first one.
+//
+// Never call this holding one of the locks above. It waits for the browser
+// thread, and the browser thread is what takes those to deliver a keystroke or
+// a resize.
+void terminalSend(const char *data, size_t len) {
+    MAIN_THREAD_EM_ASM({
+        emloop_terminal_output($0, $1);
+    }, data, (int)len);
+}
+
+// The next byte of standard input. `ms` is how long to wait for one; negative
+// waits as long as it takes. -1 if nothing arrives in time.
+int terminalGetChar(int ms) {
+    for (;;) {
+        // Read before the wait, and note where the counter stood before the
+        // read, so that input landing between the two is not slept through.
+        uint64_t seen;
+        {
+            std::lock_guard<std::mutex> lock(terminal_input_mutex);
+            seen = terminal_input_seq;
+        }
+        unsigned char c;
+        if (read(STDIN_FILENO, &c, 1) == 1)
+            return c;
+
+        std::unique_lock<std::mutex> lock(terminal_input_mutex);
+        auto typed = [&]() { return terminal_input_seq != seen; };
+        if (ms < 0) {
+            terminal_input_cond.wait(lock, typed);
+        } else if (!terminal_input_cond.wait_for(
+                       lock, std::chrono::milliseconds(ms), typed)) {
+            return -1;
+        }
+    }
+}
+
+// The next byte of standard input, waiting as long as it takes.
+int terminalGetChar() {
+    return terminalGetChar(-1);
+}
+
+} // namespace
+
+void emloop_terminal_input(const char *data, int len) {
+    const int fd = terminal_stdin_fd;
+    if (fd < 0 || !data || len <= 0)
+        return;
+    // Called on the browser thread, and written from there. A pipe is plain
+    // memory with no backend behind it, so unlike the filesystem work above
+    // this needs no detour through main's worker thread.
+    if (write(fd, data, (size_t)len) < 0)
+        return;
+    {
+        std::lock_guard<std::mutex> lock(terminal_input_mutex);
+        terminal_input_seq++;
+    }
+    terminal_input_cond.notify_all();
+}
+
+void emloop_terminal_resize(int cols, int rows) {
+    std::lock_guard<std::mutex> lock(terminal_mutex);
+    terminal_cols = cols;
+    terminal_rows = rows;
+}
+
+namespace {
+
+// Empty the pipe behind fd 1 into the terminal, for as long as the run lasts.
+void terminalForwardLoop(int fd) {
+    // The browser console is where a run is read back from after the fact, and
+    // it can only show whole lines, so it gets them reassembled here. The
+    // terminal itself gets the bytes as they come.
+    std::string line;
+    char buf[4096];
+    for (;;) {
+        ssize_t got = read(fd, buf, sizeof(buf));
+        if (got <= 0) {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(TERMINAL_POLL_MS));
+            continue;
+        }
+        terminalSend(buf, (size_t)got);
+        for (ssize_t i = 0; i < got; i++) {
+            if (buf[i] != '\n') {
+                line.push_back(buf[i]);
+                continue;
+            }
+            EM_ASM({ console.log(UTF8ToString($0)); }, line.c_str());
+            line.clear();
+        }
+    }
+}
+
+} // namespace
+
+// Give this process the terminal's standard input, output and error. Called
+// once, before anything that prints or reads.
+static void terminalAttachStdio() {
+    int out_fds[2];
+    if (pipe(out_fds) != 0) {
+        std::cout << "terminal: pipe() failed, output stays on the page console"
+                  << std::endl;
+        return;
+    }
+    if (dup2(out_fds[1], STDOUT_FILENO) < 0 ||
+        dup2(out_fds[1], STDERR_FILENO) < 0) {
+        std::cout << "terminal: dup2() failed, output stays on the page console"
+                  << std::endl;
+        return;
+    }
+    // libc can no longer tell that fd 1 is a terminal, and musl buffers what is
+    // not a terminal in full blocks. A log that appears a block at a time is no
+    // use to anyone watching a server start, so ask for the buffering a tty
+    // would have got. A program that draws a screen does its own flushing and
+    // is not affected either way.
+    setvbuf(stdout, nullptr, _IOLBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+
+    std::thread(terminalForwardLoop, out_fds[0]).detach();
+
+    // Standard output is the terminal from here on, so anything below is said
+    // where it will be read.
+    int in_fds[2];
+    if (pipe(in_fds) != 0) {
+        std::cout << "terminal: pipe() failed, nothing typed will be readable"
+                  << std::endl;
+        return;
+    }
+    if (dup2(in_fds[0], STDIN_FILENO) < 0) {
+        std::cout << "terminal: dup2() failed, nothing typed will be readable"
+                  << std::endl;
+        return;
+    }
+    // Only now, so that nothing is written to the pipe before fd 0 is it.
+    terminal_stdin_fd = in_fds[1];
+}
+
+// Print without waiting for the line to end, the way a program that owns a
+// terminal does. Nothing special is needed: stdout is the pipe, so this is an
+// ordinary write and a flush.
+static void termPrint(const std::string &text) {
+    fwrite(text.data(), 1, text.size(), stdout);
+    fflush(stdout);
+}
+
+// TEMPORARY. Luanti ignores --terminal for now: the wasm build has no ncurses,
+// so run_dedicated_server() prints that it is ignoring the flag and runs the
+// plain server loop, and nothing in the module is on the other end of the byte
+// stream above. This stands in for that program until ncurses arrives, reading
+// a line at a time and handing it straight back, which is enough to see that
+// keystrokes reach the module and that what it prints reaches the screen --
+// over the same fd, with the same flushing, that ncurses will use. Delete it,
+// and the call in main(), once something real owns the terminal.
+static int terminalEchoLoop() {
+    termPrint("Luanti terminal echo test.\n"
+                  "Nothing in the module reads the terminal yet, so this "
+                  "stands in for it: what you type comes back.\n");
+
+    std::string line;
+    for (;;) {
+        int cols, rows;
+        {
+            std::lock_guard<std::mutex> lock(terminal_mutex);
+            cols = terminal_cols;
+            rows = terminal_rows;
+        }
+        termPrint("\n[" + std::to_string(cols) + "x" +
+                      std::to_string(rows) + "] $ ");
+
+        line.clear();
+        for (;;) {
+            int c = terminalGetChar();
+            if (c == '\r' || c == '\n') {
+                termPrint("\n");
+                break;
+            }
+            if (c == 0x03) { // Ctrl+C
+                termPrint("^C\n");
+                line.clear();
+                break;
+            }
+            if (c == 0x08 || c == 0x7f) { // Backspace
+                if (!line.empty()) {
+                    line.pop_back();
+                    termPrint("\b \b");
+                }
+                continue;
+            }
+            if (c == 0x1b) {
+                // An arrow or function key. Swallow the whole sequence rather
+                // than echoing its letters as if they had been typed. A lone
+                // ESC is followed by nothing, hence the wait rather than a
+                // plain read.
+                int next = terminalGetChar(25);
+                if (next == '[' || next == 'O') {
+                    int final_byte;
+                    do {
+                        final_byte = terminalGetChar(25);
+                    } while (final_byte >= 0x30 && final_byte <= 0x3f);
+                }
+                continue;
+            }
+            if (c < 0x20) {
+                continue; // Some other control byte, with nothing to do here
+            }
+            line.push_back((char)c);
+            termPrint(std::string(1, (char)c));
+        }
+
+        if (!line.empty()) {
+            // Once unflushed through iostreams as well, to show that an
+            // ordinary log line and the prompt above share one screen and one
+            // order.
+            termPrint("You typed: " + line + "\n");
+            std::cout << "and logged it: " << line << std::endl;
+        }
+    }
+}
+
+// Whether this run asked for a terminal. Luanti's own --terminal handling is
+// compiled out without ncurses, so for now this is only read here.
+static bool terminalWanted(int argc, char *argv[]) {
+    for (int i = 0; i < argc; i++) {
+        if (argv[i] && std::string(argv[i]) == "--terminal")
+            return true;
+    }
+    return false;
+}
+
+/////////////////////////////////////////////////////////////////////////////
 // Startup
 /////////////////////////////////////////////////////////////////////////////
 
@@ -1581,6 +1881,11 @@ int main(int argc, char *argv[])
     for (int i = 0; i < main_argc; i++) {
         std::cout << "    " << main_argv[i] << std::endl;
     }
+    // Everything printed from here on belongs to the terminal, if there is one.
+    const bool wants_terminal = terminalWanted(main_argc, main_argv);
+    if (wants_terminal)
+        terminalAttachStdio();
+
     int retval = main2(main_argc, main_argv);
 
     // The player quit. Nothing draws to the canvas after this, so tell the
