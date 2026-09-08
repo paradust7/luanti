@@ -18,8 +18,8 @@
 // so that the compiler can reduce their performance impact.
 #if defined(__GNUC__) || defined(__clang__)
 	#define COLD_FUNC       __attribute__((cold, noinline))
-	#define LIKELY(expr)    (__builtin_expect(!!(expr), 1))
-	#define UNLIKELY(expr)  (__builtin_expect(!!(expr), 0))
+	#define LIKELY(expr)    (__builtin_expect((expr) ? 1 : 0, 1))
+	#define UNLIKELY(expr)  (__builtin_expect((expr) ? 1 : 0, 0))
 #elif defined(_MSC_VER)
 	// MSVC has no exact cold equivalent. It supports [[likely]]
 	// and [[unlikely]], but we don't use C++20 yet.
