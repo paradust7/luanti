@@ -14,6 +14,24 @@
 	#define FUNCTION_NAME __PRETTY_FUNCTION__
 #endif
 
+// Abort branches should always be marked unlikely, non-inline and cold,
+// so that the compiler can reduce their performance impact.
+#if defined(__GNUC__) || defined(__clang__)
+	#define COLD_FUNC       __attribute__((cold, noinline))
+	#define LIKELY(expr)    (__builtin_expect(!!(expr), 1))
+	#define UNLIKELY(expr)  (__builtin_expect(!!(expr), 0))
+#elif defined(_MSC_VER)
+	// MSVC has no exact cold equivalent. It supports [[likely]]
+	// and [[unlikely]], but we don't use C++20 yet.
+	#define COLD_FUNC       __declspec(noinline)
+	#define LIKELY(expr)    (expr)
+	#define UNLIKELY(expr)  (expr)
+#else
+	#define COLD_FUNC
+	#define LIKELY(expr)    (expr)
+	#define UNLIKELY(expr)  (expr)
+#endif
+
 // Whether to catch all std::exceptions.
 // When "catching", the program will abort with an error message.
 // In debug mode, leave these for the debugger and don't catch them.
@@ -25,7 +43,7 @@
 
 /* Abort program execution immediately
  */
-[[noreturn]] extern void fatal_error_fn(
+[[noreturn]] extern COLD_FUNC void fatal_error_fn(
 		const char *msg, const char *file,
 		unsigned int line, const char *function);
 
@@ -33,7 +51,7 @@
 	fatal_error_fn((msg), __FILE__, __LINE__, FUNCTION_NAME)
 
 #define FATAL_ERROR_IF(expr, msg) \
-	((expr) \
+	(UNLIKELY(expr) \
 	? fatal_error_fn((msg), __FILE__, __LINE__, FUNCTION_NAME) \
 	: (void)(0))
 
@@ -43,12 +61,12 @@
 	defined)
 */
 
-[[noreturn]] extern void sanity_check_fn(
+[[noreturn]] extern COLD_FUNC void sanity_check_fn(
 		const char *assertion, const char *file,
 		unsigned int line, const char *function);
 
 #define SANITY_CHECK(expr) \
-	((expr) \
+	(LIKELY(expr) \
 	? (void)(0) \
 	: sanity_check_fn(#expr, __FILE__, __LINE__, FUNCTION_NAME))
 
