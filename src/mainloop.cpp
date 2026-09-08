@@ -1,4 +1,5 @@
 #include "mainloop.h"
+#include "porting.h" // signal_handler_killstatus
 #include <emscripten.h>
 #include <emscripten/html5.h>
 #include <emscripten/wasmfs.h>
@@ -112,6 +113,10 @@ extern "C" {
 
     EMSCRIPTEN_KEEPALIVE
     void emloop_invoke_main(int argc, char* argv[]);
+
+    // Ask the game to shut down, equivalent to Ctrl-C.
+    EMSCRIPTEN_KEEPALIVE
+    void emloop_request_exit();
 
     // Merge settings into minetest.conf. Keys in `defaults` are only written
     // when the file does not have them yet, so that what the player changed
@@ -1849,6 +1854,12 @@ void emloop_invoke_main(int argc, char* argv[]) {
         main_argv = argv;
         main_requested = true;
     });
+}
+
+// Called from the browser thread.
+void emloop_request_exit() {
+    // Does the same thing as SIGINT/SIGTERM.
+    *porting::signal_handler_killstatus() = true;
 }
 
 // Run queued filesystem work until the launcher asks for main().
