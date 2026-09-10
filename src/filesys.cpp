@@ -494,9 +494,12 @@ bool RecursiveDelete(const std::string &path)
 	// A dangling symlink still counts as existing and will be removed below.
 	auto status = std::filesystem::symlink_status(p, ec);
 
-	// Check for `not_found` first, since `ec` may also be set in this case.
-	// Note that std::filesystem::exists(status) would be wrong here, because
-	// it would return false if a real OS error occurred in symlink_status.
+	// If the file does not exist, `status` will have type `not_found` and
+	// `ec` may or may not be set. So we must check the status type first.
+	//
+	// Note that we can't use std::filesystem::exists(status) here, because
+	// if a genuine error occurs (such as access denied or out-of-memory),
+	// status will have type `none`, and `exists()` returns false for that.
 	if (status.type() == std::filesystem::file_type::not_found)
 		return true;
 
