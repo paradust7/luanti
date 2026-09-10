@@ -683,19 +683,28 @@ std::string randomUnicodeName(PcgRandom &rnd, int max_cp)
 
 void TestFileSys::testUnicodePathsFuzz()
 {
+	// Number of paths (files) to generate as the base for this test.
+	// The actual number of files written is about 1.5x this.
 	constexpr int NUM_PATHS = 1000;
 
-	// On Windows, file open blocks until Defender clears its contents.
-	// This takes time:
-	//    ~ 0.03 ms - File has not been modified since last scanned.
-	//    ~ 0.8  ms - File modified, but content hash is cached.
-	//    ~ 8    ms - File modified and content is new.
+	// Number of distinct file contents written by this test.
 	//
-	// If the content of each file is unique, writing and re-opening 1000 files
-	// would take over 8 secs!
+	// On Windows, opening a file is blocked until Defender scans its contents.
+	// This adds a delay depending on the scan history of the file. For example:
+	//
+	//    File has not been modified since last scan     :   0.03 ms
+	//    File modified, but contents previously scanned :   0.8  ms
+	//    File modified, and contents are novel          :   8    ms
+	//
+	// (Measured on 2026-09-05 using a machine with Win 11, AMD Ryzen 9 3900X,
+	//  Samsung SSD 990 Pro. May change in future versions of defender/windows.)
+	//
+	// Since this test generates over 1000 files, if the content of each file
+	// were to be unique, writing and re-opening those 1000 files would take an
+	// additional 8 seconds!
 	//
 	// So instead, we re-use 32 distinct content strings at random. This allows
-	// us to catch content mismatches 96% of the time, while reducing the total
+	// us to catch a content mismatch 96% of the time, while reducing the total
 	// open time to ~ 256 ms.
 	constexpr int NUM_CONTENTS = 32;
 
