@@ -710,7 +710,7 @@ void TestFileSys::testUnicodePathsFuzz()
 	std::set<std::string> seen;
 
 	// Unique random name with up to `max_cp` codepoints
-	auto fresh = [&] (int max_cp) {
+	auto new_name = [&] (int max_cp) {
 		std::string name;
 		do {
 			name = randomUnicodeName(rnd, max_cp);
@@ -721,7 +721,7 @@ void TestFileSys::testUnicodePathsFuzz()
 	std::vector<std::string> names;
 	names.reserve(NUM_PATHS);
 	for (int i = 0; i < NUM_PATHS; i++)
-		names.push_back(fresh(20));
+		names.push_back(new_name(20));
 
 	std::vector<std::string> contents;
 	contents.reserve(NUM_CONTENTS);
@@ -740,21 +740,21 @@ void TestFileSys::testUnicodePathsFuzz()
 	// This could be a pure ascii path.
 	const std::string base = getTestTempDirectory() + DIR_DELIM "unicodefuzz";
 
-	rawstream << "-------- Creating scratch directories" << std::endl;
-	const std::string flat = base + DIR_DELIM + fresh(8);
-	const std::string pairs = base + DIR_DELIM + fresh(8);
-	const std::string deep = base + DIR_DELIM + fresh(8);
-	for (auto &it : {flat, pairs, deep}) {
+	rawstream << "-------- Creating base test directories" << std::endl;
+	const std::string dir_flat = base + DIR_DELIM + new_name(8);
+	const std::string dir_pairs = base + DIR_DELIM + new_name(8);
+	const std::string dir_deep = base + DIR_DELIM + new_name(8);
+	for (auto &it : {dir_flat, dir_pairs, dir_deep}) {
 		UASSERT(fs::CreateAllDirs(it));
 		UASSERT(fs::IsDir(it));
 	}
 
-	// Fill `flat` using the generated names.
+	// Fill `dir_flat` using the generated names.
 	// Even ones are files, odd ones are a directory holding a file.
-	rawstream << "-------- Populating 'flat' scratch directory" << std::endl;
+	rawstream << "-------- Populating `dir_flat` directory" << std::endl;
 	std::map<std::string, bool> expect_dir;
 	for (int i = 0; i < NUM_PATHS; i++) {
-		const std::string path = flat + DIR_DELIM + names[i];
+		const std::string path = dir_flat + DIR_DELIM + names[i];
 		if (i % 2 == 0) {
 			expect_dir[names[i]] = false;
 			// alternate between two ways of writing the file
@@ -788,7 +788,7 @@ void TestFileSys::testUnicodePathsFuzz()
 
 	rawstream << "-------- Test ReadFile" << std::endl;
 	for (int i = 0; i < NUM_PATHS; i++) {
-		std::string path = flat + DIR_DELIM + names[i];
+		std::string path = dir_flat + DIR_DELIM + names[i];
 		if (i % 2 == 1)
 			path += DIR_DELIM + names[i - 1];
 		std::string actual;
@@ -798,7 +798,7 @@ void TestFileSys::testUnicodePathsFuzz()
 
 	rawstream << "-------- Testing GetDirListing" << std::endl;
 	{
-		const auto listing = fs::GetDirListing(flat);
+		const auto listing = fs::GetDirListing(dir_flat);
 		UASSERTEQ(size_t, listing.size(), expect_dir.size());
 		std::set<std::string> uniq;
 		for (const auto &node : listing) {
@@ -812,25 +812,25 @@ void TestFileSys::testUnicodePathsFuzz()
 	rawstream << "-------- Testing GetRecursiveSubPaths" << std::endl;
 	{
 		std::vector<std::string> subpaths;
-		fs::GetRecursiveSubPaths(flat, subpaths, true);
+		fs::GetRecursiveSubPaths(dir_flat, subpaths, true);
 		// every entry, plus the file inside each of the directories
 		UASSERTEQ(size_t, subpaths.size(), NUM_PATHS + NUM_PATHS / 2);
 		const std::set<std::string> got(subpaths.begin(), subpaths.end());
 		UASSERTEQ(size_t, got.size(), subpaths.size());
 		for (int i = 0; i < NUM_PATHS; i++) {
-			const std::string path = flat + DIR_DELIM + names[i];
+			const std::string path = dir_flat + DIR_DELIM + names[i];
 			UASSERT(got.count(path) == 1);
 			if (i % 2 == 1)
 				UASSERT(got.count(path + DIR_DELIM + names[i - 1]) == 1);
 		}
 	}
 
-	// Uses a different scratch directory, `pairs`.
+	// Uses `dir_pairs` directory
 	rawstream << "-------- Testing Rename, CopyFileContents, and "
 		<< "DeleteSingleFileOrEmptyDirectory" << std::endl;
 	for (int i = 0; i + 1 < NUM_PATHS; i += 2) {
-		const std::string src = pairs + DIR_DELIM + names[i];
-		const std::string dst = pairs + DIR_DELIM + names[i + 1];
+		const std::string src = dir_pairs + DIR_DELIM + names[i];
+		const std::string dst = dir_pairs + DIR_DELIM + names[i + 1];
 		const std::string &content = content_for(src);
 
 		{
@@ -855,56 +855,81 @@ void TestFileSys::testUnicodePathsFuzz()
 		UASSERT(fs::DeleteSingleFileOrEmptyDirectory(src, true));
 		UASSERT(fs::DeleteSingleFileOrEmptyDirectory(dst, true));
 	}
-	UASSERT(fs::GetDirListing(pairs).empty());
+	UASSERT(fs::GetDirListing(dir_pairs).empty());
 
 	rawstream << "-------- Testing nested unicode paths" << std::endl;
-	const std::string abs_deep = fs::AbsolutePath(deep);
+	const std::string abs_deep = fs::AbsolutePath(dir_deep);
 	UASSERT(!abs_deep.empty());
 	for (int i = 0; i < 20; i++) {
-		const std::string n1 = fresh(6);
-		const std::string n2 = fresh(6);
-		const std::string n3 = fresh(6);
-		const std::string top = deep + DIR_DELIM + fresh(6);
-		const std::string dir = top + DIR_DELIM + n1 + DIR_DELIM + n2;
+		const std::string n1 = new_name(6);
+		const std::string n2 = new_name(6);
+		const std::string n3 = new_name(6);
+		// root = base directory for this iteration
+		const std::string root = dir_deep + DIR_DELIM + new_name(6);
+		// dir  = "/root/n1/n2"
+		const std::string dir = root + DIR_DELIM + n1 + DIR_DELIM + n2;
+		const std::string dir_relative_to_root = n1 + DIR_DELIM + n2;
+		// file = "/root/n1/n2/n3"
 		const std::string file = dir + DIR_DELIM + n3;
-		const std::string &content = content_for(file);
-		const std::string sub = n1 + DIR_DELIM + n2 + DIR_DELIM + n3;
+		const std::string file_relative_to_root = n1 + DIR_DELIM + n2 + DIR_DELIM + n3;
+		const std::string &file_content = content_for(file);
 
 		UASSERT(fs::CreateAllDirs(dir));
 		UASSERT(fs::IsDir(dir));
-		UASSERT(fs::safeWriteToFile(file, content));
+		UASSERT(fs::safeWriteToFile(file, file_content));
 		UASSERT(fs::IsFile(file));
-
-		// Test PathStartsWith
 		UASSERT(fs::PathStartsWith(fs::AbsolutePath(dir), abs_deep));
-
-		// Test MakePathRelativeTo
-		UASSERTEQ(auto, fs::MakePathRelativeTo(file, top), sub);
+		UASSERTEQ(auto, fs::MakePathRelativeTo(file, root), file_relative_to_root);
+		UASSERTEQ(auto, fs::MakePathRelativeTo(dir, root), dir_relative_to_root);
 
 		// Test RemoveLastPathComponent
 		std::string removed;
 		UASSERTEQ(auto, fs::RemoveLastPathComponent(file, &removed), dir);
 		UASSERTEQ(auto, removed, n3);
 
-		// Test CopyDir
-		const std::string copy = deep + DIR_DELIM + fresh(6);
-		UASSERT(fs::CopyDir(top, copy));
-		std::string actual;
-		UASSERT(fs::ReadFile(copy + DIR_DELIM + sub, actual, true));
-		UASSERTEQ(auto, actual, content);
-		UASSERT(fs::IsFile(file)); // source untouched
+		// Directory Copy Test
+		// -------------------------------------------------------
+		// We have directory `root` with `dir` and `file` inside.
+		// - Copy `root` to new path `copy`
+		// - Make sure dir and file were copied as well.
+		const std::string copy = dir_deep + DIR_DELIM + new_name(6);
+		UASSERT(fs::CopyDir(root, copy));
 
-		// Test MoveDir
-		const std::string moved = deep + DIR_DELIM + fresh(6);
+		// Source should be untouched
+		UASSERT(fs::IsDir(dir));
+		UASSERT(fs::IsFile(file));
+
+		// Copy should now exist
+		UASSERT(fs::IsDir(copy + DIR_DELIM + dir_relative_to_root));
+		UASSERT(fs::IsFile(copy + DIR_DELIM + file_relative_to_root));
+
+		// Copied file contents should match
+		std::string copy_contents;
+		UASSERT(fs::ReadFile(copy + DIR_DELIM + file_relative_to_root, copy_contents, true));
+		UASSERTEQ(auto, copy_contents, file_content);
+
+		// Directory Move Test
+		// ------------------------------------------------------------
+		// Move the copy to a new location
+		const std::string moved = dir_deep + DIR_DELIM + new_name(6);
 		UASSERT(fs::MoveDir(copy, moved));
-		UASSERT(!fs::PathExists(copy));
-		actual.clear();
-		UASSERT(fs::ReadFile(moved + DIR_DELIM + sub, actual, true));
-		UASSERTEQ(auto, actual, content);
 
-		// Test RecursiveDelete, and clean up.
-		UASSERT(fs::RecursiveDelete(top));
-		UASSERT(!fs::PathExists(top));
+		// Source should be gone
+		UASSERT(!fs::PathExists(copy));
+
+		// Move destination should now exist
+		UASSERT(fs::IsDir(moved + DIR_DELIM + dir_relative_to_root));
+		UASSERT(fs::IsFile(moved + DIR_DELIM + file_relative_to_root));
+
+		// Moved file contents should match
+		std::string moved_contents;
+		UASSERT(fs::ReadFile(moved + DIR_DELIM + file_relative_to_root, moved_contents, true));
+		UASSERTEQ(auto, moved_contents, file_content);
+
+		// Clean up everything
+		UASSERT(fs::RecursiveDelete(root));
+		UASSERT(!fs::PathExists(root));
+
 		UASSERT(fs::RecursiveDelete(moved));
 		UASSERT(!fs::PathExists(moved));
 	}
