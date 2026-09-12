@@ -699,13 +699,9 @@ void TestFileSys::testUnicodePathsFuzz()
 	// (Measured on 2026-09-05 using a machine with Win 11, AMD Ryzen 9 3900X,
 	//  Samsung SSD 990 Pro. May change in future versions of defender/windows.)
 	//
-	// Since this test generates over 1000 files, if the content of each file
-	// were to be unique, writing and re-opening those 1000 files would take an
-	// additional 8 seconds!
-	//
-	// So instead, we re-use 32 distinct content strings at random. This allows
-	// us to catch a content mismatch 96% of the time, while reducing the total
-	// open time to ~ 256 ms.
+	// Because previously scanned contents perform noticeably better, reuse
+	// 32 distinct file contents across the tests to only spend 32 * 8 ms initially.
+	// This still allows us to catch a content mismatch (1 - 1/32 =) 96% of the time.
 	constexpr int NUM_CONTENTS = 32;
 
 	// Fixed seed, so that a failure can be reproduced exactly.
