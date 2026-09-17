@@ -144,6 +144,7 @@ void TestMapSettingsManager::testMapSettingsManager()
 
 	// Now make our Params and see if the values are correctly sourced
 	MapgenParams *params = mgr.makeMapgenParams();
+	UASSERT(params != nullptr);
 	UASSERT(params->mgtype == MAPGEN_V5);
 	UASSERT(params->chunksize == v3s16(5));
 	UASSERT(params->water_level == 15);

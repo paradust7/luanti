@@ -251,6 +251,7 @@ bool COpenGLDriver::updateVertexHardwareBuffer(SHWBufferLink_opengl *HWBuffer)
 		return false;
 
 	const auto *vb = IRR_DOWN_CAST<const scene::IVertexBuffer *>(HWBuffer->Buffer);
+	assert(vb);
 	const void *vertices = vb->getData();
 	const u32 vertexCount = vb->getCount();
 	const E_VERTEX_TYPE vType = vb->getType();
@@ -332,6 +333,7 @@ bool COpenGLDriver::updateIndexHardwareBuffer(SHWBufferLink_opengl *link)
 
 
 	const auto *ib = IRR_DOWN_CAST<const scene::IIndexBuffer *>(link->Buffer);
+	assert(ib);
 
 	const void *indices = ib->getData();
 	u32 indexCount = ib->getCount();

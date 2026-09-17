@@ -686,10 +686,11 @@ IGUIListBox *CGUIEnvironment::addListBox(const core::rect<s32> &rectangle,
 	IGUIListBox *b = new CGUIListBox(this, parent ? parent : this, id, rectangle,
 			true, drawBackground, false);
 
+	IGUIFont *builtinfont = getBuiltInFont();
 	if (CurrentSkin && CurrentSkin->getSpriteBank()) {
 		b->setSpriteBank(CurrentSkin->getSpriteBank());
-	} else if (getBuiltInFont() && getBuiltInFont()->getType() == EGFT_BITMAP) {
-		b->setSpriteBank(((IGUIFontBitmap *)getBuiltInFont())->getSpriteBank());
+	} else if (builtinfont && builtinfont->getType() == EGFT_BITMAP) {
+		b->setSpriteBank(((IGUIFontBitmap *)builtinfont)->getSpriteBank());
 	}
 
 	b->drop();

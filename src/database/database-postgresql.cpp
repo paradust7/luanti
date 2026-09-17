@@ -477,7 +477,7 @@ void PlayerDatabasePostgreSQL::savePlayer(RemotePlayer *player)
 	execPrepared("remove_player_inventories", 1, rmvalues);
 	execPrepared("remove_player_inventory_items", 1, rmvalues);
 
-	const auto &inventory_lists = sao->getInventory()->getLists();
+	const auto &inventory_lists = player->inventory.getLists();
 	std::ostringstream oss;
 	for (u16 i = 0; i < inventory_lists.size(); i++) {
 		const InventoryList* list = inventory_lists[i];

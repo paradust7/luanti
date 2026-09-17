@@ -13,6 +13,7 @@
 #include <IGUIFont.h>
 #include "client/renderingengine.h"
 #include "irrlicht_changes/CGUITTFont.h"
+#include "debug.h"
 #include "log.h"
 #include "client/texturesource.h"
 #include "util/string.h"
@@ -1231,8 +1232,13 @@ void GUITable::toggleVisibleTree(s32 row_i, int dir, bool move_selection)
 		else if (!was_open && !do_open) {
 			// Move selection to parent
 			assert(getRow(sel) != NULL);
-			while (sel > 0 && getRow(sel - 1)->indent >= row->indent)
+			while (sel > 0) {
+				const Row *prev = getRow(sel - 1);
+				sanity_check(prev);
+				if (prev->indent < row->indent)
+					break;
 				sel--;
+			}
 			sel--;
 			if (sel < 0)  // was root already selected?
 				sel = row_i;

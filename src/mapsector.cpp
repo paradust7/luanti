@@ -3,6 +3,7 @@
 // Copyright (C) 2013 celeron55, Perttu Ahola <celeron55@gmail.com>
 
 #include "mapsector.h"
+#include "debug.h"
 #include "exceptions.h"
 #include "mapblock.h"
 
@@ -110,7 +111,7 @@ std::unique_ptr<MapBlock> MapSector::detachBlock(MapBlock *block)
 
 	// Remove from container
 	auto it = m_blocks.find(block_y);
-	assert(it != m_blocks.end());
+	sanity_check(it != m_blocks.end());
 	std::unique_ptr<MapBlock> ret = std::move(it->second);
 	assert(ret.get() == block);
 	m_blocks.erase(it);
