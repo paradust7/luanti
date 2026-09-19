@@ -168,9 +168,9 @@ class Peer : public IPeer {
 
 		virtual void reportRTT(float rtt) {};
 
-		void RTTStatistics(float rtt,
-							const std::string &profiler_id = "",
-							unsigned int num_samples = 1000);
+		void RTTStatistics(float rtt, const std::string &profiler_id = "");
+
+		float getRTTVar() const { return m_rtt.rtt_var; }
 
 		bool IncUseCount();
 		void DecUseCount();
@@ -194,7 +194,8 @@ class Peer : public IPeer {
 			float jitter_avg = -1.0f;
 			float min_rtt = FLT_MAX;
 			float max_rtt = 0.0f;
-			float avg_rtt = -1.0f;
+			float avg_rtt = -1.0f; // smoothed RTT
+			float rtt_var = -1.0f; // smoothed RTT variance
 		};
 
 		rttstats m_rtt;
@@ -287,7 +288,7 @@ private:
 	// Event queue: ReceiveThread -> user
 	MutexedQueue<ConnectionEventPtr> m_event_queue;
 
-	session_t m_peer_id = 0;
+	std::atomic<session_t> m_peer_id = 0;
 	u32 m_protocol_id;
 
 	std::map<session_t, Peer *> m_peers;

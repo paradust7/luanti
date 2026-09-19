@@ -40,7 +40,12 @@ namespace con
 // (it's okay to start out quick)
 #define RESEND_TIMEOUT_MIN 0.1f
 #define RESEND_TIMEOUT_MAX 2.0f
-#define RESEND_TIMEOUT_FACTOR 2
+// Timer granularity: timeouts are only checked once per send thread iteration
+#define RESEND_TIMER_GRANULARITY 0.05f
+
+// RTT smoothing constants (RFC 6298)
+#define RTT_ALPHA (1.0f / 8.0f)
+#define RTT_BETA (1.0f / 4.0f)
 
 u16 BufferedPacket::getSeqnum() const
 {
@@ -709,6 +714,7 @@ void Channel::UpdateBytesSent(unsigned int bytes, unsigned int packets)
 {
 	MutexAutoLock internal(m_internal_mutex);
 	current_bytes_transfered += bytes;
+	window_bytes_transfered += bytes;
 	current_packet_successful += packets;
 }
 
@@ -757,12 +763,13 @@ void Channel::UpdateTimers(float dtime)
 			packets_successful = current_packet_successful;
 
 			// has half the window even been used?
-			if (current_bytes_transfered > (unsigned int) (m_window_size*512/2)) {
+			if (window_bytes_transfered > (unsigned int) (m_window_size*512/2)) {
 				reasonable_amount_of_data_transmitted = true;
 			}
 			current_packet_loss = 0;
 			current_packet_too_late = 0;
 			current_packet_successful = 0;
+			window_bytes_transfered = 0;
 		}
 
 		// Packets too late means either packet duplication along the way
@@ -775,7 +782,7 @@ void Channel::UpdateTimers(float dtime)
 		bool done = false;
 
 		if (packets_successful > 0) {
-			successful_to_lost_ratio = packet_loss/packets_successful;
+			successful_to_lost_ratio = (float) packet_loss / packets_successful;
 		} else if (packet_loss > 0) {
 			setWindowSize(m_window_size - 10);
 			done = true;
@@ -886,33 +893,28 @@ void Peer::DecUseCount()
 	delete this;
 }
 
-void Peer::RTTStatistics(float rtt, const std::string &profiler_id,
-		unsigned int num_samples) {
+void Peer::RTTStatistics(float rtt, const std::string &profiler_id)
+{
+	/* set min max values */
+	if (rtt < m_rtt.min_rtt)
+		m_rtt.min_rtt = rtt;
+	if (rtt >= m_rtt.max_rtt)
+		m_rtt.max_rtt = rtt;
 
-	if (m_last_rtt > 0) {
-		/* set min max values */
-		if (rtt < m_rtt.min_rtt)
-			m_rtt.min_rtt = rtt;
-		if (rtt >= m_rtt.max_rtt)
-			m_rtt.max_rtt = rtt;
+	/* smoothed RTT and RTT variance as per RFC 6298 */
+	if (m_rtt.avg_rtt < 0) {
+		m_rtt.avg_rtt = rtt;
+		m_rtt.rtt_var = rtt / 2.0f;
+	} else {
+		// note: uses avg_rtt from before this sample, as specified
+		m_rtt.rtt_var = (1.0f - RTT_BETA) * m_rtt.rtt_var +
+				RTT_BETA * std::abs(m_rtt.avg_rtt - rtt);
+		m_rtt.avg_rtt = (1.0f - RTT_ALPHA) * m_rtt.avg_rtt + RTT_ALPHA * rtt;
+	}
 
-		/* do average calculation */
-		if (m_rtt.avg_rtt < 0)
-			m_rtt.avg_rtt  = rtt;
-		else
-			m_rtt.avg_rtt  = m_rtt.avg_rtt * (num_samples/(num_samples-1)) +
-								rtt * (1/num_samples);
-
-		/* do jitter calculation */
-
-		//just use some neutral value at beginning
-		float jitter = m_rtt.jitter_min;
-
-		if (rtt > m_last_rtt)
-			jitter = rtt-m_last_rtt;
-
-		if (rtt <= m_last_rtt)
-			jitter = m_last_rtt - rtt;
+	/* jitter = difference between consecutive samples (exposed to the API) */
+	if (m_last_rtt >= 0) {
+		float jitter = std::abs(rtt - m_last_rtt);
 
 		if (jitter < m_rtt.jitter_min)
 			m_rtt.jitter_min = jitter;
@@ -920,10 +922,9 @@ void Peer::RTTStatistics(float rtt, const std::string &profiler_id,
 			m_rtt.jitter_max = jitter;
 
 		if (m_rtt.jitter_avg < 0)
-			m_rtt.jitter_avg  = jitter;
+			m_rtt.jitter_avg = jitter;
 		else
-			m_rtt.jitter_avg  = m_rtt.jitter_avg * (num_samples/(num_samples-1)) +
-								jitter * (1/num_samples);
+			m_rtt.jitter_avg = (1.0f - RTT_ALPHA) * m_rtt.jitter_avg + RTT_ALPHA * jitter;
 
 		if (!profiler_id.empty()) {
 			g_profiler->graphAdd(profiler_id + " RTT [ms]", rtt * 1000.f);
@@ -1002,17 +1003,15 @@ void UDPPeer::reportRTT(float rtt)
 {
 	if (rtt < 0)
 		return;
-	RTTStatistics(rtt, "network", MAX_RELIABLE_WINDOW_SIZE*10);
+	RTTStatistics(rtt, "network");
 
-	// use this value to decide the resend timeout
+	// use this value to decide the resend timeout (RFC 6298)
 	const float rtt_stat = getStat(AVG_RTT);
 	if (rtt_stat < 0)
 		return;
-	float timeout = rtt_stat * RESEND_TIMEOUT_FACTOR;
-	if (timeout < RESEND_TIMEOUT_MIN)
-		timeout = RESEND_TIMEOUT_MIN;
-	if (timeout > RESEND_TIMEOUT_MAX)
-		timeout = RESEND_TIMEOUT_MAX;
+	float timeout = rtt_stat +
+			std::max(RESEND_TIMER_GRANULARITY, 4.0f * getRTTVar());
+	timeout = rangelim(timeout, RESEND_TIMEOUT_MIN, RESEND_TIMEOUT_MAX);
 
 	float timeout_old = getResendTimeout();
 	setResendTimeout(timeout);

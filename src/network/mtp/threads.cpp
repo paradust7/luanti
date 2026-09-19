@@ -218,6 +218,14 @@ void ConnectionSendThread::runTimeouts(float dtime, u32 peer_packet_quota)
 			// Increment reliable packet times
 			channel.outgoing_reliables_sent.incrementTimeouts(dtime);
 
+			// Note that this only happens during connection setup, it would
+			// break badly otherwise.
+			// Re-sends for half-open peers happen only via CONNCMD_RESEND_ONE,
+			// which is rate limited by resend_count. Don't touch that
+			// counter here.
+			if (peer->isHalfOpen())
+				continue;
+
 			// Re-send timed out outgoing reliables
 			auto timed_outs = channel.outgoing_reliables_sent.getResend(
 				resend_timeout, peer_packet_quota);
@@ -225,18 +233,6 @@ void ConnectionSendThread::runTimeouts(float dtime, u32 peer_packet_quota)
 			channel.UpdatePacketLossCounter(timed_outs.size());
 			if (timed_outs.size() > 0)
 				g_profiler->graphAdd("packets_lost", timed_outs.size());
-
-			// Note that this only happens during connection setup, it would
-			// break badly otherwise.
-			if (peer->isHalfOpen()) {
-				if (!timed_outs.empty()) {
-					dout_con << m_connection->getDesc() <<
-						"Skipping re-send of " << timed_outs.size() <<
-						" timed-out reliables to peer_id=" << udpPeer->id
-						<< " channel=" << ch << " (half-open)." << std::endl;
-				}
-				continue;
-			}
 
 			if (m_iteration_packets_avaialble > timed_outs.size())
 				m_iteration_packets_avaialble -= timed_outs.size();
@@ -760,6 +756,22 @@ void ConnectionSendThread::sendPackets(float dtime, u32 peer_packet_quota)
 					< channel.getWindowSize() &&
 					peer->m_increment_packets_remaining > 0) {
 				BufferedPacketPtr p = channel.queued_reliables.front();
+
+				// Never let the seqnums on the wire spread out too far from
+				// the oldest unacknowledged one, the receiver depends on it
+				// (see MAX_RELIABLE_SEQNUM_SPREAD).
+				u16 lowest_unacked = 0;
+				if (channel.outgoing_reliables_sent.getFirstSeqnum(lowest_unacked) &&
+						(u16)(p->getSeqnum() - lowest_unacked) >= MAX_RELIABLE_SEQNUM_SPREAD) {
+					LOG(dout_con << m_connection->getDesc()
+						<< " INFO: seqnum spread limit reached, holding back"
+						<< " channel: " << i
+						<< ", seqnum: " << p->getSeqnum()
+						<< ", oldest unacked: " << lowest_unacked
+						<< std::endl);
+					break;
+				}
+
 				channel.queued_reliables.pop();
 
 				LOG(dout_con << m_connection->getDesc()
@@ -1069,6 +1081,12 @@ void ConnectionReceiveThread::receive(SharedBuffer<u8> &packetdata,
 		memcpy(*strippeddata, &packetdata[BASE_HEADER_SIZE],
 			strippeddata.getSize());
 
+		/* Every time we receive a packet it can happen that a previously
+		 * buffered packet is now ready to process. This holds even if
+		 * processing below throws (e.g. a reliable packet with garbage
+		 * inside still consumes its seqnum). */
+		packet_queued = true;
+
 		try {
 			// Process it (the result is some data with no headers made by us)
 			SharedBuffer<u8> resultdata = processPacket
@@ -1084,12 +1102,8 @@ void ConnectionReceiveThread::receive(SharedBuffer<u8> &packetdata,
 		catch (ProcessedSilentlyException &e) {
 		}
 		catch (ProcessedQueued &e) {
-			// we set it to true anyway (see below)
+			// packet_queued is already set (see above)
 		}
-
-		/* Every time we receive a packet it can happen that a previously
-		 * buffered packet is now ready to process. */
-		packet_queued = true;
 	}
 	catch (InvalidIncomingDataException &e) {
 	}
@@ -1214,8 +1228,9 @@ SharedBuffer<u8> ConnectionReceiveThread::handlePacketType_Control(Channel *chan
 		try {
 			BufferedPacketPtr p = channel->outgoing_reliables_sent.popSeqnum(seqnum);
 
-			// the rtt calculation will be a bit off for re-sent packets but that's okay
-			{
+			// Karn's algorithm: a packet that was re-sent gives no usable RTT
+			// sample, since we can't tell which transmission this ACK is for.
+			if (p->resend_count == 0) {
 				// Get round trip time
 				u64 current_time = porting::getTimeMs();
 
@@ -1238,7 +1253,13 @@ SharedBuffer<u8> ConnectionReceiveThread::handlePacketType_Control(Channel *chan
 
 			// put bytes for max bandwidth calculation
 			channel->UpdateBytesSent(p->size(), 1);
-			if (channel->outgoing_reliables_sent.size() == 0)
+
+			// Wake the send thread if this ACK freed a slot in a full window,
+			// so queued reliables are pipelined behind the ACK clock instead
+			// of waiting for the next timer tick. Also wake it if the window
+			// is now empty.
+			const u32 remaining = channel->outgoing_reliables_sent.size();
+			if (remaining == 0 || remaining + 1 >= channel->getWindowSize())
 				m_connection->TriggerSend();
 		} catch (NotFoundException &e) {
 			LOG(derr_con << m_connection->getDesc()
@@ -1383,14 +1404,6 @@ SharedBuffer<u8> ConnectionReceiveThread::handlePacketType_Reliable(Channel *cha
 			channelnum);
 		try {
 			channel->incoming_reliables.insert(packet, channel->readNextIncomingSeqNum());
-
-			LOG(dout_con << m_connection->getDesc()
-				<< "BUFFERING, TYPE_RELIABLE peer_id: " << peer->id
-				<< ", channel: " << (channelnum & 0xFF)
-				<< ", seqnum: " << seqnum << std::endl;)
-
-			throw ProcessedQueued("Buffered future reliable packet");
-		} catch (AlreadyExistsException &e) {
 		} catch (IncomingDataCorruption &e) {
 			m_connection->putCommand(ConnectionCommand::disconnect_peer(peer->id));
 
@@ -1399,7 +1412,17 @@ SharedBuffer<u8> ConnectionReceiveThread::handlePacketType_Reliable(Channel *cha
 				<< ", channel: " << (channelnum & 0xFF)
 				<< ", seqnum: " << seqnum
 				<< "DROPPING CLIENT!" << std::endl;)
+
+			// Must not fall through: this packet is not the next expected one
+			throw ProcessedSilentlyException("Dropped corrupt reliable packet");
 		}
+
+		LOG(dout_con << m_connection->getDesc()
+			<< "BUFFERING, TYPE_RELIABLE peer_id: " << peer->id
+			<< ", channel: " << (channelnum & 0xFF)
+			<< ", seqnum: " << seqnum << std::endl;)
+
+		throw ProcessedQueued("Buffered future reliable packet");
 	}
 
 	/* we got a packet to process right now */

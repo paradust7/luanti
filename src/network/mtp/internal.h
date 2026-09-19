@@ -373,6 +373,15 @@ private:
 // accept from peers vs. what we use for sending.
 #define MAX_RELIABLE_WINDOW_SIZE 0x8000
 #define MAX_RELIABLE_WINDOW_SIZE_SEND 2048
+/*
+ * Maximum distance between the oldest unacknowledged seqnum and any seqnum we
+ * put on the wire. The receiver considers everything outside of
+ * [next_expected, next_expected + MAX_RELIABLE_WINDOW_SIZE) as already
+ * delivered and blindly re-ACKs it, so this must stay well below that.
+ * Note that the send window limits the *number* of packets in flight, not the
+ * seqnum distance, which can be much larger when a single old packet is stuck.
+ */
+#define MAX_RELIABLE_SEQNUM_SPREAD (MAX_RELIABLE_WINDOW_SIZE / 2)
 /* starting value for window size */
 #define START_RELIABLE_WINDOW_SIZE 64
 /* minimum value for window size */
@@ -449,7 +458,8 @@ public:
 
 private:
 	std::mutex m_internal_mutex;
-	u16 m_window_size = MIN_RELIABLE_WINDOW_SIZE;
+	// written by the send thread, read by both threads
+	std::atomic<u16> m_window_size = MIN_RELIABLE_WINDOW_SIZE;
 
 	u16 next_incoming_seqnum = SEQNUM_INITIAL;
 
@@ -462,6 +472,8 @@ private:
 	float packet_loss_counter = 0.0f;
 
 	unsigned int current_bytes_transfered = 0;
+	// same, but reset with every window size update
+	unsigned int window_bytes_transfered = 0;
 	unsigned int current_bytes_received = 0;
 	unsigned int current_bytes_lost = 0;
 	float max_kbps = 0.0f;
