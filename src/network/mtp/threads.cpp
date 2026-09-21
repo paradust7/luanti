@@ -218,6 +218,13 @@ void ConnectionSendThread::runTimeouts(float dtime, u32 peer_packet_quota)
 			// Increment reliable packet times
 			channel.outgoing_reliables_sent.incrementTimeouts(dtime);
 
+			// During connection setup, we want resends to only happen via
+			// CONNCMD_RESEND_ONE, not here. Skip getResend() because it
+			// increments resend_count, which would count against actual
+			// resends.
+			if (peer->isHalfOpen())
+				continue;
+
 			// Re-send timed out outgoing reliables
 			auto timed_outs = channel.outgoing_reliables_sent.getResend(
 				resend_timeout, peer_packet_quota);
@@ -225,18 +232,6 @@ void ConnectionSendThread::runTimeouts(float dtime, u32 peer_packet_quota)
 			channel.UpdatePacketLossCounter(timed_outs.size());
 			if (timed_outs.size() > 0)
 				g_profiler->graphAdd("packets_lost", timed_outs.size());
-
-			// Note that this only happens during connection setup, it would
-			// break badly otherwise.
-			if (peer->isHalfOpen()) {
-				if (!timed_outs.empty()) {
-					dout_con << m_connection->getDesc() <<
-						"Skipping re-send of " << timed_outs.size() <<
-						" timed-out reliables to peer_id=" << udpPeer->id
-						<< " channel=" << ch << " (half-open)." << std::endl;
-				}
-				continue;
-			}
 
 			if (m_iteration_packets_avaialble > timed_outs.size())
 				m_iteration_packets_avaialble -= timed_outs.size();
