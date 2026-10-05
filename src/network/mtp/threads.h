@@ -16,7 +16,7 @@
 namespace con
 {
 
-class Connection;
+class LegacyTransport;
 
 struct OutgoingPacket
 {
@@ -49,7 +49,7 @@ public:
 
 	void Trigger();
 
-	void setParent(Connection *parent)
+	void setParent(LegacyTransport *parent)
 	{
 		assert(parent != NULL); // Pre-condition
 		m_connection = parent;
@@ -84,7 +84,7 @@ private:
 
 	bool packetsQueued();
 
-	Connection *m_connection = nullptr;
+	LegacyTransport *m_connection = nullptr;
 	unsigned int m_max_packet_size;
 	float m_timeout;
 	std::queue<OutgoingPacket> m_outgoing_queue;
@@ -102,7 +102,7 @@ public:
 
 	void *run();
 
-	void setParent(Connection *parent)
+	void setParent(LegacyTransport *parent)
 	{
 		assert(parent); // Pre-condition
 		m_connection = parent;
@@ -132,22 +132,22 @@ private:
 			u8 channelnum, bool reliable);
 
 	SharedBuffer<u8> handlePacketType_Control(Channel *channel,
-			const SharedBuffer<u8> &packetdata, Peer *peer, u8 channelnum,
+			const SharedBuffer<u8> &packetdata, Peer *peer, UDPPeer *udp_peer, u8 channelnum,
 			bool reliable);
 	SharedBuffer<u8> handlePacketType_Original(Channel *channel,
-			const SharedBuffer<u8> &packetdata, Peer *peer, u8 channelnum,
+			const SharedBuffer<u8> &packetdata, Peer *peer, UDPPeer *udp_peer, u8 channelnum,
 			bool reliable);
 	SharedBuffer<u8> handlePacketType_Split(Channel *channel,
-			const SharedBuffer<u8> &packetdata, Peer *peer, u8 channelnum,
+			const SharedBuffer<u8> &packetdata, Peer *peer, UDPPeer *udp_peer, u8 channelnum,
 			bool reliable);
 	SharedBuffer<u8> handlePacketType_Reliable(Channel *channel,
-			const SharedBuffer<u8> &packetdata, Peer *peer, u8 channelnum,
+			const SharedBuffer<u8> &packetdata, Peer *peer, UDPPeer *udp_peer, u8 channelnum,
 			bool reliable);
 
 	struct PacketTypeHandler
 	{
 		SharedBuffer<u8> (ConnectionReceiveThread::*handler)(Channel *channel,
-				const SharedBuffer<u8> &packet, Peer *peer, u8 channelnum,
+				const SharedBuffer<u8> &packet, Peer *peer, UDPPeer *udp_peer, u8 channelnum,
 				bool reliable);
 	};
 
@@ -168,7 +168,7 @@ private:
 
 	static const PacketTypeHandler packetTypeRouter[PACKET_TYPE_MAX];
 
-	Connection *m_connection = nullptr;
+	LegacyTransport *m_connection = nullptr;
 
 	RateLimitHelper m_new_peer_ratelimit;
 };

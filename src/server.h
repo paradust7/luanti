@@ -70,7 +70,7 @@ struct SunParams;
 
 namespace con {
 	class IConnection;
-	class IPeer;
+	struct NetworkOverrides;
 
 	enum rtt_stat_type : int;
 }
@@ -186,7 +186,7 @@ public:
 		const std::string &path_world,
 		const SubgameSpec &gamespec,
 		bool simple_singleplayer_mode,
-		UDPSocket &&socket,
+		const con::NetworkOverrides &net_overrides,
 		bool dedicated,
 		ChatInterface *iface = nullptr,
 		std::string *shutdown_errmsg = nullptr
@@ -398,8 +398,8 @@ public:
 	void setLighting(RemotePlayer *player, const Lighting &lighting);
 
 	/* con::PeerHandler implementation. */
-	void peerAdded(con::IPeer *peer) override;
-	void deletingPeer(con::IPeer *peer, bool timeout) override;
+	void peerAdded(session_t peer_id, const Address &address) override;
+	void peerRemoved(session_t peer_id, bool is_timeout, const Address &address) override;
 
 	void DenySudoAccess(session_t peer_id);
 	void DenyAccess(session_t peer_id, AccessDeniedCode reason,

@@ -5,13 +5,12 @@
 #pragma once
 
 #include "network/mtp/impl.h"
+#include "network/peer.h"
 
 #include "util/numeric.h"
 
 // Constant that differentiates the protocol from random data and other protocols
 #define PROTOCOL_ID 0x4f457403
-
-#define MAX_UDP_PEERS 65535
 
 /*
 === NOTES ===
@@ -477,57 +476,61 @@ private:
 };
 
 
-class UDPPeer final : public Peer
+class UDPPeer final : public IPeerData
 {
 public:
 
-	friend class PeerHelper;
 	friend class ConnectionReceiveThread;
 	friend class ConnectionSendThread;
-	friend class Connection;
+	friend class LegacyTransport;
 
-	UDPPeer(session_t id, const Address &address, Connection *connection);
-	virtual ~UDPPeer() = default;
+	DISABLE_CLASS_COPY(UDPPeer);
+
+	UDPPeer(Peer* peer, LegacyTransport *connection);
+	~UDPPeer() override;
 
 	void PutReliableSendCommand(ConnectionCommandPtr &c,
-							unsigned int max_packet_size) override;
+							unsigned int max_packet_size);
 
-	virtual const Address &getAddress() const override {
-		return address;
-	}
-
-	u16 getNextSplitSequenceNumber(u8 channel) override;
-	void setNextSplitSequenceNumber(u8 channel, u16 seqnum) override;
+	u16 getNextSplitSequenceNumber(u8 channel);
+	void setNextSplitSequenceNumber(u8 channel, u16 seqnum);
 
 	SharedBuffer<u8> addSplitPacket(u8 channel, BufferedPacketPtr &toadd,
-		bool reliable) override;
+		bool reliable);
 
 	bool isTimedOut(float timeout, std::string &reason) override;
 
+	float getRateStat(rate_stat_type type) override;
+
 protected:
 	/*
-		Calculates avg_rtt and resend_timeout.
-		rtt=-1 only recalculates resend_timeout
+		Updates the RTT statistics and recalculates resend_timeout.
+		Negative values of rtt are ignored.
 	*/
-	void reportRTT(float rtt) override;
+	void reportRTT(float rtt);
 
 	void RunCommandQueues(
 					unsigned int max_packet_size,
 					unsigned int maxtransfer);
 
 	float getResendTimeout()
-		{ MutexAutoLock lock(m_exclusive_access_mutex); return resend_timeout; }
+		{ return resend_timeout; }
 
 	void setResendTimeout(float timeout)
-		{ MutexAutoLock lock(m_exclusive_access_mutex); resend_timeout = timeout; }
+		{ resend_timeout = timeout; }
 
-	bool Ping(float dtime, SharedBuffer<u8>& data) override;
+	bool Ping(float dtime, SharedBuffer<u8>& data);
 
 	Channel channels[CHANNEL_COUNT];
 	bool m_pending_disconnect = false;
+	// Send quota for the current iteration of the send thread
+	unsigned int m_increment_packets_remaining = 0;
 private:
+	Address m_address;
+	LegacyTransport* m_connection;
 	// This is changed dynamically
-	float resend_timeout = 0.5;
+	std::atomic<float> resend_timeout = 0.5f;
+	float m_ping_timer = 0.0f;
 
 	bool processReliableSendCommand(
 					ConnectionCommandPtr &c_ptr,

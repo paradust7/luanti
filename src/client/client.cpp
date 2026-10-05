@@ -415,8 +415,7 @@ void Client::connect(const Address &address, const std::string &address_name)
 	}
 
 	m_address_name = address_name;
-	m_con.reset(con::createMTP(/*is_server=*/false,
-			UDPSocket::CreateEphemeral(address.isIPv6()), this));
+	m_con = con::createClient(this, m_simple_singleplayer_mode, address.isIPv6());
 
 	infostream << "Connecting to server at ";
 	address.print(infostream);
@@ -911,20 +910,20 @@ bool Client::loadMedia(const std::string &data, const std::string &filename,
 }
 
 // Virtual methods from con::PeerHandler
-void Client::peerAdded(con::IPeer *peer)
+void Client::peerAdded(session_t peer_id, const Address &address)
 {
-	infostream << "Client::peerAdded(): peer->id="
-			<< peer->id << std::endl;
+	infostream << "Client::peerAdded(): id="
+			<< peer_id << std::endl;
 }
 
-void Client::deletingPeer(con::IPeer *peer, bool timeout)
+void Client::peerRemoved(session_t peer_id, bool is_timeout, const Address &address)
 {
-	infostream << "Client::deletingPeer(): "
+	infostream << "Client::peerRemoved(): "
 			"Server Peer is getting deleted "
-			<< "(timeout=" << timeout << ")" << std::endl;
+			<< "(timeout=" << is_timeout << ")" << std::endl;
 
 	m_access_denied = true;
-	if (timeout)
+	if (is_timeout)
 		m_access_denied_reason = gettext("Connection timed out.");
 	else if (m_access_denied_reason.empty())
 		m_access_denied_reason = gettext("Connection aborted (protocol error?).");
@@ -1838,7 +1837,7 @@ void Client::setFatalError(const LuaError &e)
 
 const Address Client::getServerAddress()
 {
-	return m_con ? m_con->GetPeerAddress(PEER_ID_SERVER) : Address();
+	return m_con ? m_con->getRemoteAddress() : Address();
 }
 
 bool Client::mediaReceiveProgress(s32 &received, s32 &total, size_t &received_size) const

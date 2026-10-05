@@ -471,8 +471,8 @@ private:
 	void loadMods();
 
 	// Virtual methods from con::PeerHandler
-	void peerAdded(con::IPeer *peer) override;
-	void deletingPeer(con::IPeer *peer, bool timeout) override;
+	void peerAdded(session_t peer_id, const Address &address) override;
+	void peerRemoved(session_t peer_id, bool is_timeout, const Address &address) override;
 
 	void initLocalMapSaving(const Address &address, const std::string &hostname);
 

@@ -28,6 +28,7 @@
 #include "servermap.h"
 #include "settings.h"
 #include "network/socket.h"
+#include "network/connection.h"
 #include "network/networkexceptions.h"
 #include "mapblock.h"
 #if USE_CURSES
@@ -1171,25 +1172,9 @@ static bool run_dedicated_server(const GameParams &game_params, const Settings &
 	if (cmd_args.getFlag("recompress"))
 		return recompress_map_database(game_params, cmd_args);
 
-	// Bind address
-	std::string bind_str = g_settings->get("bind_address");
-	Address bind_addr(0, 0, 0, 0, game_params.socket_port);
-
-	if (g_settings->getBool("ipv6_server"))
-		bind_addr.setAddress(static_cast<IPv6AddressBytes*>(nullptr));
-	try {
-		bind_addr.Resolve(bind_str.c_str());
-	} catch (const ResolveError &e) {
-		warningstream << "Resolving bind address \"" << bind_str
-			<< "\" failed: " << e.what()
-			<< " -- Listening on all addresses." << std::endl;
-	}
-	if (bind_addr.isIPv6() && !g_settings->getBool("enable_ipv6")) {
-		errorstream << "Unable to listen on "
-		            << bind_addr.serializeString()
-		            << " because IPv6 is disabled" << std::endl;
-		return false;
-	}
+	// The port may have come from the command line
+	con::NetworkOverrides net_overrides;
+	net_overrides.bind_port = game_params.socket_port;
 
 	if (cmd_args.exists("terminal")) {
 #if USE_CURSES
@@ -1216,7 +1201,7 @@ static bool run_dedicated_server(const GameParams &game_params, const Settings &
 
 		try {
 			Server server(game_params.world_path, game_params.game_spec,
-					false, UDPSocket::Create(bind_addr), true, &iface);
+					false, net_overrides, true, &iface);
 
 			g_term_console.setup(&iface, &kill, admin_nick);
 
@@ -1254,7 +1239,7 @@ static bool run_dedicated_server(const GameParams &game_params, const Settings &
 		try {
 			// Create server
 			Server server(game_params.world_path, game_params.game_spec, false,
-					UDPSocket::Create(bind_addr), true);
+					net_overrides, true);
 			server.start();
 
 			// Run server
@@ -1374,8 +1359,12 @@ static bool recompress_map_database(const GameParams &game_params, const Setting
 		return false;
 	}
 	const std::string &backend = world_mt.get("backend");
+	// The server isn't started, so just use any port
+	con::NetworkOverrides net_overrides;
+	net_overrides.bind_port = 0;
+	net_overrides.bind_address = "0.0.0.0";
 	Server server(game_params.world_path, game_params.game_spec, false,
-			UDPSocket::CreateEphemeral(false), false);
+			net_overrides, false);
 	MapDatabase *db = ServerMap::createDatabase(backend, game_params.world_path, world_mt);
 
 	volatile auto &kill = *porting::signal_handler_killstatus();

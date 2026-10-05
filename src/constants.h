@@ -27,6 +27,9 @@
 
 #define CONNECTION_TIMEOUT 30
 
+// safe minimum across internet networks for ipv4 and ipv6
+#define MAX_PACKET_SIZE 512
+
 /*
     Server
 */

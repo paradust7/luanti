@@ -151,7 +151,7 @@ void UDPSocket::Bind(Address addr)
 	}
 }
 
-Address UDPSocket::GetLocalAddress()
+Address UDPSocket::GetLocalAddress() const
 {
 	struct sockaddr_storage addr;
 	socklen_t addr_len = sizeof(addr);

@@ -8,6 +8,8 @@
 #include "porting.h"
 #include "settings.h"
 #include "util/serialize.h"
+#include "network/connection.h"
+#include "network/inmemorytransport.h"
 #include "network/peerhandler.h"
 #include "network/mtp/internal.h"
 #include "network/networkexceptions.h"
@@ -28,6 +30,7 @@ public:
 	void testNetworkPacketSerialize();
 	void testHelpers();
 	void testConnectSendReceive();
+	void testInMemoryTransport();
 };
 
 static TestConnection g_test_instance;
@@ -37,6 +40,7 @@ void TestConnection::runTests(IGameDef *gamedef)
 	TEST(testNetworkPacketSerialize);
 	TEST(testHelpers);
 	TEST(testConnectSendReceive);
+	TEST(testInMemoryTransport);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -45,24 +49,26 @@ struct Handler : public con::PeerHandler
 {
 	Handler(const char *a_name) : name(a_name) {}
 
-	void peerAdded(con::IPeer *peer)
+	void peerAdded(session_t peer_id, const Address &address) override
 	{
 		infostream << "Handler(" << name << ")::peerAdded(): "
-			"id=" << peer->id << std::endl;
-		last_id = peer->id;
+			"id=" << peer_id << std::endl;
+		last_id = peer_id;
 		count++;
 	}
 
-	void deletingPeer(con::IPeer *peer, bool timeout)
+	void peerRemoved(session_t peer_id, bool is_timeout, const Address &address) override
 	{
-		infostream << "Handler(" << name << ")::deletingPeer(): "
-			"id=" << peer->id << ", timeout=" << timeout << std::endl;
-		last_id = peer->id;
+		infostream << "Handler(" << name << ")::peerRemoved(): "
+			"id=" << peer_id << ", timeout=" << is_timeout << std::endl;
+		last_id = peer_id;
+		last_timeout = is_timeout;
 		count--;
 	}
 
 	s32 count = 0;
 	u16 last_id = 0;
+	bool last_timeout = false;
 	const char *name;
 };
 
@@ -164,39 +170,29 @@ void TestConnection::testConnectSendReceive()
 	Handler hand_server("server");
 	Handler hand_client("client");
 
-	Address address(0, 0, 0, 0, 30001);
-	Address bind_addr(0, 0, 0, 0, 30001);
-	/*
-	 * Try to use the bind_address for servers with no localhost address
-	 * For example: FreeBSD jails
-	 */
-	std::string bind_str = g_settings->get("bind_address");
-	try {
-		bind_addr.Resolve(bind_str.c_str());
+	infostream << "** Creating server Connection" << std::endl;
+	con::NetworkOverrides server_overrides;
+	server_overrides.timeout = 5.0f;
+	server_overrides.bind_port = 30001;
+	auto server_con = con::createServer(&hand_server, false, server_overrides);
+	con::IConnection &server = *server_con;
 
-		if (!bind_addr.isIPv6()) {
-			address = bind_addr;
-		}
-	} catch (ResolveError &e) {
+	Address server_address = server.getBindAddress();
+	if (server_address.isAny()) {
+		server_address = Address(127, 0, 0, 1, 30001);
 	}
 
-	infostream << "** Creating server Connection" << std::endl;
-	UDPSocket server_socket = UDPSocket::Create(address);
-	con::Connection server(512, 5.0f, std::move(server_socket), true, &hand_server);
-
 	infostream << "** Creating client Connection" << std::endl;
-	UDPSocket client_socket = UDPSocket::CreateEphemeral(address.isIPv6());
-	con::Connection client(512, 5.0f, std::move(client_socket), false, &hand_client);
+	con::NetworkOverrides client_overrides;
+	client_overrides.timeout = 5.0f;
+	auto client_con = con::createClient(&hand_client, false,
+			server_address.isIPv6(), client_overrides);
+	con::IConnection &client = *client_con;
 
 	UASSERT(hand_server.count == 0);
 	UASSERT(hand_client.count == 0);
 
 	sleep_ms(50);
-
-	Address server_address(127, 0, 0, 1, 30001);
-	if (address != Address(0, 0, 0, 0, 30001)) {
-		server_address = bind_addr;
-	}
 
 	infostream << "** running client.Connect()" << std::endl;
 	client.Connect(server_address);
@@ -368,4 +364,178 @@ void TestConnection::testConnectSendReceive()
 	UASSERT(hand_client.last_id == 1);
 	UASSERT(hand_server.count == 1);
 	UASSERT(hand_server.last_id >= 2);
+}
+
+
+// Calls Receive() on the connection until the condition is true, or a few
+// seconds have passed. Any data received is ignored.
+template <typename F>
+static bool receiveUntil(con::IConnection &con, F condition)
+{
+	const u64 start = porting::getTimeMs();
+	while (!condition()) {
+		if (porting::getTimeMs() - start > 5000)
+			return false;
+		NetworkPacket pkt;
+		con.ReceiveTimeoutMs(&pkt, 10);
+	}
+	return true;
+}
+
+void TestConnection::testInMemoryTransport()
+{
+	constexpr u32 timeout_ms = 1000;
+	const Address server_address(127, 0, 0, 1, 30000);
+
+	Handler hand_server("server");
+	Handler hand_client("client");
+
+	con::NetworkOverrides overrides;
+	overrides.transport = "memory";
+	std::unique_ptr<con::IConnection> server = con::createServer(
+			&hand_server, true, overrides);
+
+	// Connects the client, and lets both handlers see the new peers
+	const auto connect = [&] (con::IConnection &client) {
+		const s32 client_count = hand_client.count;
+		const s32 server_count = hand_server.count;
+		client.Connect(server_address);
+		UASSERT(client.Connected());
+		UASSERT(receiveUntil(client, [&] { return hand_client.count == client_count + 1; }));
+		UASSERT(receiveUntil(*server, [&] { return hand_server.count == server_count + 1; }));
+	};
+
+	// Returns a new client connected to the server
+	const auto connect_client = [&] () {
+		std::unique_ptr<con::IConnection> client = con::createClient(
+				&hand_client, true, false, overrides);
+		connect(*client);
+		return client;
+	};
+
+	std::unique_ptr<con::IConnection> client = connect_client();
+	UASSERTEQ(s32, hand_client.count, 1);
+	UASSERTEQ(u16, hand_client.last_id, PEER_ID_SERVER);
+	UASSERT(client->getRemoteAddress() == server_address);
+	UASSERT(client->getPeerStat(PEER_ID_SERVER, con::AVG_RTT) == 0.0f);
+	const session_t client_id = hand_server.last_id;
+	UASSERT(client_id >= 2);
+
+	// Packets arrive in order, regardless of channel and reliability
+	for (u16 i = 0; i < 100; i++) {
+		NetworkPacket pkt(0x10, 2);
+		pkt << i;
+		client->Send(PEER_ID_SERVER, i % 3, &pkt, i % 2 == 0);
+	}
+	for (u16 i = 0; i < 100; i++) {
+		NetworkPacket pkt;
+		UASSERT(server->ReceiveTimeoutMs(&pkt, timeout_ms));
+		UASSERTEQ(session_t, pkt.getPeerId(), client_id);
+		UASSERTEQ(u16, pkt.getCommand(), 0x10);
+		u16 j;
+		pkt >> j;
+		UASSERTEQ(u16, j, i);
+	}
+
+	// Large packets are not a problem, even unreliable ones
+	{
+		const u32 datasize = 1000000;
+		NetworkPacket pkt(0xff, datasize);
+		for (u32 i = 0; i < datasize; i++)
+			pkt << static_cast<u8>(i * 7);
+		auto sentdata = pkt.oldForgePacket();
+		server->Send(client_id, 1, &pkt, false);
+
+		NetworkPacket recvpkt;
+		UASSERT(client->ReceiveTimeoutMs(&recvpkt, timeout_ms));
+		UASSERTEQ(session_t, recvpkt.getPeerId(), PEER_ID_SERVER);
+		auto recvdata = recvpkt.oldForgePacket();
+		UASSERTEQ(size_t, recvdata.getSize(), sentdata.getSize());
+		UASSERT(memcmp(*sentdata, *recvdata, recvdata.getSize()) == 0);
+	}
+
+	// The server kicks the client. Packets sent before are still delivered.
+	{
+		NetworkPacket pkt(0x20, 0);
+		server->Send(client_id, 0, &pkt, true);
+		server->DisconnectPeer(client_id);
+		UASSERT(receiveUntil(*server, [&] { return hand_server.count == 0; }));
+		UASSERT(!hand_server.last_timeout);
+
+		NetworkPacket recvpkt;
+		UASSERT(client->ReceiveTimeoutMs(&recvpkt, timeout_ms));
+		UASSERTEQ(u16, recvpkt.getCommand(), 0x20);
+		UASSERT(receiveUntil(*client, [&] { return hand_client.count == 0; }));
+		UASSERT(!hand_client.last_timeout);
+		UASSERT(!client->Connected());
+	}
+
+	// The client connects again, then leaves without disconnecting
+	connect(*client);
+	client.reset();
+	UASSERT(receiveUntil(*server, [&] { return hand_server.count == 0; }));
+	UASSERT(hand_server.last_timeout);
+	hand_client.count = 0;
+
+	// The client disconnects, then leaves
+	client = connect_client();
+	client->Disconnect();
+	client.reset();
+	UASSERT(receiveUntil(*server, [&] { return hand_server.count == 0; }));
+	UASSERT(!hand_server.last_timeout);
+	hand_client.count = 0;
+
+	// Only one client at a time. Another one fails like a timed out connect.
+	client = connect_client();
+	{
+		Handler hand_second("second client");
+		auto second = con::createClient(
+				&hand_second, true, false, overrides);
+		second->Connect(server_address);
+		UASSERT(receiveUntil(*second, [&] { return hand_second.last_timeout; }));
+		UASSERTEQ(s32, hand_second.count, 0);
+		UASSERT(!second->Connected());
+	}
+	UASSERT(client->Connected());
+
+	// The server leaves without disconnecting. What it sent before still arrives.
+	{
+		NetworkPacket pkt(0x21, 0);
+		server->Send(hand_server.last_id, 0, &pkt, true);
+	}
+	server.reset();
+	{
+		NetworkPacket recvpkt;
+		UASSERT(client->ReceiveTimeoutMs(&recvpkt, timeout_ms));
+		UASSERTEQ(u16, recvpkt.getCommand(), 0x21);
+	}
+	UASSERT(receiveUntil(*client, [&] { return hand_client.count == 0; }));
+	UASSERT(hand_client.last_timeout);
+	UASSERT(!client->Connected());
+	client.reset();
+
+	// Without a server, connecting fails like a timed out connect.
+	// Nothing is passed on while only one side is there.
+	{
+		Handler hand_lonely("lonely client");
+		Handler hand_late("late server");
+		auto lonely = con::createClient(
+				&hand_lonely, true, false, overrides);
+		lonely->Connect(server_address);
+		UASSERT(receiveUntil(*lonely, [&] { return hand_lonely.last_timeout; }));
+		UASSERTEQ(s32, hand_lonely.count, 0);
+		NetworkPacket pkt(0x30, 0);
+		lonely->Send(PEER_ID_SERVER, 0, &pkt, true);
+
+		auto late = con::createServer(&hand_late, true, overrides);
+		lonely->Send(PEER_ID_SERVER, 0, &pkt, true);
+		NetworkPacket recvpkt;
+		UASSERT(!late->ReceiveTimeoutMs(&recvpkt, 100));
+		UASSERTEQ(s32, hand_late.count, 0);
+		UASSERT(!lonely->Connected());
+
+		// There can only be one in-memory server
+		EXCEPTION_CHECK(con::ConnectionException,
+				con::createServer(&hand_late, true, overrides));
+	}
 }

@@ -2232,6 +2232,11 @@ lighting_boost_spread (Light curve boost spread) float 0.2 0.0 0.4
 #    Required for IPv6 connections to work at all.
 enable_ipv6 (IPv6) [common] bool true
 
+#    How the client and server exchange packets in singleplayer.
+#    legacy: Over UDP from/to localhost. Same as for a remote server.
+#    memory: Directly in memory. Faster and never loses packets.
+singleplayer_transport (Singleplayer transport) [client] enum legacy legacy,memory
+
 #    Prometheus listener address.
 #    If Luanti is compiled with Prometheus support, this setting
 #    enables the metrics listener for Prometheus on that address.

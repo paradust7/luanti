@@ -4,10 +4,11 @@
 
 #pragma once
 
+#include "address.h"
+#include "networkprotocol.h"
+
 namespace con
 {
-
-class IPeer;
 
 class PeerHandler
 {
@@ -15,19 +16,21 @@ public:
 	PeerHandler() = default;
 	virtual ~PeerHandler() = default;
 
-	// Note: all functions are called from within a Receive() call on the same thread.
+	// Note: for the handler passed to createMTP(), all functions are called
+	// from within a Receive() call on the same thread. But a PeerTable
+	// calls its handler from whichever thread added or removed the peer.
 
 	/*
 		This is called after the Peer has been inserted into the
 		Connection's peer container.
 	*/
-	virtual void peerAdded(IPeer *peer) = 0;
+	virtual void peerAdded(session_t peer_id, const Address &address) = 0;
 
 	/*
-		This is called before the Peer has been removed from the
+		This is called after the Peer has been removed from the
 		Connection's peer container.
 	*/
-	virtual void deletingPeer(IPeer *peer, bool timeout) = 0;
+	virtual void peerRemoved(session_t peer_id, bool timeout, const Address &address) = 0;
 };
 
 }

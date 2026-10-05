@@ -55,7 +55,7 @@ public:
 	void Bind(Address addr);
 	void Close();
 
-	Address GetLocalAddress();
+	Address GetLocalAddress() const;
 
 	void Send(const Address &destination, const void *data, int size);
 	// Returns -1 if there is no data

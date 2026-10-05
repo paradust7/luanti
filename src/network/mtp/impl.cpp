@@ -8,7 +8,6 @@
 #include "log.h"
 #include "porting.h"
 #include "network/mtp/threads.h"
-#include "network/peerhandler.h"
 #include "network/networkexceptions.h"
 #include "network/networkpacket.h"
 #include "util/serialize.h"
@@ -836,150 +835,29 @@ void Channel::UpdateTimers(float dtime)
 	Peer
 */
 
-PeerHelper::~PeerHelper()
-{
-	if (m_peer)
-		m_peer->DecUseCount();
-
-	m_peer = nullptr;
-}
-
-PeerHelper& PeerHelper::operator=(Peer* peer)
-{
-	if (m_peer)
-		m_peer->DecUseCount();
-	m_peer = peer;
-	if (peer && !peer->IncUseCount())
-		m_peer = nullptr;
-	return *this;
-}
-
-bool Peer::IncUseCount()
-{
-	MutexAutoLock lock(m_exclusive_access_mutex);
-
-	if (!m_pending_deletion) {
-		this->m_usage++;
-		return true;
-	}
-
-	return false;
-}
-
-void Peer::DecUseCount()
-{
-	{
-		MutexAutoLock lock(m_exclusive_access_mutex);
-		sanity_check(m_usage > 0);
-		m_usage--;
-
-		if (!((m_pending_deletion) && (m_usage == 0)))
-			return;
-	}
-	delete this;
-}
-
-void Peer::RTTStatistics(float rtt, const std::string &profiler_id,
-		unsigned int num_samples) {
-
-	if (m_last_rtt > 0) {
-		/* set min max values */
-		if (rtt < m_rtt.min_rtt)
-			m_rtt.min_rtt = rtt;
-		if (rtt >= m_rtt.max_rtt)
-			m_rtt.max_rtt = rtt;
-
-		/* do average calculation */
-		if (m_rtt.avg_rtt < 0)
-			m_rtt.avg_rtt  = rtt;
-		else
-			m_rtt.avg_rtt  = m_rtt.avg_rtt * (num_samples/(num_samples-1)) +
-								rtt * (1/num_samples);
-
-		/* do jitter calculation */
-
-		//just use some neutral value at beginning
-		float jitter = m_rtt.jitter_min;
-
-		if (rtt > m_last_rtt)
-			jitter = rtt-m_last_rtt;
-
-		if (rtt <= m_last_rtt)
-			jitter = m_last_rtt - rtt;
-
-		if (jitter < m_rtt.jitter_min)
-			m_rtt.jitter_min = jitter;
-		if (jitter >= m_rtt.jitter_max)
-			m_rtt.jitter_max = jitter;
-
-		if (m_rtt.jitter_avg < 0)
-			m_rtt.jitter_avg  = jitter;
-		else
-			m_rtt.jitter_avg  = m_rtt.jitter_avg * (num_samples/(num_samples-1)) +
-								jitter * (1/num_samples);
-
-		if (!profiler_id.empty()) {
-			g_profiler->graphAdd(profiler_id + " RTT [ms]", rtt * 1000.f);
-			g_profiler->graphAdd(profiler_id + " jitter [ms]", jitter * 1000.f);
-		}
-	}
-	/* save values required for next loop */
-	m_last_rtt = rtt;
-}
-
-bool Peer::isTimedOut(float timeout, std::string &reason)
-{
-	MutexAutoLock lock(m_exclusive_access_mutex);
-
-	{
-		u64 current_time = porting::getTimeMs();
-		float dtime = CALC_DTIME(m_last_timeout_check, current_time);
-		m_last_timeout_check = current_time;
-		m_timeout_counter += dtime;
-	}
-	if (m_timeout_counter > timeout) {
-		reason = "timeout counter";
-		return true;
-	}
-
-	return false;
-}
-
-void Peer::Drop()
-{
-	{
-		MutexAutoLock usage_lock(m_exclusive_access_mutex);
-		m_pending_deletion = true;
-		if (m_usage != 0)
-			return;
-	}
-
-	PROFILE(std::stringstream peerIdentifier1);
-	PROFILE(peerIdentifier1 << "runTimeouts[" << m_connection->getDesc()
-			<< ";" << id << ";RELIABLE]");
-	PROFILE(g_profiler->remove(peerIdentifier1.str()));
-	PROFILE(std::stringstream peerIdentifier2);
-	PROFILE(peerIdentifier2 << "sendPackets[" << m_connection->getDesc()
-			<< ";" << id << ";RELIABLE]");
-	PROFILE(ScopeProfiler peerprofiler(g_profiler, peerIdentifier2.str(), SPT_AVG));
-
-	delete this;
-}
-
-UDPPeer::UDPPeer(session_t id, const Address &address, Connection *connection) :
-	Peer(id, address, connection)
+UDPPeer::UDPPeer(Peer* peer, LegacyTransport *connection) :
+	IPeerData(peer, connection),
+	m_address(peer->getAddress()),
+	m_connection(connection)
 {
 	for (Channel &channel : channels)
 		channel.setWindowSize(START_RELIABLE_WINDOW_SIZE);
 }
 
+UDPPeer::~UDPPeer()
+{
+	PROFILE(std::stringstream peerIdentifier1);
+	PROFILE(peerIdentifier1 << "runTimeouts[" << m_connection->getDesc()
+			<< ";" << m_parent->getPeerID() << ";RELIABLE]");
+	PROFILE(g_profiler->remove(peerIdentifier1.str()));
+	PROFILE(std::stringstream peerIdentifier2);
+	PROFILE(peerIdentifier2 << "sendPackets[" << m_connection->getDesc()
+			<< ";" << m_parent->getPeerID() << ";RELIABLE]");
+	PROFILE(ScopeProfiler peerprofiler(g_profiler, peerIdentifier2.str(), SPT_AVG));
+}
+
 bool UDPPeer::isTimedOut(float timeout, std::string &reason)
 {
-	if (Peer::isTimedOut(timeout, reason))
-		return true;
-
-	MutexAutoLock lock(m_exclusive_access_mutex);
-
 	for (int i = 0; i < CHANNEL_COUNT; i++) {
 		Channel &channel = channels[i];
 		if (channel.outgoing_reliables_sent.getTimedOuts(timeout) > 0) {
@@ -991,14 +869,45 @@ bool UDPPeer::isTimedOut(float timeout, std::string &reason)
 	return false;
 }
 
+float UDPPeer::getRateStat(rate_stat_type type)
+{
+	float retval = 0;
+
+	for (Channel &channel : channels) {
+		switch (type) {
+			case CUR_DL_RATE:
+				retval += channel.getCurrentDownloadRateKB();
+				break;
+			case AVG_DL_RATE:
+				retval += channel.getAvgDownloadRateKB();
+				break;
+			case CUR_INC_RATE:
+				retval += channel.getCurrentIncomingRateKB();
+				break;
+			case AVG_INC_RATE:
+				retval += channel.getAvgIncomingRateKB();
+				break;
+			case AVG_LOSS_RATE:
+				retval += channel.getAvgLossRateKB();
+				break;
+			case CUR_LOSS_RATE:
+				retval += channel.getCurrentLossRateKB();
+				break;
+			default:
+				FATAL_ERROR("UDPPeer::getRateStat Invalid stat type");
+		}
+	}
+	return retval;
+}
+
 void UDPPeer::reportRTT(float rtt)
 {
 	if (rtt < 0)
 		return;
-	RTTStatistics(rtt, "network", MAX_RELIABLE_WINDOW_SIZE*10);
+	m_parent->rttStatistics(rtt, "network", MAX_RELIABLE_WINDOW_SIZE*10);
 
 	// use this value to decide the resend timeout
-	const float rtt_stat = getStat(AVG_RTT);
+	const float rtt_stat = m_parent->getStat(AVG_RTT);
 	if (rtt_stat < 0)
 		return;
 	float timeout = rtt_stat * RESEND_TIMEOUT_FACTOR;
@@ -1012,14 +921,14 @@ void UDPPeer::reportRTT(float rtt)
 
 	if (std::abs(timeout - timeout_old) >= 0.001f) {
 		dout_con << m_connection->getDesc() << " set resend timeout " << timeout
-			<< " (rtt=" << rtt_stat << ") for peer id: " << id << std::endl;
+			<< " (rtt=" << rtt_stat << ") for peer id: " << m_parent->getPeerID() << std::endl;
 	}
 }
 
 bool UDPPeer::Ping(float dtime,SharedBuffer<u8>& data)
 {
 	m_ping_timer += dtime;
-	if (!isHalfOpen() && m_ping_timer >= PING_INTERVAL)
+	if (!m_parent->isHalfOpen() && m_ping_timer >= PING_INTERVAL)
 	{
 		// Create and send PING packet
 		writeU8(&data[0], PACKET_TYPE_CONTROL);
@@ -1108,8 +1017,8 @@ bool UDPPeer::processReliableSendCommand(
 		SharedBuffer<u8> reliable = makeReliablePacket(original, seqnum);
 
 		// Add base headers and make a packet
-		BufferedPacketPtr p = con::makePacket(address, reliable,
-				m_connection->GetProtocolID(), m_connection->GetPeerID(),
+		BufferedPacketPtr p = con::makePacket(m_address, reliable,
+				m_connection->GetProtocolID(), m_connection->getPeerTable()->getOurPeerID(),
 				c.channelnum);
 
 		toadd.push(p);
@@ -1216,73 +1125,32 @@ SharedBuffer<u8> UDPPeer::addSplitPacket(u8 channel, BufferedPacketPtr &toadd,
 }
 
 /*
-	ConnectionEvent
+	LegacyTransport
 */
 
-const char *ConnectionEvent::describe() const
-{
-	switch(type) {
-	case CONNEVENT_NONE:
-		return "CONNEVENT_NONE";
-	case CONNEVENT_DATA_RECEIVED:
-		return "CONNEVENT_DATA_RECEIVED";
-	case CONNEVENT_PEER_ADDED:
-		return "CONNEVENT_PEER_ADDED";
-	case CONNEVENT_PEER_REMOVED:
-		return "CONNEVENT_PEER_REMOVED";
-	}
-	return "Invalid ConnectionEvent";
-}
-
-
-ConnectionEventPtr ConnectionEvent::create(ConnectionEventType type)
-{
-	return std::shared_ptr<ConnectionEvent>(new ConnectionEvent(type));
-}
-
-ConnectionEventPtr ConnectionEvent::dataReceived(session_t peer_id, const Buffer<u8> &data)
-{
-	auto e = create(CONNEVENT_DATA_RECEIVED);
-	e->peer_id = peer_id;
-	data.copyTo(e->data);
-	return e;
-}
-
-ConnectionEventPtr ConnectionEvent::peerAdded(session_t peer_id, Address address)
-{
-	auto e = create(CONNEVENT_PEER_ADDED);
-	e->peer_id = peer_id;
-	e->address = address;
-	return e;
-}
-
-ConnectionEventPtr ConnectionEvent::peerRemoved(session_t peer_id, bool is_timeout, Address address)
-{
-	auto e = create(CONNEVENT_PEER_REMOVED);
-	e->peer_id = peer_id;
-	e->timeout = is_timeout;
-	e->address = address;
-	return e;
-}
-
-/*
-	Connection
-*/
-
-Connection::Connection(u32 max_packet_size, float timeout,
-		UDPSocket &&socket, bool is_server, PeerHandler *peerhandler) :
+LegacyTransport::LegacyTransport(u32 max_packet_size, float timeout,
+		UDPSocket &&socket) :
 	m_udpSocket(std::move(socket)),
 	m_protocol_id(PROTOCOL_ID),
 	m_sendThread(new ConnectionSendThread(max_packet_size, timeout)),
-	m_receiveThread(new ConnectionReceiveThread()),
-	m_bc_peerhandler(peerhandler)
-
+	m_receiveThread(new ConnectionReceiveThread())
 {
 	/* Amount of time Receive() will wait for data, this is entirely different
 	 * from the connection timeout */
 	m_udpSocket.setTimeoutMs(500);
-	if (is_server)
-		SetPeerID(PEER_ID_SERVER);
+}
+
+
+LegacyTransport::~LegacyTransport()
+{
+	// Normally the owning Connection has already done this
+	stop();
+}
+
+void LegacyTransport::attach(ITransportManager *manager)
+{
+	assert(manager && !m_manager);
+	m_manager = manager;
 
 	m_sendThread->setParent(this);
 	m_receiveThread->setParent(this);
@@ -1291,8 +1159,7 @@ Connection::Connection(u32 max_packet_size, float timeout,
 	m_receiveThread->start();
 }
 
-
-Connection::~Connection()
+void LegacyTransport::stop()
 {
 	m_shutting_down = true;
 	// request threads to stop
@@ -1302,106 +1169,18 @@ Connection::~Connection()
 	// wait for threads to finish
 	m_sendThread->wait();
 	m_receiveThread->wait();
-
-	// Delete peers
-	for (auto &peer : m_peers) {
-		delete peer.second;
-	}
 }
 
 /* Internal stuff */
 
-void Connection::putEvent(ConnectionEventPtr e)
-{
-	assert(e->type != CONNEVENT_NONE); // Pre-condition
-	m_event_queue.push_back(e);
-}
-
-void Connection::TriggerSend()
+void LegacyTransport::TriggerSend()
 {
 	m_sendThread->Trigger();
 }
 
-PeerHelper Connection::getPeerNoEx(session_t peer_id)
-{
-	MutexAutoLock peerlock(m_peers_mutex);
-	std::map<session_t, Peer *>::iterator node = m_peers.find(peer_id);
-
-	if (node == m_peers.end()) {
-		return PeerHelper(NULL);
-	}
-
-	// Error checking
-	FATAL_ERROR_IF(node->second->id != peer_id, "Invalid peer id");
-
-	return PeerHelper(node->second);
-}
-
-/* find peer_id for address */
-session_t Connection::lookupPeer(const Address& sender)
-{
-	MutexAutoLock peerlock(m_peers_mutex);
-	for (auto &it: m_peers) {
-		Peer *peer = it.second;
-		if (peer->isPendingDeletion())
-			continue;
-
-		if (peer->getAddress() == sender)
-			return peer->id;
-	}
-
-	return PEER_ID_INEXISTENT;
-}
-
-u32 Connection::getActiveCount()
-{
-	MutexAutoLock peerlock(m_peers_mutex);
-	u32 count = 0;
-	for (auto &it : m_peers) {
-		Peer *peer = it.second;
-		if (peer->isPendingDeletion())
-			continue;
-		if (peer->isHalfOpen())
-			continue;
-		count++;
-	}
-	return count;
-}
-
-bool Connection::deletePeer(session_t peer_id, bool timeout)
-{
-	Peer *peer = 0;
-
-	/* lock list as short as possible */
-	{
-		MutexAutoLock peerlock(m_peers_mutex);
-		if (m_peers.find(peer_id) == m_peers.end())
-			return false;
-		peer = m_peers[peer_id];
-		m_peers.erase(peer_id);
-		auto it = std::find(m_peer_ids.begin(), m_peer_ids.end(), peer_id);
-		m_peer_ids.erase(it);
-	}
-
-	// Create event
-	putEvent(ConnectionEvent::peerRemoved(peer_id, timeout, peer->getAddress()));
-
-	peer->Drop();
-	return true;
-}
-
 /* Interface */
 
-ConnectionEventPtr Connection::waitEvent(u32 timeout_ms)
-{
-	try {
-		return m_event_queue.pop_front(timeout_ms);
-	} catch(ItemNotFoundException &ex) {
-		return ConnectionEvent::create(CONNEVENT_NONE);
-	}
-}
-
-void Connection::putCommand(ConnectionCommandPtr c)
+void LegacyTransport::putCommand(ConnectionCommandPtr c)
 {
 	if (!m_shutting_down) {
 		m_command_queue.push_back(c);
@@ -1409,78 +1188,25 @@ void Connection::putCommand(ConnectionCommandPtr c)
 	}
 }
 
-void Connection::Connect(Address address)
+Address LegacyTransport::getBindAddress() const
 {
+	return m_udpSocket.GetLocalAddress();
+}
+
+void LegacyTransport::Connect(Address address)
+{
+	// Add the server peer right away, so that it can be found by
+	// Connection::Send() as soon as this returns.
+	createServerPeer(address);
 	putCommand(ConnectionCommand::connect(address));
 }
 
-bool Connection::Connected()
-{
-	MutexAutoLock peerlock(m_peers_mutex);
-
-	if (m_peers.size() != 1)
-		return false;
-
-	std::map<session_t, Peer *>::iterator node = m_peers.find(PEER_ID_SERVER);
-	if (node == m_peers.end())
-		return false;
-
-	if (m_peer_id == PEER_ID_INEXISTENT)
-		return false;
-
-	return true;
-}
-
-void Connection::Disconnect()
+void LegacyTransport::Disconnect()
 {
 	putCommand(ConnectionCommand::disconnect());
 }
 
-bool Connection::ReceiveTimeoutMs(NetworkPacket *pkt, u32 timeout_ms)
-{
-	/*
-		Note that this function can potentially wait infinitely if non-data
-		events keep happening before the timeout expires.
-		This is not considered to be a problem (is it?)
-	*/
-	for(;;) {
-		ConnectionEventPtr e_ptr = waitEvent(timeout_ms);
-		const ConnectionEvent &e = *e_ptr;
-
-		if (e.type != CONNEVENT_NONE) {
-			LOG(dout_con << getDesc() << ": Receive: got event: "
-					<< e.describe() << std::endl);
-		}
-
-		switch (e.type) {
-		case CONNEVENT_NONE:
-			return false;
-		case CONNEVENT_DATA_RECEIVED:
-			// Data size is lesser than command size, ignoring packet
-			if (e.data.getSize() < 2) {
-				continue;
-			}
-
-			pkt->putRawPacket(*e.data, e.data.getSize(), e.peer_id);
-			return true;
-		case CONNEVENT_PEER_ADDED: {
-			UDPPeer tmp(e.peer_id, e.address, this);
-			if (m_bc_peerhandler)
-				m_bc_peerhandler->peerAdded(&tmp);
-			continue;
-		}
-		case CONNEVENT_PEER_REMOVED: {
-			UDPPeer tmp(e.peer_id, e.address, this);
-			if (m_bc_peerhandler)
-				m_bc_peerhandler->deletingPeer(&tmp, e.timeout);
-			continue;
-		}
-		}
-	}
-	return false;
-}
-
-void Connection::Send(session_t peer_id, u8 channelnum,
+void LegacyTransport::Send(session_t peer_id, u8 channelnum,
 		NetworkPacket *pkt, bool reliable)
 {
 	assert(channelnum < CHANNEL_COUNT); // Pre-condition
@@ -1497,88 +1223,13 @@ void Connection::Send(session_t peer_id, u8 channelnum,
 	putCommand(ConnectionCommand::send(peer_id, channelnum, pkt, reliable));
 }
 
-Address Connection::GetPeerAddress(session_t peer_id)
+session_t LegacyTransport::createPeer(const Address &sender, int fd)
 {
-	PeerHelper peer = getPeerNoEx(peer_id);
-
+	auto peer = getPeerTable()->addPeer<UDPPeer>(sender, this);
 	if (!peer)
-		throw PeerNotFoundException("No address for peer found!");
-	return peer->getAddress();
-}
-
-float Connection::getPeerStat(session_t peer_id, rtt_stat_type type)
-{
-	PeerHelper peer = getPeerNoEx(peer_id);
-	if (!peer)
-		return -1;
-	return peer->getStat(type);
-}
-
-float Connection::getLocalStat(rate_stat_type type)
-{
-	PeerHelper peer = getPeerNoEx(PEER_ID_SERVER);
-
-	FATAL_ERROR_IF(!peer, "Connection::getLocalStat we couldn't get our own peer? are you serious???");
-
-	float retval = 0;
-
-	for (Channel &channel : dynamic_cast<UDPPeer *>(&peer)->channels) {
-		switch(type) {
-			case CUR_DL_RATE:
-				retval += channel.getCurrentDownloadRateKB();
-				break;
-			case AVG_DL_RATE:
-				retval += channel.getAvgDownloadRateKB();
-				break;
-			case CUR_INC_RATE:
-				retval += channel.getCurrentIncomingRateKB();
-				break;
-			case AVG_INC_RATE:
-				retval += channel.getAvgIncomingRateKB();
-				break;
-			case AVG_LOSS_RATE:
-				retval += channel.getAvgLossRateKB();
-				break;
-			case CUR_LOSS_RATE:
-				retval += channel.getCurrentLossRateKB();
-				break;
-		default:
-			FATAL_ERROR("Connection::getLocalStat Invalid stat type");
-		}
-	}
-	return retval;
-}
-
-session_t Connection::createPeer(const Address &sender, int fd)
-{
-	// Somebody wants to make a new connection
-
-	// Get a unique peer id
-	const session_t minimum = 2;
-	const session_t overflow = MAX_UDP_PEERS;
-
-	/*
-		Find an unused peer id
-	*/
-
-	MutexAutoLock lock(m_peers_mutex);
-	session_t peer_id_new;
-	for (int tries = 0; tries < 100; tries++) {
-		peer_id_new = myrand_range(minimum, overflow - 1);
-		if (m_peers.find(peer_id_new) == m_peers.end())
-			break;
-	}
-	if (m_peers.find(peer_id_new) != m_peers.end()) {
-		errorstream << getDesc() << " ran out of peer ids" << std::endl;
 		return PEER_ID_INEXISTENT;
-	}
 
-	// Create a peer
-	Peer *peer = 0;
-	peer = new UDPPeer(peer_id_new, sender, this);
-
-	m_peers[peer->id] = peer;
-	m_peer_ids.push_back(peer->id);
+	session_t peer_id_new = peer->getPeerID();
 
 	LOG(dout_con << getDesc()
 			<< "createPeer(): giving peer_id=" << peer_id_new << std::endl);
@@ -1591,39 +1242,28 @@ session_t Connection::createPeer(const Address &sender, int fd)
 		putCommand(ConnectionCommand::createPeer(peer_id_new, reply));
 	}
 
-	// Create peer addition event
-	putEvent(ConnectionEvent::peerAdded(peer_id_new, sender));
-
 	// We're now talking to a valid peer_id
 	return peer_id_new;
 }
 
-const std::string Connection::getDesc()
+const std::string LegacyTransport::getDesc()
 {
 	return std::string("con(")+
-			itos(m_udpSocket.GetHandle())+"/"+itos(m_peer_id)+")";
+			itos(m_udpSocket.GetHandle())+"/"+itos(getPeerTable()->getOurPeerID())+")";
 }
 
-void Connection::DisconnectPeer(session_t peer_id)
+void LegacyTransport::DisconnectPeer(session_t peer_id)
 {
 	putCommand(ConnectionCommand::disconnect_peer(peer_id));
 }
 
-void Connection::SetPeerID(session_t id)
-{
-	m_peer_id = id;
-	// fix peer id in existing queued reliable packets
-	if (id != PEER_ID_INEXISTENT)
-		putCommand(ConnectionCommand::peer_id_set(id));
-}
-
-void Connection::doResendOne(session_t peer_id)
+void LegacyTransport::doResendOne(session_t peer_id)
 {
 	assert(peer_id != PEER_ID_INEXISTENT);
 	putCommand(ConnectionCommand::resend_one(peer_id));
 }
 
-void Connection::sendAck(session_t peer_id, u8 channelnum, u16 seqnum)
+void LegacyTransport::sendAck(session_t peer_id, u8 channelnum, u16 seqnum)
 {
 	assert(channelnum < CHANNEL_COUNT); // Pre-condition
 
@@ -1641,21 +1281,11 @@ void Connection::sendAck(session_t peer_id, u8 channelnum, u16 seqnum)
 	m_sendThread->Trigger();
 }
 
-UDPPeer* Connection::createServerPeer(const Address &address)
+void LegacyTransport::createServerPeer(const Address &address)
 {
-	if (ConnectedToServer())
+	auto peer = getPeerTable()->addServerPeer<UDPPeer>(address, this);
+	if (!peer)
 		throw ConnectionException("Already connected to a server");
-
-	UDPPeer *peer = new UDPPeer(PEER_ID_SERVER, address, this);
-	peer->SetFullyOpen();
-
-	{
-		MutexAutoLock lock(m_peers_mutex);
-		m_peers[peer->id] = peer;
-		m_peer_ids.push_back(peer->id);
-	}
-
-	return peer;
 }
 
 } // namespace

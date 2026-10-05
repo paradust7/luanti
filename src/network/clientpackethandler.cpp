@@ -159,7 +159,7 @@ void Client::handleCommand_AuthAccept(NetworkPacket* pkt)
 
 	// Log meaningful info
 	if (!m_internal_server) {
-		Address remote = m_con->GetPeerAddress(PEER_ID_SERVER);
+		Address remote = m_con->getRemoteAddress();
 		actionstream << "Connected to " << m_address_name << " (";
 		remote.print(actionstream);
 		actionstream << ")" << std::endl;

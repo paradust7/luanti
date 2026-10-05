@@ -281,17 +281,16 @@ Server::Server(
 		const std::string &path_world,
 		const SubgameSpec &gamespec,
 		bool simple_singleplayer_mode,
-		UDPSocket &&socket,
+		const con::NetworkOverrides &net_overrides,
 		bool dedicated,
 		ChatInterface *iface,
 		std::string *shutdown_errmsg
 	):
-	m_bind_addr(socket.GetLocalAddress()),
 	m_path_world(path_world),
 	m_gamespec(gamespec),
 	m_simple_singleplayer_mode(simple_singleplayer_mode),
 	m_dedicated(dedicated),
-	m_con(con::createMTP(/*is_server=*/true, std::move(socket), this)),
+	m_con(con::createServer(this, simple_singleplayer_mode, net_overrides)),
 	m_itemdef(createItemDefManager()),
 	m_nodedef(createNodeDefManager()),
 	m_craftdef(createCraftDefManager()),
@@ -301,6 +300,8 @@ Server::Server(
 	m_shutdown_errmsg(shutdown_errmsg),
 	m_modchannel_mgr(new ModChannelMgr())
 {
+	m_bind_addr = m_con->getBindAddress();
+
 	if (m_path_world.empty())
 		throw ServerError("Supplied empty world path");
 
@@ -1383,20 +1384,20 @@ void Server::onMapEditEvent(const MapEditEvent &event)
 	m_unsent_map_edit_queue.push(new MapEditEvent(event));
 }
 
-void Server::peerAdded(con::IPeer *peer)
+void Server::peerAdded(session_t peer_id, const Address &address)
 {
-	verbosestream << "Server::peerAdded(): id=" << peer->id << std::endl;
+	verbosestream << "Server::peerAdded(): id=" << peer_id << std::endl;
 
-	m_clients.CreateClient(peer->id);
+	m_clients.CreateClient(peer_id);
 }
 
-void Server::deletingPeer(con::IPeer *peer, bool timeout)
+void Server::peerRemoved(session_t peer_id, bool is_timeout, const Address &address)
 {
-	verbosestream << "Server::deletingPeer(): id=" << peer->id
-		<< ", timeout=" << timeout << std::endl;
+	verbosestream << "Server::peerRemoved(): id=" << peer_id
+		<< ", timeout=" << is_timeout << std::endl;
 
-	m_clients.event(peer->id, CSE_Disconnect);
-	DeleteClient(peer->id, timeout ? CDR_TIMEOUT : CDR_LEAVE);
+	m_clients.event(peer_id, CSE_Disconnect);
+	DeleteClient(peer_id, is_timeout ? CDR_TIMEOUT : CDR_LEAVE);
 }
 
 bool Server::getClientConInfo(session_t peer_id, con::rtt_stat_type type, float* retval)

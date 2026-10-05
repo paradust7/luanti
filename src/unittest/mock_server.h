@@ -6,6 +6,7 @@
 
 #include "server.h"
 #include "server/mods.h"
+#include "network/connection.h"
 #include "scripting_server.h"
 
 class MockServer : public Server
@@ -14,7 +15,7 @@ public:
 	/* Set `path_world` to a real existing folder if you plan to initialize scripting! */
 	MockServer(const std::string &path_world = "fakepath") :
 		Server(path_world, SubgameSpec("fakespec", "fakespec"),
-			   true, UDPSocket::CreateEphemeral(false), true, nullptr
+			   true, getNetworkOverrides(), true, nullptr
 		)
 	{}
 
@@ -32,5 +33,15 @@ public:
 	void stop() = delete;
 
 private:
+	// Any port, and always UDP so that the config file doesn't matter
+	static con::NetworkOverrides getNetworkOverrides()
+	{
+		con::NetworkOverrides overrides;
+		overrides.bind_address = "0.0.0.0";
+		overrides.bind_port = 0;
+		overrides.transport = "legacy";
+		return overrides;
+	}
+
 	void SendChatMessage(session_t peer_id, const ChatMessage &message) override {}
 };

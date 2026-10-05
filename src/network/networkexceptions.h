@@ -38,6 +38,17 @@ public:
 	SocketException(const std::string &s) : BaseException(s) {}
 };
 
+// The address to listen on is IPv6, but IPv6 is disabled
+class IPv6DisabledException : public SocketException
+{
+public:
+	IPv6DisabledException(const std::string &address) :
+		SocketException("Unable to listen on " + address + " because IPv6 is disabled"),
+		address(address) {}
+
+	std::string address;
+};
+
 class ResolveError : public BaseException
 {
 public:

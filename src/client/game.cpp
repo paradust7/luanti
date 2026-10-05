@@ -28,6 +28,7 @@
 #include "gui/profilergraph.h"
 #include "localplayer.h"
 #include "minimap.h"
+#include "network/connection.h"
 #include "network/networkexceptions.h"
 #include "nodedef.h"         // Needed for determining pointing to nodes
 #include "nodemetadata.h"
@@ -743,39 +744,25 @@ bool Game::createServer(GameStartData &start_data)
 {
 	showOverlayMessage(N_("Creating server..."), 0, 5);
 
-	std::string bind_str;
+	con::NetworkOverrides net_overrides;
+	net_overrides.bind_port = start_data.socket_port;
 	if (simple_singleplayer_mode) {
 		// Make the simple singleplayer server only accept connections from localhost,
 		// which also makes Windows Defender not show a warning.
-		bind_str = "127.0.0.1";
-	} else {
-		bind_str = g_settings->get("bind_address");
+		net_overrides.bind_address = "127.0.0.1";
 	}
 
-	Address bind_addr(0, 0, 0, 0, start_data.socket_port);
-
-	if (g_settings->getBool("ipv6_server"))
-		bind_addr.setAddress(static_cast<IPv6AddressBytes*>(nullptr));
 	try {
-		bind_addr.Resolve(bind_str.c_str());
-	} catch (const ResolveError &e) {
-		warningstream << "Resolving bind address \"" << bind_str
-			<< "\" failed: " << e.what()
-			<< " -- Listening on all addresses." << std::endl;
-	}
-	if (bind_addr.isIPv6() && !g_settings->getBool("enable_ipv6")) {
+		server = new Server(start_data.world_spec.path, start_data.game_spec,
+			simple_singleplayer_mode, net_overrides,
+			false, nullptr, &(errordata->message));
+	} catch (const IPv6DisabledException &e) {
 		errordata->setError(fmtgettext("Unable to listen on %s because IPv6 is disabled",
-			bind_addr.serializeString().c_str()));
+			e.address.c_str()));
 		return false;
 	}
-
-	UDPSocket server_socket = UDPSocket::Create(bind_addr);
 	// in singleplayer mode the OS assigns us the port in bind
-	start_data.socket_port = server_socket.GetLocalAddress().getPort();
-
-	server = new Server(start_data.world_spec.path, start_data.game_spec,
-		simple_singleplayer_mode, std::move(server_socket),
-		false, nullptr, &(errordata->message));
+	start_data.socket_port = server->m_bind_addr.getPort();
 
 	auto start_thread = runInThread([=] {
 		server->start();
