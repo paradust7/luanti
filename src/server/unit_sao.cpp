@@ -14,6 +14,16 @@ UnitSAO::UnitSAO(ServerEnvironment *env, v3f pos) : ServerActiveObject(env, pos)
 	m_armor_groups["fleshy"] = 100;
 }
 
+core::quaternion UnitSAO::getTotalRotation() const
+{
+	// This replicates what happens clientside serverside, except for attachments
+	core::matrix4 rot;
+	setPitchYawRoll(rot, -m_rotation);
+	// First rotate by m_rotation, then rotate by the automatic rotate yaw
+	return core::quaternion(v3f(0, -m_rotation_add_yaw * core::DEGTORAD, 0))
+			* core::quaternion(rot.getRotationRadians());
+}
+
 ServerActiveObject *UnitSAO::getParent() const
 {
 	if (!m_attachment_parent_id)
@@ -428,7 +438,8 @@ std::string UnitSAO::generateUpdateArmorGroupsCommand() const
 
 std::string UnitSAO::generateUpdatePositionCommand(const v3f &position,
 		const v3f &velocity, const v3f &acceleration, const v3f &rotation,
-		bool do_interpolate, bool is_movement_end, f32 update_interval)
+		bool do_interpolate, bool is_movement_end, f32 update_interval,
+		bool do_interpolate_rotation)
 {
 	std::ostringstream os(std::ios::binary);
 	// command
@@ -447,6 +458,8 @@ std::string UnitSAO::generateUpdatePositionCommand(const v3f &position,
 	writeU8(os, is_movement_end);
 	// update_interval (for interpolation)
 	writeF32(os, update_interval);
+	// do_interpolate_rotation
+	writeU8(os, do_interpolate_rotation);
 	return os.str();
 }
 

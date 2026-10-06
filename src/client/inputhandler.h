@@ -58,13 +58,14 @@ public:
 		return a;
 	}
 
-	v2s32 getMouseMovement(bool reset) {
-		v2s32 delta = v2s32(relX, relY);
-		if (reset) {
-			relX = 0;
-			relY = 0;
-		}
-		return delta;
+	// Returns the mouse movement since the last call and resets it.
+	// Remains valid even when the cursor is hidden and locked to the
+	// center of the window.
+	v2s32 getMouseMovement()
+	{
+		v2s32 a = mouse_movement;
+		mouse_movement = v2s32(0, 0);
+		return a;
 	}
 
 	void clearInput()
@@ -76,6 +77,7 @@ public:
 		keyWasReleased.reset();
 
 		mouse_wheel = 0;
+		mouse_movement = v2s32(0, 0);
 	}
 
 	void releaseAllKeys()
@@ -178,9 +180,8 @@ private:
 
 	PointerType last_pointer_type = PointerType::Mouse;
 
-	// Track relative mouse movement
-	s32 relX = 0;
-	s32 relY = 0;
+	// Relative mouse movement accumulated from mouse events
+	v2s32 mouse_movement;
 };
 
 class InputHandler
@@ -223,7 +224,7 @@ public:
 	virtual v2s32 getMousePos() = 0;
 	virtual void setMousePos(s32 x, s32 y) = 0;
 
-	virtual v2s32 getMouseMovement(bool reset = true) = 0;
+	virtual v2s32 getMouseMovement() = 0;
 
 	virtual s32 getMouseWheel() = 0;
 
@@ -289,8 +290,9 @@ public:
 	virtual v2s32 getMousePos();
 	virtual void setMousePos(s32 x, s32 y);
 
-	virtual v2s32 getMouseMovement(bool reset) {
-		return m_receiver->getMouseMovement(reset);
+	virtual v2s32 getMouseMovement()
+	{
+		return m_receiver->getMouseMovement();
 	}
 
 	virtual s32 getMouseWheel()
@@ -330,7 +332,13 @@ public:
 	virtual bool cancelPressed() { return false; }
 	virtual v2s32 getMousePos() { return mousepos; }
 	virtual void setMousePos(s32 x, s32 y) { mousepos = v2s32(x, y); }
-	virtual v2s32 getMouseMovement(bool reset) { return v2s32(0, 0); }
+
+	virtual v2s32 getMouseMovement()
+	{
+		v2s32 a = mousemovement;
+		mousemovement = v2s32(0, 0);
+		return a;
+	}
 
 	virtual s32 getMouseWheel() { return 0; }
 
@@ -342,4 +350,5 @@ private:
 	std::bitset<GameKeyType::INTERNAL_ENUM_COUNT> keydown;
 	v2s32 mousepos;
 	v2s32 mousespeed;
+	v2s32 mousemovement;
 };

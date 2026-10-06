@@ -18,8 +18,7 @@ endif()
 set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$")
-	set(CMAKE_CXX_FLAGS_RELEASE "-O3")
-	set(CMAKE_CXX_FLAGS_DEBUG "-g")
+	# don't set CMAKE_CXX_FLAGS_* here, it would override what Luanti already sets
 
 	add_compile_options(-Wall -pipe)
 
@@ -27,6 +26,11 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$")
 	check_cxx_compiler_flag("-Werror=mismatched-tags" SUPPORTS_W_MISMATCHED_TAGS)
 	if(SUPPORTS_W_MISMATCHED_TAGS)
 		add_compile_options("-Werror=mismatched-tags")
+	endif()
+
+	check_cxx_compiler_flag("-Wnull-dereference" SUPPORTS_W_NULL_DEREFERENCE)
+	if(SUPPORTS_W_NULL_DEREFERENCE)
+		add_compile_options(-Wnull-dereference)
 	endif()
 
 	# Enable SSE for floating point math on 32-bit x86 by default
@@ -372,7 +376,6 @@ add_library(IRRIOOBJ OBJECT
 	CMemoryFile.h
 	CReadFile.h
 	CWriteFile.h
-	CZipReader.h
 
 	CFileList.cpp
 	CFileSystem.cpp
@@ -380,7 +383,6 @@ add_library(IRRIOOBJ OBJECT
 	CMemoryFile.cpp
 	CReadFile.cpp
 	CWriteFile.cpp
-	CZipReader.cpp
 )
 
 add_library(IRROTHEROBJ OBJECT

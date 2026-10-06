@@ -12,10 +12,6 @@
 #include "CIrrDeviceStub.h"
 #include "ICursorControl.h"
 
-#ifdef _IRR_EMSCRIPTEN_PLATFORM_
-#include <emscripten/html5.h>
-#endif
-
 #ifdef _IRR_USE_SDL3_
 #define SDL_DISABLE_OLD_NAMES
 #include <SDL3/SDL.h>
@@ -191,16 +187,14 @@ public:
 		//! Sets the new position of the cursor.
 		void setPosition(s32 x, s32 y) override
 		{
-#if 0
-#ifndef __ANDROID__
+#if !defined(__ANDROID__) && !defined(_IRR_EMSCRIPTEN_PLATFORM_)
 			// On Android, this somehow results in a camera jump when enabling
 			// relative mouse mode and it isn't supported anyway.
+			// For Emscripten, browsers don't allow moving the pointer at all.
 			SDL_WarpMouseInWindow(Device->Window,
 					static_cast<int>(x / Device->ScaleX),
 					static_cast<int>(y / Device->ScaleY));
 #endif
-#endif // 0
-
 #ifdef _IRR_USE_SDL3_
 			if (SDL_GetWindowRelativeMouseMode(Device->Window)) {
 #else
@@ -235,8 +229,11 @@ public:
 
 		virtual void setRelativeMode(bool relative) override
 		{
-#if 0
-#ifdef _IRR_USE_SDL3_
+#ifdef _IRR_EMSCRIPTEN_PLATFORM_
+			// Relative mode on the web means asking for a pointer lock,
+			// which the browser will only grant from within an input
+			// event handler. Leave it up to the page embedding the game.
+#elif defined(_IRR_USE_SDL3_)
 			if (relative != (bool)SDL_GetWindowRelativeMouseMode(Device->Window)) {
 				SDL_SetWindowRelativeMouseMode(Device->Window, relative);
 			}
@@ -246,7 +243,6 @@ public:
 				SDL_SetRelativeMouseMode(relative ? SDL_TRUE : SDL_FALSE);
 			}
 #endif
-#endif // 0
 		}
 
 		void setActiveIcon(gui::ECURSOR_ICON iconId) override
@@ -268,23 +264,8 @@ public:
 	private:
 		void updateCursorPos()
 		{
-#ifdef _IRR_EMSCRIPTEN_PLATFORM_
-			EmscriptenPointerlockChangeEvent pointerlockStatus; // let's hope that test is not expensive ...
-			if (emscripten_get_pointerlock_status(&pointerlockStatus) == EMSCRIPTEN_RESULT_SUCCESS) {
-				if (pointerlockStatus.isActive) {
-					CursorPos.X += Device->MouseXRel;
-					CursorPos.Y += Device->MouseYRel;
-					Device->MouseXRel = 0;
-					Device->MouseYRel = 0;
-				} else {
-					CursorPos.X = Device->MouseX;
-					CursorPos.Y = Device->MouseY;
-				}
-			}
-#else
 			CursorPos.X = Device->MouseX;
 			CursorPos.Y = Device->MouseY;
-#endif
 		}
 
 		void initCursors();
@@ -316,13 +297,6 @@ public:
 	GamepadButtonLabel getGamepadButtonLabel(const GamepadButton button) const override;
 
 private:
-#ifdef _IRR_EMSCRIPTEN_PLATFORM_
-	static EM_BOOL MouseMoveCallback(int eventType, const EmscriptenMouseEvent * event, void* userData);
-	static EM_BOOL MouseUpDownCallback(int eventType, const EmscriptenMouseEvent *event, void *userData);
-	static EM_BOOL MouseEnterCallback(int eventType, const EmscriptenMouseEvent *mouseEvent, void *userData);
-	static EM_BOOL MouseLeaveCallback(int eventType, const EmscriptenMouseEvent *mouseEvent, void *userData);
-
-#endif
 	// Check if a key is a known special character with no side effects on text boxes.
 	static bool keyIsKnownSpecial(EKEY_CODE irrlichtKey);
 

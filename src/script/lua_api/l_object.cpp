@@ -1301,7 +1301,7 @@ int ObjectRef::l_get_acceleration(lua_State *L)
 	return 1;
 }
 
-// set_rotation(self, rotation)
+// set_rotation(self, rotation, interpolate)
 int ObjectRef::l_set_rotation(lua_State *L)
 {
 	NO_MAP_LOCK_REQUIRED;
@@ -1312,9 +1312,11 @@ int ObjectRef::l_set_rotation(lua_State *L)
 
 	v3f rotation = check_v3f(L, 2) * core::RADTODEG;
 
+	bool interpolate = readParam<bool>(L, 3, true);
+
 	// Note: These angles are inverted before being applied using setPitchYawRoll,
 	// hence we end up with a right-handed rotation
-	entitysao->setRotation(rotation);
+	entitysao->setRotation(rotation, interpolate);
 	return 0;
 }
 
@@ -2998,6 +3000,9 @@ void ObjectRef::set_null(lua_State *L, void *expect)
 {
 	ObjectRef *obj = checkObject<ObjectRef>(L, -1);
 	assert(obj);
+	// For every SAO, there is only one userdata object that holds its reference.
+	// We need to unset this one specific reference, because if we don't there will
+	// be an use-after-free.
 	FATAL_ERROR_IF(obj->m_object != expect, "ObjectRef table was messed with");
 	obj->m_object = nullptr;
 }

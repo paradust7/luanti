@@ -36,6 +36,7 @@
 
 #ifdef _IRR_EMSCRIPTEN_PLATFORM_
 #include <emscripten.h>
+#include <emscripten/html5.h>
 #endif
 
 #include "CSDLManager.h"
@@ -138,60 +139,6 @@ void irrlicht_resize(int width, int height) {
 void irrlicht_paste(void) {
 	paste_requested = true;
 }
-
-#ifdef _IRR_EMSCRIPTEN_PLATFORM_
-EM_BOOL CIrrDeviceSDL::MouseUpDownCallback(int eventType, const EmscriptenMouseEvent *event, void *userData)
-{
-	// We need this callback so far only because otherwise "emscripten_request_pointerlock" calls will
-	// fail as their request are infinitely deferred.
-	// Not exactly certain why, maybe SDL does catch those mouse-events otherwise and not pass them on.
-	return EM_FALSE;
-}
-
-EM_BOOL CIrrDeviceSDL::MouseEnterCallback(int eventType, const EmscriptenMouseEvent *mouseEvent, void *userData)
-{
-	CIrrDeviceSDL *This = static_cast<CIrrDeviceSDL *>(userData);
-
-	SEvent irrevent;
-	memset(&irrevent, 0, sizeof(SEvent));
-
-	irrevent.EventType = EET_MOUSE_INPUT_EVENT;
-	irrevent.MouseInput.Event = EMIE_MOUSE_ENTER_CANVAS;
-	This->MouseX = irrevent.MouseInput.X = mouseEvent->canvasX;
-	This->MouseY = irrevent.MouseInput.Y = mouseEvent->canvasY;
-	This->MouseXRel = mouseEvent->movementX; // should be 0 I guess? Or can it enter while pointer is locked()?
-	This->MouseYRel = mouseEvent->movementY;
-	irrevent.MouseInput.ButtonStates = This->MouseButtonStates; // TODO: not correct, but couldn't figure out the bitset of mouseEvent->buttons yet.
-	irrevent.MouseInput.Shift = mouseEvent->shiftKey;
-	irrevent.MouseInput.Control = mouseEvent->ctrlKey;
-
-	This->postEventFromUser(irrevent);
-
-	return EM_FALSE;
-}
-
-EM_BOOL CIrrDeviceSDL::MouseLeaveCallback(int eventType, const EmscriptenMouseEvent *mouseEvent, void *userData)
-{
-	CIrrDeviceSDL *This = static_cast<CIrrDeviceSDL *>(userData);
-
-	SEvent irrevent;
-	memset(&irrevent, 0, sizeof(SEvent));
-
-	irrevent.EventType = EET_MOUSE_INPUT_EVENT;
-	irrevent.MouseInput.Event = EMIE_MOUSE_LEAVE_CANVAS;
-	This->MouseX = irrevent.MouseInput.X = mouseEvent->canvasX;
-	This->MouseY = irrevent.MouseInput.Y = mouseEvent->canvasY;
-	This->MouseXRel = mouseEvent->movementX; // should be 0 I guess? Or can it enter while pointer is locked()?
-	This->MouseYRel = mouseEvent->movementY;
-	irrevent.MouseInput.ButtonStates = This->MouseButtonStates; // TODO: not correct, but couldn't figure out the bitset of mouseEvent->buttons yet.
-	irrevent.MouseInput.Shift = mouseEvent->shiftKey;
-	irrevent.MouseInput.Control = mouseEvent->ctrlKey;
-
-	This->postEventFromUser(irrevent);
-
-	return EM_FALSE;
-}
-#endif
 
 bool CIrrDeviceSDL::keyIsKnownSpecial(EKEY_CODE irrlichtKey)
 {
@@ -788,15 +735,6 @@ bool CIrrDeviceSDL::createWindowWithContext()
 
 #ifdef _IRR_EMSCRIPTEN_PLATFORM_
 	logAttributes();
-
-	// "#canvas" is for the opengl context
-	emscripten_set_mousedown_callback("#canvas", (void *)this, true, MouseUpDownCallback);
-	emscripten_set_mouseup_callback("#canvas", (void *)this, true, MouseUpDownCallback);
-	emscripten_set_mouseenter_callback("#canvas", (void *)this, false, MouseEnterCallback);
-	emscripten_set_mouseleave_callback("#canvas", (void *)this, false, MouseLeaveCallback);
-
-	// The canvas was sized in pixels above, so there is nothing to convert,
-	// and a browser window cannot be moved or resized from here anyway.
 #else
 #ifdef _IRR_USE_SDL3_
 	if (CreationParams.Fullscreen)
@@ -868,7 +806,6 @@ bool CIrrDeviceSDL::run()
 	os::Timer::tick();
 
 	SEvent irrevent;
-	memset(&irrevent, 0, sizeof(SEvent));
 	SDL_Event SDL_event;
 
 	if (canvas_updated) {
@@ -986,28 +923,6 @@ bool CIrrDeviceSDL::run()
 
 			irrevent.EventType = EET_MOUSE_INPUT_EVENT;
 			irrevent.MouseInput.Event = EMIE_MOUSE_MOVED; // value to be ignored
-
-// Handled by javascript / main loop instead
-#if 0
-			// Handle mouselocking in emscripten in Windowed mode.
-			// In fullscreen SDL will handle it.
-			// The behavior we want windowed is - when the canvas was clicked then
-			// we will lock the mouse-pointer if it should be invisible.
-			// For security reasons this will be delayed until the next mouse-up event.
-			// We do not pass on this event as we don't want the activation click to do anything.
-			if (SDL_event.type == SDL_MOUSEBUTTONDOWN && !isFullscreen()) {
-				EmscriptenPointerlockChangeEvent pointerlockStatus; // let's hope that test is not expensive ...
-				if (emscripten_get_pointerlock_status(&pointerlockStatus) == EMSCRIPTEN_RESULT_SUCCESS) {
-					if (CursorControl->isVisible() && pointerlockStatus.isActive) {
-						emscripten_exit_pointerlock();
-						return !Close;
-					} else if (!CursorControl->isVisible() && !pointerlockStatus.isActive) {
-						emscripten_request_pointerlock(0, true);
-						return !Close;
-					}
-				}
-			}
-#endif
 
 			auto button = SDL_event.button.button;
 #ifdef __ANDROID__

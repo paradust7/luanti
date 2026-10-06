@@ -165,9 +165,20 @@ end
 unittests.register("test_parse_json", test_parse_json)
 
 local function test_write_json()
+	-- null bytes should be preserved
+	local data = { ["mine\000test"] = "luan\000ti" }
+	local encoded = core.write_json(data)
+	assert(encoded:find("mine.u0000test") ~= nil)
+	assert(encoded:find("luan.u0000ti") ~= nil)
+
+	-- normal integers should not be cast to float
+	data = { 40048008 }
+	encoded = core.write_json(data)
+	assert(encoded:find("%[%s*40048008%s*%]") ~= nil)
+
 	-- deeply nested structures should be preserved
 	local leaf = 42
-	local data = leaf
+	data = leaf
 	for i = 1, 1000 do
 		data = {data}
 	end
@@ -381,14 +392,12 @@ end
 unittests.register("test_ipc_poll", test_ipc_poll)
 
 local function test_sandbox()
-	if not core.settings:get_bool("secure.enable_security") then
-		core.log("warning", "Lua sandbox disabled, skipping test")
-		return
-	end
 	-- this would point to _G but we have it unset
 	assert(package.loaded == nil)
 	-- string metatable must match global string table
 	assert(rawequal(getmetatable("").__index, string))
+	-- same for function env
+	assert(rawequal(getfenv(string.len), _G))
 	-- (some) entirely dangerous functions
 	assert(debug.getupvalue == nil)
 	assert(debug.setlocal == nil)

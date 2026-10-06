@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <stack>
 #include <utility>
+#include <iterator>
 #include "serverenvironment.h"
 #include "irr_aabb3d.h"
 #include "settings.h"
@@ -296,14 +297,14 @@ ServerEnvironment::~ServerEnvironment()
 	m_map.reset();
 
 	// Delete ActiveBlockModifiers
-	for (ABMWithState &m_abm : m_abms) {
-		delete m_abm.abm;
+	for (ABMWithState &it : m_abms) {
+		delete it.abm;
+		it.abm = nullptr;
 	}
 
 	// Deallocate players
-	for (RemotePlayer *m_player : m_players) {
+	for (RemotePlayer *m_player : m_players)
 		delete m_player;
-	}
 	m_players.clear();
 
 	delete m_player_database;
@@ -789,14 +790,13 @@ void ServerEnvironment::clearObjects(ClearObjectsMode mode)
 		loadable_blocks = loaded_blocks;
 	}
 
-	actionstream << "ServerEnvironment::clearObjects(): "
-		<< "Now clearing objects in " << loadable_blocks.size()
+	actionstream << "Now clearing objects in " << loadable_blocks.size()
 		<< " blocks" << std::endl;
 
 	// Grab a reference on each loaded block to avoid unloading it
 	for (v3s16 p : loaded_blocks) {
 		MapBlock *block = m_map->getBlockNoCreateNoEx(p);
-		assert(block != NULL);
+		assert(block);
 		block->refGrab();
 	}
 
@@ -806,13 +806,9 @@ void ServerEnvironment::clearObjects(ClearObjectsMode mode)
 		unload_interval = g_settings->getS32("max_clearobjects_extra_loaded_blocks");
 		unload_interval = MYMAX(unload_interval, 1);
 	}
-	u32 report_interval = loadable_blocks.size() / 10;
-	u32 num_blocks_checked = 0;
-	u32 num_blocks_cleared = 0;
-	u32 num_objs_cleared = 0;
-	for (auto i = loadable_blocks.begin();
-		i != loadable_blocks.end(); ++i) {
-		v3s16 p = *i;
+	const size_t report_interval = loadable_blocks.size() / 11;
+	size_t num_blocks_checked = 0, num_blocks_cleared = 0, num_objs_cleared = 0;
+	for (v3s16 p : loadable_blocks) {
 		MapBlock *block = m_map->emergeBlock(p, false);
 		if (!block) {
 			errorstream << "ServerEnvironment::clearObjects(): "
@@ -829,12 +825,11 @@ void ServerEnvironment::clearObjects(ClearObjectsMode mode)
 
 		if (report_interval != 0 &&
 			num_blocks_checked % report_interval == 0) {
-			float percent = 100.0 * (float)num_blocks_checked /
+			float percent = 100.0f * (float)num_blocks_checked /
 				loadable_blocks.size();
-			actionstream << "ServerEnvironment::clearObjects(): "
-				<< "Cleared " << num_objs_cleared << " objects"
+			actionstream << "Cleared " << num_objs_cleared << " objects"
 				<< " in " << num_blocks_cleared << " blocks ("
-				<< percent << "%)" << std::endl;
+				<< ((int) percent) << "%)" << std::endl;
 		}
 		if (num_blocks_checked % unload_interval == 0) {
 			m_map->unloadUnreferencedBlocks();
@@ -851,8 +846,7 @@ void ServerEnvironment::clearObjects(ClearObjectsMode mode)
 
 	m_last_clear_objects_time = m_game_time;
 
-	actionstream << "ServerEnvironment::clearObjects(): "
-		<< "Finished: Cleared " << num_objs_cleared << " objects"
+	actionstream << "Finished clearing " << num_objs_cleared << " objects"
 		<< " in " << num_blocks_cleared << " blocks" << std::endl;
 }
 
@@ -1646,6 +1640,8 @@ void ServerEnvironment::activateObjects(MapBlock *block, u32 dtime_s)
 */
 void ServerEnvironment::deactivateFarObjects(const bool _force_delete)
 {
+	ScopeProfiler sp(g_profiler, "ServerEnvironment::deactivateFarObjects()", SPT_AVG);
+
 	auto cb_deactivate = [this, _force_delete](ServerActiveObject *obj, u16 id) {
 		// force_delete might be overridden per object
 		bool force_delete = _force_delete;
@@ -1700,7 +1696,7 @@ void ServerEnvironment::deactivateFarObjects(const bool _force_delete)
 		/*
 			Update the static data
 		*/
-		if (obj->isStaticAllowed()) {
+		if (!obj->isGone() && obj->isStaticAllowed()) {
 			// Create new static object
 			StaticObject s_obj(obj, objectpos);
 
