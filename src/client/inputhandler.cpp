@@ -268,11 +268,6 @@ bool MyEventReceiver::OnEvent(const SEvent &event)
 		return ret;
 	}
 
-	if (event.EventType == EET_MOUSE_INPUT_EVENT && event.MouseInput.Event == EMIE_MOUSE_MOVED) {
-		relX += event.MouseInput.XRel;
-		relY += event.MouseInput.YRel;
-	}
-
 	// Remember whether each key is down or up
 	if (g_touchcontrols && event.EventType == EET_TOUCH_INPUT_EVENT) {
 		// In case of touchcontrols, we have to handle different events

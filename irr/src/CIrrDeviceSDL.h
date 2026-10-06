@@ -24,6 +24,10 @@
 #include <memory>
 #include <unordered_map>
 
+#ifdef _IRR_EMSCRIPTEN_PLATFORM_
+#include <emscripten.h>
+#endif
+
 extern "C" {
         EMSCRIPTEN_KEEPALIVE
         void emloop_set_pointerlock(int want);
