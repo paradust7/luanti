@@ -467,11 +467,13 @@ bool getCurrentExecPath(char *buf, size_t len)
 
 bool getCurrentExecPath(char *buf, size_t len)
 {
-  const char *hardcoded_path = "/luanti/bin/luanti.exe";
-  strncpy(buf, hardcoded_path, len);
-  return true;
+	// There is no executable path on Emscripten since the .wasm is loaded
+	// from JavaScript. But the process has its own virtual filesystem, so
+	// hardcode a reasonable path here.
+	const char *path = "/luanti/bin/luanti.exe";
+	snprintf(buf, len, "%s", path);
+	return true;
 }
-
 
 #else
 
@@ -960,14 +962,9 @@ static bool open_uri(const std::string &uri)
 	return posix_spawnp(NULL, "open", NULL, NULL, (char**)argv,
 		(*_NSGetEnviron())) == 0;
 #elif defined(__EMSCRIPTEN__)
-	// Use a static buffer to store the URI for the async operation.
-	// There's a race condition here, but it should be inconsequential.
-	static char buf[512];
-	strncpy(buf, uri.c_str(), sizeof(buf));
-	buf[sizeof(buf) - 1] = '\0';
-	MAIN_THREAD_ASYNC_EM_ASM({
-		 window.open(UTF8ToString($0), "_blank");
-	}, buf);
+	MAIN_THREAD_EM_ASM({
+		window.open(UTF8ToString($0), "_blank");
+	}, uri.c_str());
 	return true;
 #else
 	const char *argv[] = {"xdg-open", uri.c_str(), NULL};
