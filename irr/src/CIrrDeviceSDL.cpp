@@ -459,7 +459,6 @@ CIrrDeviceSDL::CIrrDeviceSDL(const SIrrlichtCreationParameters &param) :
 
 	// create keymap
 	createKeyMap();
-	KeySuppress = false;
 
 	// create window
 	if (CreationParams.DriverType != video::EDT_NULL) {
@@ -985,15 +984,6 @@ bool CIrrDeviceSDL::run()
 		}
 
 		case SDL_EVENT_TEXT_INPUT: {
-			// A single key press generates three SDL events: SDL_KEYDOWN, SDL_TEXTINPUT, and SDL_KEYUP.
-			// If the SDL_KEYDOWN handler emitted an EET_KEY_INPUT_EVENT that carries the character code,
-			// don't also generate EET_STRING_INPUT_EVENT. Doing so would duplicate the character.
-			if (KeySuppress && SDL_event.text.text[1] == 0) {
-				KeySuppress = false;
-				break;
-			}
-			KeySuppress = false;
-
 			irrevent.EventType = EET_STRING_INPUT_EVENT;
 			irrevent.StringInput.Str = new core::stringw();
 			core::utf8ToWString(*irrevent.StringInput.Str, SDL_event.text.text);

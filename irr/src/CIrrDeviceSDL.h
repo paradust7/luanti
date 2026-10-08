@@ -352,8 +352,6 @@ private:
 	// to display keys to users). Drop this along with EKEY_CODE.
 	std::unordered_map<SDL_Keycode, EKEY_CODE> KeyMap;
 
-	bool KeySuppress;
-
 	s32 CurrentTouchCount;
 	bool IsInBackground;
 };
