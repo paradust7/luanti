@@ -1492,13 +1492,6 @@ void CIrrDeviceSDL::createKeyMap()
 	// I find a better version.
 
 	// buttons missing
-	KeyMap.emplace(SDLK_SEMICOLON, KEY_OEM_1);
-	KeyMap.emplace(SDLK_SLASH, KEY_OEM_2);
-	KeyMap.emplace(SDLK_BACKQUOTE, KEY_OEM_3);
-	KeyMap.emplace(SDLK_LEFTBRACKET, KEY_OEM_4);
-	KeyMap.emplace(SDLK_BACKSLASH, KEY_OEM_5);
-	KeyMap.emplace(SDLK_RIGHTBRACKET, KEY_OEM_6);
-	KeyMap.emplace(SDLK_QUOTE, KEY_OEM_7);
 
 	KeyMap.emplace(SDLK_BACKSPACE, KEY_BACK);
 	KeyMap.emplace(SDLK_TAB, KEY_TAB);
@@ -1533,8 +1526,7 @@ void CIrrDeviceSDL::createKeyMap()
 
 	KeyMap.emplace(SDLK_INSERT, KEY_INSERT);
 	KeyMap.emplace(SDLK_DELETE, KEY_DELETE);
-	// interferes with slash
-	//KeyMap.emplace(SDLK_HELP, KEY_HELP);
+	KeyMap.emplace(SDLK_HELP, KEY_HELP);
 
 	KeyMap.emplace(SDLK_0, KEY_KEY_0);
 	KeyMap.emplace(SDLK_1, KEY_KEY_1);
