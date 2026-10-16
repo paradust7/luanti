@@ -44,10 +44,11 @@ public:
 
 	struct SHWBufferLink_opengl : public SHWBufferLink
 	{
-		SHWBufferLink_opengl(const scene::HWBuffer *buf) : SHWBufferLink(buf),
-		Vbo(buf->getBufferType() == scene::HWBuffer::Type::INDEX ?
-			OGLBufferObject::TARGET_IBO :
-			OGLBufferObject::TARGET_VBO)
+		SHWBufferLink_opengl(const scene::HWBuffer *buf) :
+				SHWBufferLink(buf),
+				Vbo(buf->getBufferType() == scene::HWBuffer::Type::INDEX ?
+						OGLBufferObject::TARGET_IBO :
+						OGLBufferObject::TARGET_VBO)
 		{}
 
 		OGLBufferObject Vbo;
